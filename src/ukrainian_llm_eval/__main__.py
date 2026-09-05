@@ -17,8 +17,10 @@ from .core import (
     validate_packet,
     write_private_json,
 )
+from .execution import execute_attempt
 from .importers import import_zno
-from .runner import preflight, run_exam, validate_config
+from .runner import preflight, validate_config
+from .scheduling import run_pair
 
 
 def parser() -> argparse.ArgumentParser:
@@ -50,6 +52,10 @@ def parser() -> argparse.ArgumentParser:
         if name != "preflight":
             run.add_argument("--questions", type=Path, required=True)
             run.add_argument("--output" if name == "run" else "--out-dir", type=Path, required=True)
+        if name == "pair":
+            run.add_argument("--resume", action="store_true", help="Resume the frozen plan without retrying prior attempts")
+        if name == "run":
+            run.add_argument("--evidence-dir", type=Path, help="Private raw evidence directory; defaults beside output")
     for name in ("score", "compare"):
         scorer = commands.add_parser(name, help="Offline key-custodian scoring; no provider calls")
         scorer.add_argument("--questions", type=Path, required=True)
@@ -114,27 +120,19 @@ def execute(args: argparse.Namespace) -> int:
             if args.output.exists():
                 raise ExamError("refusing to replace a trial")
             write_private_json(args.output.with_suffix(".plan.json"), {**plan, "condition": args.condition})
-            result = run_exam(packet, config, args.condition, sources_url=endpoint)
+            result, receipt = execute_attempt(
+                packet, config, args.condition,
+                args.evidence_dir or args.output.with_suffix(".evidence"), sources_url=endpoint,
+            )
+            write_private_json(args.output.with_suffix(".evidence.json"), receipt)
             write_private_json(args.output, result)
             print(json.dumps({"condition": args.condition, "status": result["status"]}))
             return 0 if result["status"] == "ok" else 2
-        args.out_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-        schedule = [
-            {"repeat": repeat, "condition": condition}
-            for repeat in range(1, config["repeats"] + 1)
-            for condition in (("closed-book", "sources") if repeat % 2 else ("sources", "closed-book"))
-        ]
-        write_private_json(args.out_dir / "plan.json", {**plan, "schedule": schedule})
-        # Refuse paid execution if either condition cannot be configured.
-        for condition in ("closed-book", "sources"):
-            preflight(config, condition, endpoint)
-        for trial in schedule:
-            result = run_exam(packet, config, trial["condition"], sources_url=endpoint)
-            result["repeat"] = trial["repeat"]
-            write_private_json(args.out_dir / f"{trial['repeat']:03d}-{trial['condition']}.json", result)
-            print(json.dumps({**trial, "status": result["status"]}), flush=True)
-            if result["status"] != "ok":
-                return 2
+        failed = False
+        for progress in run_pair(packet, config, args.out_dir, sources_url=endpoint, resume=args.resume):
+            failed = progress.pop("failed")
+            print(json.dumps(progress), flush=True)
+        return 2 if failed else 0
     elif args.command in {"score", "compare"}:
         packet, key = read_json(args.questions), read_json(args.key)
         if args.command == "score":

@@ -381,3 +381,32 @@ command continues to exclude raw text.
 The callback cannot recover output from an abrupt machine failure or a process
 killed before buffered output reaches the controller. Such an attempt must remain
 incomplete; do not report it as a successful or unattempted trial.
+
+### Private attempt storage and resume
+
+`run` creates an owner-only evidence directory next to its output (for example,
+`trial.evidence/` for `trial.json`) and a verified receipt at
+`trial.evidence.json`. Override the directory with `--evidence-dir PATH`.
+`pair` stores all attempts under `OUT_DIR/evidence/`, with one immutable receipt
+for each scheduled cell. Do not place these directories in Git.
+
+Resume a paired plan with the same questions and configuration:
+
+```bash
+ukrainian-llm-eval pair --questions questions.json --config config.json \
+  --out-dir paired-run --resume
+```
+
+Resume checks the frozen plan and existing evidence before reusing results. It
+never reruns a started cell. An interrupted cell retains its recorded events and
+is finalized as an interrupted failure; only cells that never started may make
+new provider calls. A newly failed trial stops execution; a deliberate resume can
+continue later cells while retaining that failure. The command exits 2 whenever
+any visited cell failed, including a failure retained from an earlier invocation.
+
+The schedule uses a POSIX file lock to exclude concurrent cooperating executors.
+Treat the evidence directory and its parent directories as trusted local storage.
+Hashes detect corruption against retained receipts; they do not prevent a local
+owner from rewriting an entire history and all its hashes. A crash during an event
+write may leave a truncated log: verification then fails closed and preserves it
+for investigation instead of inventing a complete record.
