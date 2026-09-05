@@ -5,10 +5,10 @@ or UA-GEC document. Matching rows stay together. Each model/effort/condition
 cell must cover the whole frozen suite before receiving a score. Whole-packet
 `run` and `pair` are separate endurance diagnostics.
 
-The Python interfaces below implement the controller foundation. The research
-CLI, offline cell-scoring/aggregation commands and provider-specific admission
-probes remain work in issue #3/#5. Do not substitute the diagnostic `pair`
-command for a primary research experiment.
+Preparation, planning and offline scoring have CLI commands. Live research
+execution still requires the Python controller interface; the trusted live
+admission integration and its CLI remain work in issue #3/#5. Do not substitute
+the diagnostic `pair` command for a primary research experiment.
 
 ## Preparation and custody
 
@@ -26,7 +26,7 @@ membership against source bytes. Perform source-aware preparation first.
 
 `benchmark_manifest.build_experiment_manifest` binds the segment plans, source
 and profile hashes, route/configuration identities, common per-suite limits,
-scorer identity and pricing/entitlement evidence. Limits explicitly apply to
+the complete private key's canonical hash, scorer identity and pricing/entitlement evidence. Limits explicitly apply to
 each segment. The generic constructor permits deliberate repeat counts; the
 public experiment requires three. Unsupported conditions need an evidence hash
 explaining their absence and remain visible in the experiment definition.
@@ -41,6 +41,49 @@ or existing-credit zero incremental cost requires separate entitlement evidence.
 
 These pure constructors bind supplied evidence; they do not authenticate a
 provider, prove entitlement, or authorize spending.
+
+```sh
+ukrainian-llm-eval prepare-segments --questions questions.json \
+  --suite ulp --protocol-sha256 "$PROTOCOL_SHA256" \
+  --denominator denominator.json --output segments.json
+ukrainian-llm-eval plan-research --specification experiment-specification.json \
+  --manifest experiment.json --execution-plan execution-plan.json
+```
+
+The denominator file is a JSON object, such as `{"items":347,"points":347}`
+for the complete ULP source. GEC preparation also requires `--gec-source`.
+The specification uses the named arguments of `build_experiment_manifest`,
+including full segment plans. Planning reports `execution_admitted: false`
+and writes no outputs if the complete reservation total exceeds the ceiling.
+
+## Offline scoring CLI
+
+`research_scoring.scorer_identity_sha256` binds the exact MCQ scorer code and,
+for GEC, the immutable image ID into the experiment's scorer hash. Keys are
+hashed as complete JSON objects using the canonical `core.digest`; the GEC
+key's internal body hash is a different value.
+
+```sh
+ukrainian-llm-eval score-research --inputs scoring-inputs.json \
+  --manifest experiment.json --execution-plan execution-plan.json \
+  --execution-root private-run --scorer-bindings scorer-bindings.json \
+  --scoring-evidence-dir private-scoring --output private-score-report.json
+```
+
+`scoring-inputs.json` has schema
+`ukrainian-llm-eval.research-scoring-inputs.v1` and four file maps: `packets`,
+`segment_plans`, and `keys` map suite IDs to paths; `configs` maps route IDs
+to paths. Relative paths resolve beside this input file. This is an offline
+key-custodian input, never an execution or candidate input.
+
+Scoring checks the preserved receipt set, cell-artifact hashes, partition,
+configurations and frozen key/scorer identities. It reports failed cells
+explicitly without a score. Complete triples yield mean and sample standard
+deviation; complete paired triples yield the three treatment-minus-control
+deltas. GEC writes a clearly marked derived aggregate receipt before invoking
+the isolated official scorer and refuses to score that aggregate again.
+Existing output reports are never replaced. Exit 2 can also accompany a saved
+report when some cells could not be scored; retain that report and its evidence.
 
 ## Execution and resume
 

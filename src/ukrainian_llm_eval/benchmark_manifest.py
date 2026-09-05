@@ -454,13 +454,14 @@ def _normalise_segment_plan(value: Any, suite_id: str) -> dict[str, Any]:
 
 
 def _normalise_suite(value: Any) -> dict[str, Any]:
-    suite = _require_exact_dict(value, {"suite_id", "source_sha256", "profile_sha256", "segment_plan", "limits"},
+    suite = _require_exact_dict(value, {"suite_id", "source_sha256", "profile_sha256", "key_sha256", "segment_plan", "limits"},
                                 "suite")
     suite_id = _require_identifier(suite["suite_id"], "suite.suite_id")
     if suite_id not in _SUPPORTED_SUITES:
         raise ExamError(f"unsupported benchmark suite: {suite_id!r}")
     source_sha256 = _require_digest(suite["source_sha256"], "suite.source_sha256")
     profile_sha256 = _require_digest(suite["profile_sha256"], "suite.profile_sha256")
+    key_sha256 = _require_digest(suite["key_sha256"], "suite.key_sha256")
     limits = _require_exact_dict(suite["limits"], {"timeout_seconds", "max_output_tokens", "max_tool_calls"},
                                  "suite.limits")
     normalized_limits = {
@@ -477,6 +478,7 @@ def _normalise_suite(value: Any) -> dict[str, Any]:
         "suite_id": suite_id,
         "source_sha256": source_sha256,
         "profile_sha256": profile_sha256,
+        "key_sha256": key_sha256,
         "segment_plan": segment_plan,
         "limits": normalized_limits,
     }

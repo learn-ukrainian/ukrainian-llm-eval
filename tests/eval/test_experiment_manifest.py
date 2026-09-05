@@ -39,6 +39,7 @@ def _experiment_suite(suite_id: str = "ulp") -> dict:
         "suite_id": suite_id,
         "source_sha256": "5" * 64,
         "profile_sha256": "6" * 64,
+        "key_sha256": "7" * 64,
         "segment_plan": _experiment_segment_plan(suite_id),
         "limits": {"timeout_seconds": 30, "max_output_tokens": 200, "max_tool_calls": 1},
     }

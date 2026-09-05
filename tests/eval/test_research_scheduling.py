@@ -20,7 +20,7 @@ def inputs(*, metered=False):
               "repeats": 3, "tools": [], "corpus_id": None}
     segmentation = derive_segment_plan(packet, suite_id="ulp", protocol_sha256="a" * 64,
                                        denominator={"items": 2, "points": 2})
-    suite = {"suite_id": "ulp", "source_sha256": "b" * 64, "profile_sha256": "c" * 64,
+    suite = {"suite_id": "ulp", "source_sha256": "b" * 64, "profile_sha256": "c" * 64, "key_sha256": "8" * 64,
              "segment_plan": segmentation, "limits": {"timeout_seconds": 10, "max_output_tokens": 100,
                                                        "max_tool_calls": 2}}
     route = {"route_id": "fixture", "route_sha256": execution.route_fingerprint(config, None),

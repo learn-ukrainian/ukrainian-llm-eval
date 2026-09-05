@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from .benchmark_manifest import verify_benchmark
+from .benchmark_manifest import build_execution_plan, build_experiment_manifest, verify_benchmark
 from .core import (
     ExamError,
     _duplicate_rejecting_pairs,
@@ -26,8 +26,10 @@ from .execution import execute_attempt
 from .gec import prepare_gec, validate_gec_packet
 from .gec_scoring import score_gec_attempt
 from .importers import import_zno
+from .research_scoring import score_sealed_experiment
 from .runner import preflight, validate_config
 from .scheduling import run_pair
+from .segmentation import derive_segment_plan
 from .typography import apply_typography
 from .ulp import import_ulp, ulp_sidecar
 
@@ -39,6 +41,19 @@ def parser() -> argparse.ArgumentParser:
         "See docs/running.md. Exit 0: success; 2: invalid input or failed trial.",
     )
     commands = cli.add_subparsers(dest="command", required=True)
+    segment = commands.add_parser("prepare-segments", help="Freeze a complete task/question/document partition")
+    for name in ("questions", "denominator", "output"):
+        segment.add_argument("--" + name, type=Path, required=True)
+    segment.add_argument("--suite", required=True)
+    segment.add_argument("--protocol-sha256", required=True)
+    segment.add_argument("--gec-source", type=Path, help="Original private M2; preparation only, never executor input")
+    research_plan = commands.add_parser("plan-research", help="Freeze experiment and exact conservative reservations; no provider calls")
+    for name in ("specification", "manifest", "execution-plan"):
+        research_plan.add_argument("--" + name, type=Path, required=True)
+    research_score = commands.add_parser("score-research", help="Verify sealed full-cell evidence and score offline")
+    for name in ("inputs", "manifest", "execution-plan", "execution-root", "scorer-bindings", "output"):
+        research_score.add_argument("--" + name, type=Path, required=True)
+    research_score.add_argument("--scoring-evidence-dir", type=Path, help="Required for isolated UA-GEC scoring")
     imp = commands.add_parser("import-zno", help="Import one whole NLPForUA/ZNO paper, rejecting unsupported tasks")
     imp.add_argument("--input", type=Path, required=True)
     imp.add_argument("--test-id", required=True)
@@ -135,8 +150,60 @@ def public_aggregate(report: dict) -> dict:
     return result
 
 
+def _research_scoring_inputs(path):
+    spec = read_json(path)
+    fields = {"schema", "packets", "segment_plans", "keys", "configs"}
+    if not isinstance(spec, dict) or set(spec) != fields or spec["schema"] != "ukrainian-llm-eval.research-scoring-inputs.v1":
+        raise ExamError("invalid research scoring input map")
+    loaded = {}
+    for field in fields - {"schema"}:
+        if not isinstance(spec[field], dict) or not spec[field]:
+            raise ExamError("invalid research scoring file map")
+        loaded[field] = {}
+        for identifier, relative in spec[field].items():
+            if not isinstance(identifier, str) or not isinstance(relative, str) or not relative:
+                raise ExamError("invalid research scoring file reference")
+            loaded[field][identifier] = read_json(path.parent / relative)
+    return loaded
+
+
 def execute(args: argparse.Namespace) -> int:
-    if args.command == "evidence-status":
+    if args.command == "prepare-segments":
+        if args.output.exists():
+            raise ExamError("refusing to replace a segment plan")
+        plan = derive_segment_plan(read_json(args.questions), suite_id=args.suite,
+                                   protocol_sha256=args.protocol_sha256, denominator=read_json(args.denominator),
+                                   gec_source=args.gec_source.read_text(encoding="utf-8") if args.gec_source else None)
+        write_private_json(args.output, plan)
+        print(json.dumps({"segments": len(plan["segments"]), "segment_plan_sha256": plan["segment_plan_sha256"]}))
+    elif args.command == "plan-research":
+        if args.manifest.resolve() == args.execution_plan.resolve() or args.manifest.exists() or args.execution_plan.exists():
+            raise ExamError("research manifest and execution plan must be distinct new files")
+        spec = read_json(args.specification)
+        required = {"protocol_sha256", "suites", "routes", "scorer_sha256", "tool_policy_sha256"}
+        if not isinstance(spec, dict) or not required <= set(spec) or set(spec) - required - {"repeats", "new_spend_cap_micro_usd"}:
+            raise ExamError("invalid research specification fields")
+        manifest = build_experiment_manifest(**spec)
+        plan = build_execution_plan(manifest)
+        write_private_json(args.manifest, manifest)
+        write_private_json(args.execution_plan, plan)
+        print(json.dumps({"cells": len(plan["cells"]), "reservation_total_micro_usd": plan["reservation_total_micro_usd"],
+                          "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
+                          "execution_plan_sha256": plan["execution_plan_sha256"], "execution_admitted": False}))
+    elif args.command == "score-research":
+        if args.output.exists():
+            raise ExamError("refusing to replace a research score report")
+        values = _research_scoring_inputs(args.inputs)
+        report = score_sealed_experiment(values["packets"], values["segment_plans"], values["keys"],
+                                          read_json(args.manifest), read_json(args.execution_plan), values["configs"],
+                                          args.execution_root, scorer_bindings=read_json(args.scorer_bindings),
+                                          scoring_evidence_root=args.scoring_evidence_dir)
+        write_private_json(args.output, report)
+        complete = sum(cell["status"] == "ok" for cell in report["cells"])
+        print(json.dumps({"cells": len(report["cells"]), "cells_scored": complete,
+                          "complete_triples": len(report["summaries"]), "complete_pairs": len(report["paired_deltas"])}))
+        return 0 if complete == len(report["cells"]) else 2
+    elif args.command == "evidence-status":
         if not args.evidence_dir.is_dir():
             raise ExamError("evidence directory must already exist")
         report = EvidenceStore(args.evidence_dir).inspect_all()
