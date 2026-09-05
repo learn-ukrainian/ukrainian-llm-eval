@@ -27,6 +27,7 @@ from .gec_scoring import score_gec_attempt
 from .importers import import_zno
 from .runner import preflight, validate_config
 from .scheduling import run_pair
+from .typography import apply_typography
 from .ulp import import_ulp, ulp_sidecar
 
 
@@ -48,6 +49,9 @@ def parser() -> argparse.ArgumentParser:
     ulp.add_argument("--output", type=Path, required=True)
     ulp.add_argument("--sidecar", type=Path, required=True)
     ulp.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
+    typography = commands.add_parser("apply-typography", help="Apply a source-bound, independently verified emphasis/headings overlay")
+    for name in ("exam", "overlay", "output", "receipt"):
+        typography.add_argument("--" + name, type=Path, required=True)
     gec = commands.add_parser("prepare-gec", help="Separate full UA-GEC M2 into source-only packet and private references")
     gec.add_argument("--input", type=Path, required=True)
     gec.add_argument("--provenance", type=Path, required=True)
@@ -131,6 +135,13 @@ def execute(args: argparse.Namespace) -> int:
         corrupt = sum(item.get("status") == "corrupt" for item in report.values())
         print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
         return 0 if complete == len(report) else 2
+    elif args.command == "apply-typography":
+        if args.output.resolve() == args.receipt.resolve() or args.output.exists() or args.receipt.exists():
+            raise ExamError("typography output and receipt must be distinct new files")
+        exam, receipt = apply_typography(read_json(args.exam), read_json(args.overlay))
+        write_private_json(args.output, exam)
+        write_private_json(args.receipt, receipt)
+        print(json.dumps({"change_count": receipt["change_count"], "result_packet_sha256": receipt["result_packet_sha256"]}))
     elif args.command == "prepare-gec":
         if args.questions.resolve() == args.key.resolve() or args.questions.exists() or args.key.exists():
             raise ExamError("question and key destinations must be distinct new files")

@@ -144,3 +144,34 @@ runs produce a failed scoring receipt with no F0.5; answers are not repaired or
 silently excluded. Scorer failures also remain recorded. Keep all scoring evidence
 private because it includes references. `export` emits only allowlisted numeric
 aggregates and cannot replace the private provenance record.
+
+## Restore verified NMT typography
+
+An upstream text transcription can omit meaningful emphasis or matching-table
+headings. Audit the transcription against the official paper before constructing
+an overlay; this tool does not verify a PDF merely because its hash is supplied.
+Keep the reviewed overlay and original paper in private runtime custody.
+
+The overlay schema is `ukrainian-llm-eval.typography.v1`. It contains
+`source_exam_sha256` (the core canonical digest of the normalized input exam),
+`official_source` with `url` and `sha256`, and an ordered `changes` list. Each
+change selects an original exam `item_id` and either:
+
+- `field: "question"`, `original_text`, `replacement_text`: replace one unique
+  span, changing only Markdown asterisks while preserving all underlying text.
+- `field: "matching_headings"`, `left`, `right`: append the independently verified
+  table headings to a matching question, once per item.
+
+```bash
+ukrainian-llm-eval apply-typography --exam runtime/nmt-plain.json \
+  --overlay runtime/nmt-reviewed-overlay.json --output runtime/nmt-restored.json \
+  --receipt runtime/nmt-typography-receipt.json
+ukrainian-llm-eval prepare --exam runtime/nmt-restored.json \
+  --questions runtime/nmt-questions.json --key runtime/nmt-key.json
+```
+
+Both output paths must be new. A source-hash mismatch, ambiguous span, lexical
+change or unsupported edit fails. The receipt binds before/after exams and packets,
+the overlay and declared official-source hash; it contains no question or key text.
+Original option order, matching rows and answers are preserved. Emphasis in a text
+prompt is a documented representation of paper typography, not pixel equivalence.

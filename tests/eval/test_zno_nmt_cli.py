@@ -157,3 +157,25 @@ def test_gec_cli_keeps_both_references_private(tmp_path):
     assert {ref["annotator_id"] for ref in refs} == {"0", "1"}
     assert packet.stat().st_mode & 0o777 == key.stat().st_mode & 0o777 == 0o600
     assert run_cli(*args).returncode == 2
+
+
+def test_typography_cli_restores_emphasis_without_revealing_key(tmp_path):
+    from ukrainian_llm_eval.core import digest
+
+    original = import_zno(source(), "1", metadata())
+    exam, overlay = tmp_path / "exam.json", tmp_path / "overlay.json"
+    exam.write_text(json.dumps(original))
+    overlay.write_text(json.dumps({"schema": "ukrainian-llm-eval.typography.v1",
+                                   "source_exam_sha256": digest(original),
+                                   "official_source": {"url": "https://example.org/paper.pdf", "sha256": "a" * 64},
+                                   "changes": [{"item_id": "1", "field": "question", "original_text": "Choose",
+                                                "replacement_text": "*Choose*"}]}))
+    output, receipt = tmp_path / "restored.json", tmp_path / "receipt.json"
+    args = ("apply-typography", "--exam", exam, "--overlay", overlay, "--output", output, "--receipt", receipt)
+    result = run_cli(*args)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert json.loads(output.read_text())["items"][0]["question"] == "*Choose* X."
+    assert json.loads(receipt.read_text())["change_count"] == 1
+    assert "Choose" not in receipt.read_text() and "correct" not in receipt.read_text()
+    assert output.stat().st_mode & 0o777 == receipt.stat().st_mode & 0o777 == 0o600
+    assert run_cli(*args).returncode == 2

@@ -24,7 +24,11 @@
         "Public demonstration exam; training contamination cannot be excluded.",
         "Not the full historical ZNO benchmark.",
         "Official PDF typography verification is required before candidate packets are approved."
-      ]
+      ],
+      "official_paper": {
+        "url": "https://testportal.gov.ua/wp-content/uploads/2022/04/NMT_2022_demonstratsijnyj-variant_maket.pdf",
+        "sha256": "4c1dc23303ba919a71eb28210dc04fb4abb472b8d3d288fd63141bfdfd9dc154"
+      }
     },
     {
       "id": "ulp",
@@ -48,7 +52,13 @@
         "Public expert-curated questions; training contamination cannot be excluded.",
         "The source defines no held-out train/test separation.",
         "License is the dataset publisher declaration; normative reference books are not included in this project."
-      ]
+      ],
+      "source_path": "Ukrainian_orthography_questions.jsonl",
+      "choice_counts": {
+        "3": 2,
+        "4": 246,
+        "5": 99
+      }
     },
     {
       "id": "ua-gec-public-gec-only-test",
