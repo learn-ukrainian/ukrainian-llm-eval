@@ -6,8 +6,11 @@ unless its experiment-manifest entry freezes a non-null
 `request_budget_mechanism_sha256` and the runtime supplies the matching trusted
 integration. Version 1 retains the exact provider counter and upfront
 full-schedule admission. Version 2 uses a documented provider context upper
-bound and a shared sequential spending ledger. Receipts from one version are
-never interpreted as the other. A `verified_subscription` route may freeze a v1 mechanism when its
+bound and a shared sequential spending ledger. Version 3 can settle that
+reservation to a conservative final-usage-derived monetary upper bound when
+the provider has authoritative final usage but no inline dollar charge.
+Receipts from one version are never interpreted as another. A
+`verified_subscription` route may freeze a v1 mechanism when its
 HTTP provider supports exact accounting, or use `null` to disclose that this
 stronger cost proof is unavailable. That disclosure must not be reported as an
 equivalent token or cost guarantee.
@@ -75,6 +78,50 @@ billing totals must cover every permitted request and output, including tool
 rounds, full-rate cache treatment, fees, and integer rounding. Missing final
 account-charge evidence leaves the full segment reservation unresolved.
 
+## Conservative final-usage settlement
+
+The strict `ukrainian-llm-eval.request-budget-mechanism.v3` schema extends the
+v2 provider bounds without changing v1 or v2 receipts. Its cost path, kind, and
+scope must all be `null`. A manifest using it must select
+`ukrainian-llm-eval.spending-policy.v2` with settlement
+`authoritative_account_charge_or_conservative_final_usage_upper_bound`; the v1
+policy continues to authorize account-charge settlement only. Version 3 also
+freezes:
+
+- the maximum number of billable requests in a segment;
+- per-request, per-component upward rounding and its micro-USD quantum;
+- an aggregate maximum for all additional request, routing, minimum, fixed,
+  and similar non-token fees in the segment, with evidence that zero is the
+  maximum when no such fee applies;
+- evidence identities for final usage semantics and additional fees; and
+- attestations that the input and output rates are the maximum applicable
+  rates for the pinned backend, usage is per-request and final, input usage
+  covers all billable categories, and transport performs no automatic paid
+  retry.
+
+Each observed request contributes separate upward-rounded input and
+reasoning-inclusive output bounds plus its frozen tool charge. After every sent
+request has valid final usage, the reservation may settle to:
+
+```text
+U = sum(per-request rounded input + rounded output + tool charge)
+    + maximum additional segment fees
+```
+
+The controller verifies `U <= W`, where `W` is the whole-segment reservation.
+The ordered request identities, usage, component bounds, formula inputs,
+pricing, backend, output, usage-semantics, and fee evidence identities are
+bound into settlement evidence. The receipt calls `U` a
+`conservative_final_usage_upper_bound`; it never labels it as billed cost or an
+account charge.
+
+A missing, partial, malformed, ambiguous, or lost usage response leaves the
+whole `W` unresolved, even when earlier requests in the same segment have valid
+usage. The same applies if pricing can vary above the frozen rates, usage may be
+revised upward, provider fallback is possible, a paid retry is hidden, or any
+request or fixed fee lacks a finite bound. The evaluator does not partially
+settle a segment.
+
 ## Cumulative limits and credit
 
 Each request reserves its full reasoning-inclusive output allowance before it
@@ -110,7 +157,7 @@ On resume, this orphan commitment stops the entire experiment with a durable
 `admission_failed` result. Remaining routes and cells do not run from that
 execution root; the commitment and incomplete experiment remain evidence.
 
-Version 2 also requires a private absolute runtime path to one shared SQLite ledger. The
+Versions 2 and 3 also require a private absolute runtime path to one shared SQLite ledger. The
 portable manifest contains only the logical ledger ID, cap, reservation scope,
 settlement rule, and cap-stop outcome. The ledger lives outside every execution
 root and is shared by canaries and scored runs. On first use it binds the exact
@@ -120,14 +167,16 @@ orchestration must pin and reuse the same absolute path for the complete
 canary-and-benchmark authorization.
 
 Under one atomic transaction, the ledger enforces
-`settled_new_spend + unresolved_sent_reservations + next_worst_case <= cap`.
+`settled_new_spend_upper_bounds + unresolved_worst_case_reservations +
+next_worst_case <= cap`.
 A whole segment is reserved after admission and before its first provider
 request. Timeout, lost response, missing billing, interruption, and restart
-retain its full worst case. Only authoritative final account charges for every
-sent request settle the reservation and release the unused portion. Estimates
-never settle it. Existing-credit settlement remains retained against later
-balance observations until separate authoritative reconciliation proves that
-the charge is reflected in the observed balance.
+retain its full worst case. A v2 reservation settles only from authoritative
+final account charges for every sent request. A v3 reservation settles only
+from the complete final-usage proof above. Other estimates never settle it.
+Existing-credit settlement, including a v3 usage-derived upper bound, remains
+retained against later balance observations until separate authoritative
+reconciliation proves that the charge is reflected in the observed balance.
 
 ## Runtime map
 
@@ -144,7 +193,8 @@ map. The map and every referenced file should remain private:
 Each exact-counter route file has schema
 `ukrainian-llm-eval.request-budget-route.v1` and exactly `mechanism` plus
 `counter_command` objects. A provider-bound route file has schema
-`ukrainian-llm-eval.request-budget-route.v2` and exactly its `mechanism`; the
-runtime controller receives the shared ledger path separately. Commands and
-evidence are supplied by the operator and are never discovered from benchmark,
-manifest or model output.
+`ukrainian-llm-eval.request-budget-route.v2`; the v3 usage-bound equivalent has
+schema `ukrainian-llm-eval.request-budget-route.v3`. Each has exactly its
+`mechanism`; the runtime controller receives the shared ledger path separately.
+Commands and evidence are supplied by the operator and are never discovered
+from benchmark, manifest or model output.

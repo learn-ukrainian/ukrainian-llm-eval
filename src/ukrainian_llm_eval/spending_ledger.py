@@ -17,8 +17,10 @@ from typing import Any
 
 from .core import digest
 
-LEDGER_SCHEMA = "ukrainian-llm-eval.shared-spending-ledger.v1"
+LEGACY_LEDGER_SCHEMA = "ukrainian-llm-eval.shared-spending-ledger.v1"
+LEDGER_SCHEMA = "ukrainian-llm-eval.shared-spending-ledger.v2"
 RESERVATION_SCHEMA = "ukrainian-llm-eval.shared-spending-reservation.v1"
+USAGE_BOUND_RESERVATION_SCHEMA = "ukrainian-llm-eval.shared-spending-reservation.v2"
 _IDENTIFIER_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,127}\Z")
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -134,7 +136,7 @@ class SharedSpendingLedger:
                 "account_sha256 TEXT NOT NULL, maximum_micro_usd INTEGER NOT NULL CHECK(maximum_micro_usd >= 0), "
                 "state TEXT NOT NULL CHECK(state IN ('unresolved','settled')), "
                 "settled_micro_usd INTEGER, settlement_evidence_sha256 TEXT, "
-                "credit_reconciliation_sha256 TEXT)"
+                "credit_reconciliation_sha256 TEXT, settlement_kind TEXT)"
             )
             row = connection.execute("SELECT schema, ledger_id, cap_micro_usd FROM ledger WHERE singleton=1").fetchone()
             expected = (LEDGER_SCHEMA, self.ledger_id, self.cap_micro_usd)
@@ -143,6 +145,17 @@ class SharedSpendingLedger:
                     "INSERT INTO ledger(singleton, schema, ledger_id, cap_micro_usd) VALUES(1, ?, ?, ?)",
                     expected,
                 )
+            elif tuple(row) == (LEGACY_LEDGER_SCHEMA, self.ledger_id, self.cap_micro_usd):
+                columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(reservations)").fetchall()
+                }
+                if "settlement_kind" not in columns:
+                    connection.execute("ALTER TABLE reservations ADD COLUMN settlement_kind TEXT")
+                connection.execute(
+                    "UPDATE reservations SET settlement_kind='authoritative_account_charge' "
+                    "WHERE state='settled' AND settlement_kind IS NULL"
+                )
+                connection.execute("UPDATE ledger SET schema=? WHERE singleton=1", (LEDGER_SCHEMA,))
             elif tuple(row) != expected:
                 raise SpendingLedgerError("shared spending ledger identity or cap drift")
             connection.commit()
@@ -169,7 +182,7 @@ class SharedSpendingLedger:
             "schema": LEDGER_SCHEMA,
             "ledger_id": self.ledger_id,
             "cap_micro_usd": self.cap_micro_usd,
-            "settled_new_spend_micro_usd": settled,
+            "settled_new_spend_upper_bounds_micro_usd": settled,
             "unresolved_new_spend_micro_usd": unresolved,
             "remaining_new_spend_micro_usd": self.cap_micro_usd - settled - unresolved,
             "reservation_count": int(count),
@@ -230,28 +243,38 @@ class SharedSpendingLedger:
             connection.commit()
             return self._receipt(row, replayed=False)
 
-    def settle(self, reservation_id: str, *, charged_micro_usd: int, evidence_sha256: str) -> dict[str, Any]:
-        """Release unused worst case only from authoritative final charge evidence."""
+    def settle(
+        self, reservation_id: str, *, charged_micro_usd: int, evidence_sha256: str,
+        settlement_kind: str = "authoritative_account_charge",
+    ) -> dict[str, Any]:
+        """Replace a worst case with an exact charge or conservative final upper bound."""
 
         reservation_id = _identifier(reservation_id, "reservation ID")
         charged = _integer(charged_micro_usd, "settled charge")
         evidence = _sha(evidence_sha256, "settlement evidence")
+        if settlement_kind not in {
+            "authoritative_account_charge", "conservative_final_usage_upper_bound"
+        }:
+            raise SpendingLedgerError("unsupported shared reservation settlement kind")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
             if row is None:
                 raise SpendingLedgerError("unknown shared reservation")
             if charged > row["maximum_micro_usd"]:
-                raise SpendingLedgerError("authoritative charge exceeds reserved worst case")
+                raise SpendingLedgerError("settled amount exceeds reserved worst case")
             if row["state"] == "settled":
-                if (row["settled_micro_usd"], row["settlement_evidence_sha256"]) != (charged, evidence):
+                if (
+                    row["settled_micro_usd"], row["settlement_evidence_sha256"], row["settlement_kind"]
+                ) != (charged, evidence, settlement_kind):
                     raise SpendingLedgerError("shared reservation settlement drift")
                 connection.commit()
                 return self._receipt(row, replayed=True)
             connection.execute(
-                "UPDATE reservations SET state='settled', settled_micro_usd=?, settlement_evidence_sha256=? "
+                "UPDATE reservations SET state='settled', settled_micro_usd=?, settlement_evidence_sha256=?, "
+                "settlement_kind=? "
                 "WHERE reservation_id=? AND state='unresolved'",
-                (charged, evidence, reservation_id),
+                (charged, evidence, settlement_kind, reservation_id),
             )
             row = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
             connection.commit()
@@ -285,7 +308,11 @@ class SharedSpendingLedger:
 
     def _receipt(self, row: sqlite3.Row, *, replayed: bool) -> dict[str, Any]:
         body = {
-            "schema": RESERVATION_SCHEMA,
+            "schema": (
+                USAGE_BOUND_RESERVATION_SCHEMA
+                if row["settlement_kind"] == "conservative_final_usage_upper_bound"
+                else RESERVATION_SCHEMA
+            ),
             "ledger_id": self.ledger_id,
             "reservation_id": row["reservation_id"],
             "binding_sha256": row["binding_sha256"],
@@ -297,12 +324,16 @@ class SharedSpendingLedger:
             "settlement_evidence_sha256": row["settlement_evidence_sha256"],
             "credit_reconciliation_sha256": row["credit_reconciliation_sha256"],
         }
+        if row["settlement_kind"] == "conservative_final_usage_upper_bound":
+            body["settlement_kind"] = row["settlement_kind"]
         return body | {"reservation_sha256": digest(body), "replayed": replayed}
 
 
 __all__ = [
     "LEDGER_SCHEMA",
+    "LEGACY_LEDGER_SCHEMA",
     "RESERVATION_SCHEMA",
+    "USAGE_BOUND_RESERVATION_SCHEMA",
     "SharedSpendingLedger",
     "SpendingCapExceeded",
     "SpendingLedgerError",

@@ -209,6 +209,41 @@ def test_sequential_policy_preserves_full_over_cap_matrix_without_upfront_admiss
     assert build_execution_plan(drifted)["execution_plan_sha256"] != plan["execution_plan_sha256"]
 
 
+def test_usage_bound_spending_policy_is_explicit_and_versioned() -> None:
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v2",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 215,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_account_charge_or_conservative_final_usage_upper_bound",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        "1" * 64,
+        [_experiment_suite()],
+        [_metered_route()],
+        scorer_sha256="c" * 64,
+        tool_policy_sha256="d" * 64,
+        new_spend_cap_micro_usd=215,
+        spending_policy=policy,
+    )
+    assert manifest["spending_policy"] == policy
+
+    mismatched = copy.deepcopy(policy)
+    mismatched["settlement"] = "authoritative_final_account_charge_only"
+    with pytest.raises(ExamError, match="settlement policy"):
+        build_experiment_manifest(
+            "1" * 64,
+            [_experiment_suite()],
+            [_metered_route()],
+            scorer_sha256="c" * 64,
+            tool_policy_sha256="d" * 64,
+            new_spend_cap_micro_usd=215,
+            spending_policy=mismatched,
+        )
+
+
 def test_route_limits_and_entitlements_are_conservative_and_receipt_bound() -> None:
     route = _metered_route(conditions=["sources"])
     route["billing"]["max_total_output_tokens"] = 399

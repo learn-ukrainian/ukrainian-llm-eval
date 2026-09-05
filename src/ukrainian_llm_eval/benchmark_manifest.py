@@ -31,6 +31,7 @@ EXECUTION_PLAN_SCHEMA = "ukrainian-llm-eval.execution-plan.v1"
 EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA = "ukrainian-llm-eval.experiment-manifest.v2"
 EXECUTION_PLAN_SEQUENTIAL_SCHEMA = "ukrainian-llm-eval.execution-plan.v2"
 SPENDING_POLICY_SCHEMA = "ukrainian-llm-eval.spending-policy.v1"
+USAGE_BOUND_SPENDING_POLICY_SCHEMA = "ukrainian-llm-eval.spending-policy.v2"
 DEFAULT_NEW_SPEND_CAP_MICRO_USD = 10_000_000
 
 # Costs are represented as integer micro-dollars.  Token rates are per million
@@ -644,7 +645,14 @@ def _normalise_spending_policy(value: Any, cap_micro_usd: int) -> dict[str, Any]
         "settlement", "cap_stop",
     }
     policy = _require_exact_dict(value, fields, "spending_policy")
-    if policy["schema"] != SPENDING_POLICY_SCHEMA:
+    settlements = {
+        SPENDING_POLICY_SCHEMA: "authoritative_final_account_charge_only",
+        USAGE_BOUND_SPENDING_POLICY_SCHEMA: (
+            "authoritative_account_charge_or_conservative_final_usage_upper_bound"
+        ),
+    }
+    schema = policy["schema"]
+    if schema not in settlements:
         raise ExamError("unsupported spending policy schema")
     if policy["mode"] != "sequential_shared_cap":
         raise ExamError("unsupported spending policy mode")
@@ -656,17 +664,18 @@ def _normalise_spending_policy(value: Any, cap_micro_usd: int) -> dict[str, Any]
         raise ExamError("spending policy cap differs from experiment new-spend cap")
     if policy["reservation_scope"] != "whole_segment_before_first_request":
         raise ExamError("unsupported spending reservation scope")
-    if policy["settlement"] != "authoritative_final_account_charge_only":
+    settlement = settlements[schema]
+    if policy["settlement"] != settlement:
         raise ExamError("unsupported spending settlement policy")
     if policy["cap_stop"] != "not_executed_budget":
         raise ExamError("unsupported spending cap-stop policy")
     return {
-        "schema": SPENDING_POLICY_SCHEMA,
+        "schema": schema,
         "mode": "sequential_shared_cap",
         "ledger_id": ledger_id,
         "authorized_cap_micro_usd": authorized_cap,
         "reservation_scope": "whole_segment_before_first_request",
-        "settlement": "authoritative_final_account_charge_only",
+        "settlement": settlement,
         "cap_stop": "not_executed_budget",
     }
 
@@ -836,6 +845,7 @@ __all__ = [
     "EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA",
     "MANIFEST_SCHEMA",
     "SPENDING_POLICY_SCHEMA",
+    "USAGE_BOUND_SPENDING_POLICY_SCHEMA",
     "build_execution_plan",
     "build_experiment_manifest",
     "validate_execution_plan",

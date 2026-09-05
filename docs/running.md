@@ -216,6 +216,14 @@ An unsupported effort setting must not silently become a different setting.
 Requested effort and proven effective effort are different facts; absent
 runtime evidence stays unknown.
 
+For native Claude, a `[1m]` context selector remains the requested model
+string. The effective model may be its canonical base name only when the
+initial stream announces that exact selector and terminal `modelUsage`
+contains exactly that selector, its matching `canonicalModel`, and a
+1,000,000-token context window. Missing or contradictory metadata still fails
+identity validation; the adapter does not infer this mapping by stripping
+the suffix alone.
+
 Freeze budgets before the scored experiment. Reasoning can consume the native
 output budget even when the requested final JSON is short: the complete demo
 paper exceeded a 4,096-token budget in live verification. Preserve such failures;

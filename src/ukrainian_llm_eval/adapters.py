@@ -121,6 +121,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise AdapterError("configuration must be an object")
     adapter = config.get("adapter")
+    if adapter == "kimi":
+        from .native_kimi import validate_config as validate_kimi_config
+
+        return validate_kimi_config(config)
     base = {
         "schema",
         "adapter",
@@ -137,6 +141,7 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     by_adapter = {
         "claude": base | {"claude_bin"},
         "chat-http": base | {"endpoint_env", "key_env", "http_response_format", "openrouter"},
+        "responses-http": base | {"endpoint_env", "key_env", "http_response_format"},
     }
     if adapter not in by_adapter:
         raise AdapterError("configuration adapter is unsupported")
@@ -229,6 +234,13 @@ def _claude_capabilities(config: Mapping[str, Any], *, needs_sources: bool = Fal
 def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None = None) -> dict[str, Any]:
     """Check only capability and boundaries, returning no endpoint/key values."""
     checked = validate_config(config)
+    if checked["adapter"] == "kimi":
+        from .native_kimi import preflight as kimi_preflight
+
+        return kimi_preflight(
+            checked, condition, sources_url,
+            private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_KIMI_PROVISIONING_DIR"),
+        )
     _condition_policy(checked, condition, sources_url)
     capability: dict[str, Any] = {
         "schema": "zno-nmt.capability.v1",
@@ -247,7 +259,7 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         endpoint = os.environ.get(str(checked["endpoint_env"]), "")
         if not endpoint:
             raise AdapterError("HTTP endpoint is unavailable")
-        capability.update(capability="chat-http-controller-mediated", cli_version=None)
+        capability.update(capability=checked["adapter"] + "-controller-mediated", cli_version=None)
     if condition == "sources":
         tools, identity = _mcp_list_tools(str(sources_url), int(checked["timeout_seconds"]))
         expected = set(checked["tools"])
@@ -539,6 +551,31 @@ def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _claude_context_model_mapping(stdout: str) -> dict[str, str]:
+    """Resolve a context selector only when native terminal metadata attests it."""
+    events = [_strict_json_loads(line) for line in stdout.splitlines()]
+    initial = {event.get("model") for event in events if isinstance(event, Mapping)
+               and event.get("type") == "system" and event.get("subtype") == "init"
+               and isinstance(event.get("model"), str)}
+    decorated = {model for model in initial if model.endswith("[1m]")}
+    if not decorated:
+        return {}
+    if len(initial) != 1:
+        raise AdapterError("CLI model drift")
+    selector = next(iter(decorated))
+    terminal = [event for event in events if isinstance(event, Mapping) and event.get("type") == "result"]
+    if len(terminal) != 1 or terminal[0].get("is_error") is True:
+        raise AdapterError("CLI model drift")
+    usage = terminal[0].get("modelUsage")
+    if not isinstance(usage, Mapping) or set(usage) != {selector}:
+        raise AdapterError("CLI model drift")
+    record = usage[selector]
+    if (not isinstance(record, Mapping) or record.get("canonicalModel") != selector[:-4]
+            or record.get("contextWindow") != 1_000_000):
+        raise AdapterError("CLI model drift")
+    return {selector: record["canonicalModel"]}
+
+
 def _parse_stream_json(
     stdout: str, packet: Mapping[str, Any], tools: set[str], max_tools: int
 ) -> tuple[dict[str, Any], str, int, dict[str, int | float | None]]:
@@ -610,6 +647,8 @@ def _parse_stream_json(
         raise AdapterError(_TOOL_LIMIT_ERROR)
     if not init_seen:
         raise AdapterError("CLI init evidence missing")
+    model_mapping = _claude_context_model_mapping(stdout)
+    observed_models = {model_mapping.get(model, model) for model in observed_models}
     if len(observed_models) > 1:
         raise AdapterError("CLI model drift")
     if result_text is None and structured_output is None:
@@ -739,7 +778,8 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
             raise AdapterError("CLI invocation failed")
         observed_tools = {_tool_ref(tool) for tool in checked["tools"]} if condition == "sources" else set()
         responses, effective_model, tool_calls, usage = _parse_stream_json(completed.stdout, packet, observed_tools, checked["max_tool_calls"])
-    if effective_model != "unknown" and effective_model != checked["model"]:
+    expected_model = _claude_context_model_mapping(completed.stdout).get(checked["model"], checked["model"])
+    if effective_model != "unknown" and effective_model != expected_model:
         raise AdapterError("CLI model drift")
     session_id = _claude_session_identity(completed.stdout)
     return {
