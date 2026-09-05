@@ -1,0 +1,24 @@
+name: Task
+description: A bounded implementation or research outcome
+title: ""
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome and scope
+      description: What should a user or researcher be able to do? Link the parent epic when applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Define tests, independent evidence, documentation and release implications.
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Owner, dependencies and next action
+    validations:
+      required: true

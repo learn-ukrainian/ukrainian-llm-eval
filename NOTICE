@@ -1,0 +1,1 @@
+The initial evaluation engine and tests were extracted from learn-ukrainian/learn-ukrainian.github.io at commit 31638b7c2a874760be470a6048bbc998882b2bb2 (MIT licensed). Original paths: scripts/eval/zno_nmt and tests/eval/test_zno_nmt*.py. Dataset and corpus rights are separate.

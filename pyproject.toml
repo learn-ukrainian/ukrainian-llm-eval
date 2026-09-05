@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ukrainian-llm-eval"
+version = "0.1.0.dev0"
+description = "Reproducible Ukrainian-language evaluation of language models and agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  {name = "Learn Ukrainian"},
+]
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build",
+  "pytest",
+  "ruff",
+]
+
+[project.scripts]
+ukrainian-llm-eval = "ukrainian_llm_eval.__main__:main"
+ukrainian-llm-eval-mcp-proxy = "ukrainian_llm_eval.mcp_proxy:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
