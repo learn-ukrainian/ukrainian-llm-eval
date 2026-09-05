@@ -36,6 +36,10 @@ _ANNOTATION_FIELDS = {
 _ANNOTATOR_IDS = frozenset({"0", "1"})
 _INTEGER_TOKEN = re.compile(r"(?:0|[1-9][0-9]*|-[1-9][0-9]*)\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+# ``str.splitlines`` treats all of these code points as line boundaries.  M2
+# annotations are one physical line per record, so accepting any of them in a
+# manually edited field would let a key change the serialized record layout.
+_UNICODE_LINE_SEPARATORS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 # The pinned UA-GEC generator emits exactly ``S # ####`` for document
 # headings in this split.  A numeric-only source sentence (``S 1234``) is
 # ordinary content and must remain in the candidate packet.
@@ -60,7 +64,15 @@ def _require_exact_dict(value: Any, expected: set[str], where: str) -> dict[str,
 def _required_text(value: Any, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ExamError(f"{where} must be a non-empty string")
+    if _contains_line_separator(value):
+        raise ExamError(f"{where} must not contain a Unicode line separator")
     return value
+
+
+def _contains_line_separator(value: str) -> bool:
+    """Return whether a string contains a Python/M2 record line boundary."""
+
+    return any(character in _UNICODE_LINE_SEPARATORS for character in value)
 
 
 def _required_token(value: Any, where: str) -> str:
@@ -122,6 +134,8 @@ def _validate_annotation_dict(value: Any, token_count: int, where: str) -> dict[
     replacement = annotation["replacement"]
     if not isinstance(replacement, str):
         raise ExamError(f"{where}.replacement must be a string")
+    if _contains_line_separator(replacement):
+        raise ExamError(f"{where}.replacement must not contain a Unicode line separator")
     required = _required_token(annotation["required"], f"{where}.required")
     metadata = _required_token(annotation["metadata"], f"{where}.metadata")
     if required != "REQUIRED" or metadata != "-NONE-":

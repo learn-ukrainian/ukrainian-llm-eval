@@ -13,6 +13,7 @@ from ukrainian_llm_eval.gec import (
     validate_gec_key,
     validate_gec_packet,
 )
+from ukrainian_llm_eval.gec_scoring import scoring_inputs
 
 _PROVENANCE = {
     "source_url": "https://example.test/ua-gec",
@@ -163,5 +164,32 @@ def test_packet_rejects_unicode_line_separator_before_execution() -> None:
     packet, _ = prepare_gec(_m2(), _PROVENANCE)
     packet["items"][0]["text"] += "\u2028"
     packet["packet_sha256"] = digest({"schema": packet["schema"], "items": packet["items"]})
-    with pytest.raises(ExamError, match="one source sentence"):
+    with pytest.raises(ExamError, match="Unicode line separator"):
         validate_gec_packet(packet)
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"],
+    ids=lambda separator: f"U+{ord(separator):04X}",
+)
+@pytest.mark.parametrize("field", ["annotator_id", "category", "replacement", "required", "metadata"])
+def test_all_unicode_line_separators_are_rejected_in_manual_key_annotations(
+    separator: str, field: str
+) -> None:
+    packet, key = prepare_gec(_m2(), _PROVENANCE)
+    edited_key = copy.deepcopy(key)
+    edited_key["items"][0]["annotations"][0][field] = "edited" + separator
+    edited_key["key_sha256"] = digest({name: edited_key[name] for name in (
+        "schema", "packet_sha256", "source_sha256", "provenance", "items"
+    )})
+    run = {
+        "schema": "ua-gec.run.v1",
+        "packet_sha256": packet["packet_sha256"],
+        "responses": {item["id"]: "відповідь ." for item in packet["items"]},
+    }
+
+    with pytest.raises(ExamError, match="Unicode line separator"):
+        validate_gec_key(packet, edited_key)
+    with pytest.raises(ExamError, match="Unicode line separator"):
+        scoring_inputs(packet, edited_key, run)
