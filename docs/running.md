@@ -181,7 +181,7 @@ PYCODE
   --output .runtime/zno-nmt-demo/manual-score.json
 ```
 
-Expected result: `raw_points: 1`, `max_points: 1`, `correct_items: 1`, and `passed: null` because this synthetic benchmark has no official passing threshold. For a negative integrity check, copy the question packet, change its question text without changing its stored digest, and score that copy to a new output path. Expected result: exit `2`, a digest-mismatch error, and no new score file. This proves tamper detection, not Ukrainian language competence.
+Expected result: `raw_points: 1`, `max_points: 1`, `correct_items: 1`, and `passed: null` because this synthetic benchmark has no official passing threshold. For a negative integrity check, copy the question packet, change its question text without changing its stored digest, and score that copy to a new output path. Expected result: exit `2`, a sanitized `ExamError`, and no new score file. This proves tamper detection, not Ukrainian language competence.
 
 ## Configure a candidate
 
