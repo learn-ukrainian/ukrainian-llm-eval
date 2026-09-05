@@ -415,7 +415,7 @@ def test_native_timeout_kills_its_whole_process_group(monkeypatch: pytest.Monkey
         def communicate(self, _prompt: str | None = None, *, timeout: int | None = None):
             if timeout is not None:
                 raise subprocess.TimeoutExpired("claude", timeout)
-            return "", ""
+            return "partial output", "partial diagnostics"
 
         def kill(self) -> None:
             raise AssertionError("process-group kill should be preferred")
@@ -427,6 +427,75 @@ def test_native_timeout_kills_its_whole_process_group(monkeypatch: pytest.Monkey
     monkeypatch.setattr(adapters.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(adapters.os, "killpg", lambda pid, sig: seen.update(kill=(pid, sig)))
     with pytest.raises(adapters.AdapterError, match="timeout"):
-        adapters._run_claude_process(["claude"], cwd=tmp_path, env={}, prompt="exam", timeout=1)
+        adapters._run_claude_process(["claude"], cwd=tmp_path, env={}, prompt="exam", timeout=1,
+                                    evidence=lambda kind, payload: seen.update(evidence=(kind, payload)))
     assert seen["start_new_session"] is True
     assert seen["kill"] == (321, adapters.signal.SIGKILL)
+    assert seen["evidence"] == ("cli_timeout", {"stdout": "partial output", "stderr": "partial diagnostics", "returncode": -9})
+
+
+def test_http_evidence_preserves_rejected_response_without_transport_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ZNO_NMT_ENDPOINT", "https://private-route.invalid/chat")
+    monkeypatch.setenv("ZNO_NMT_KEY", "transport-secret")
+    events = []
+    response = {"model": "unexpected-model", "choices": []}
+    monkeypatch.setattr(adapters, "_http_json", lambda *_args, **_kwargs: response)
+    with pytest.raises(adapters.AdapterError, match="model drift"):
+        adapters.run_chat_http(
+            _packet(), _config(), "closed-book", sources_url=None, prompt="exact prompt",
+            evidence=lambda kind, payload: events.append((kind, json.loads(json.dumps(payload)))),
+        )
+    assert [kind for kind, _ in events] == ["completion_request", "completion_response"]
+    assert events[0][1]["messages"] == [{"role": "user", "content": "exact prompt"}]
+    assert events[1][1] == response
+    assert "transport-secret" not in json.dumps(events)
+    assert "private-route.invalid" not in json.dumps(events)
+
+
+def test_runner_records_prompt_and_failure_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ZNO_NMT_ENDPOINT", "https://example.invalid/chat")
+    events = []
+    exam = {
+        "schema": "zno-nmt.exam.v1", "title": "fixture", "subject": "Ukrainian", "year": 2022,
+        "provenance": {"source_url": "https://example.invalid", "source_revision": "fixture", "license": "test", "exposure": "public"},
+        "scoring": {"kind": "benchmark", "policy_url": None, "pass_threshold": None, "expected_items": 1, "expected_points": 1},
+        "items": [{"id": "1", "kind": "single", "question": "Питання", "options": [{"id": "A", "text": "Варіант"}], "rows": [], "correct": "A"}],
+    }
+    packet, _key = prepare_exam(exam)
+    def fail(*_args: Any, **kwargs: Any) -> Any:
+        kwargs["evidence"]("completion_response", {"model": "wrong-model"})
+        raise adapters.AdapterError("HTTP model drift")
+    monkeypatch.setattr(adapters, "run_chat_http", fail)
+    result = runner.run_exam(
+        packet, _config(), "closed-book",
+        evidence=lambda kind, payload: events.append((kind, json.loads(json.dumps(payload)))),
+    )
+    assert result["status"] == "failed"
+    assert [kind for kind, _ in events] == [
+        "trial_input", "preflight", "prompt", "completion_response", "trial_failure",
+    ]
+    assert events[-1][1] == result
+    assert events[2][1]["text"] == adapters.build_prompt(packet, "closed-book", max_tool_calls=2)
+
+
+def test_malformed_completion_bytes_are_preserved_before_json_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+    from contextlib import closing
+    from io import BytesIO
+
+    raw = b"not JSON: \xff"
+    class Opener:
+        def open(self, *_args: Any, **_kwargs: Any):
+            return closing(BytesIO(raw))
+    monkeypatch.setattr(adapters.urllib.request, "build_opener", lambda *_args: Opener())
+    events = []
+    with pytest.raises(adapters.AdapterError, match="response invalid"):
+        adapters._http_json(
+            "https://example.invalid/chat", {}, key="not-recorded", timeout=1, max_bytes=100,
+            evidence=lambda kind, payload: events.append((kind, payload)),
+        )
+    assert len(events) == 1
+    assert events[0][0] == "completion_body"
+    assert base64.b64decode(events[0][1]["base64"]) == raw
+    assert events[0][1]["truncated"] is False
+    assert "not-recorded" not in json.dumps(events)

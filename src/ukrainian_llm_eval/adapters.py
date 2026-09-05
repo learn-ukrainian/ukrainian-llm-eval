@@ -7,6 +7,7 @@ transcripts in the returned receipt.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -573,7 +574,7 @@ def _nonnegative_number(value: Any) -> int | float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
 
 
-def _run_claude_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int) -> subprocess.CompletedProcess[str]:
+def _run_claude_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int, evidence: Callable[[str, Any], None] | None = None) -> subprocess.CompletedProcess[str]:
     """Kill the whole CLI process group so an MCP proxy cannot survive a timeout."""
     try:
         process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -585,14 +586,16 @@ def _run_claude_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], p
             if "process" in locals():
                 process.kill()
         if "process" in locals():
-            process.communicate()
+            stdout, stderr = process.communicate()
+            if evidence is not None:
+                evidence("cli_timeout", {"stdout": stdout, "stderr": stderr, "returncode": process.returncode})
         raise AdapterError("CLI timeout") from exc
     except OSError as exc:
         raise AdapterError("CLI invocation failed") from exc
     return subprocess.CompletedProcess(argv, process.returncode, stdout=stdout, stderr=stderr)
 
 
-def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str) -> dict[str, Any]:
+def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
     """Run one fresh restricted Claude CLI session and return sanitized evidence."""
     checked = validate_config(config)
     if checked["adapter"] != "claude":
@@ -645,8 +648,11 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
         if condition == "sources":
             argv.extend(["--allowedTools", ",".join(_tool_ref(tool) for tool in checked["tools"])])
         started = time.monotonic()
-        completed = _run_claude_process(argv, cwd=root, env=_child_env(checked["max_output_tokens"]), prompt=prompt, timeout=checked["timeout_seconds"])
+        process_options = {"evidence": evidence} if evidence is not None else {}
+        completed = _run_claude_process(argv, cwd=root, env=_child_env(checked["max_output_tokens"]), prompt=prompt, timeout=checked["timeout_seconds"], **process_options)
         elapsed = time.monotonic() - started
+        if evidence is not None:
+            evidence("cli_result", {"returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr})
         if completed.returncode != 0:
             failure_text = (completed.stdout or "") + "\n" + (completed.stderr or "")
             if any(marker in failure_text.casefold() for marker in ("not logged in", "login", "authentication", "oauth", "keychain")):
@@ -668,7 +674,7 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout: int, max_bytes: int) -> dict[str, Any]:
+def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout: int, max_bytes: int, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise AdapterError("HTTP endpoint scheme invalid")
@@ -682,6 +688,8 @@ def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout
             raw = response.read(max_bytes + 1)
     except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
         raise AdapterError("HTTP completion failed") from exc
+    if evidence is not None:
+        evidence("completion_body", {"base64": base64.b64encode(raw).decode("ascii"), "truncated": len(raw) > max_bytes})
     if len(raw) > max_bytes:
         raise AdapterError("HTTP completion exceeds limit")
     try:
@@ -693,7 +701,7 @@ def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout
     return value
 
 
-def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str) -> dict[str, Any]:
+def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
     """Run one controller-mediated chat-completions session.
 
     Tool calls are checked before the MCP broker receives them; model text can
@@ -736,7 +744,12 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise AdapterError("HTTP total timeout")
-        body = _http_json(endpoint, request_base, key=key, timeout=max(1, int(remaining)), max_bytes=max_bytes)
+        if evidence is not None:
+            evidence("completion_request", request_base)
+        http_options = {"evidence": evidence} if evidence is not None else {}
+        body = _http_json(endpoint, request_base, key=key, timeout=max(1, int(remaining)), max_bytes=max_bytes, **http_options)
+        if evidence is not None:
+            evidence("completion_response", body)
         if body.get("model") != checked["model"]:
             raise AdapterError("HTTP model drift")
         choices = body.get("choices")
@@ -789,7 +802,11 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise AdapterError("HTTP total timeout")
+            if evidence is not None:
+                evidence("tool_request", {"name": name, "arguments": arguments, "id": call.get("id")})
             broker_result = _mcp_call(str(sources_url), name, arguments, max(1, int(remaining)))
+            if evidence is not None:
+                evidence("tool_result", {"id": call.get("id"), "result": broker_result})
             retrieval_digests.append(digest(broker_result))
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id:

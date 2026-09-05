@@ -360,3 +360,76 @@ Useful community contributions include independently audited exam importers,
 provider adapters with isolation evidence, public-corpus reference baselines,
 and new privately stewarded questions. Keep dataset preparation, prompt tuning
 and held-out scoring separate so improvements remain measurable.
+
+
+### Evidence capture boundary
+
+The Python runner accepts an optional synchronous `evidence(kind, payload)` callback.
+It emits validated trial inputs, preflight receipts, the rendered prompt and response
+schema, provider responses before validation, and tool requests/results. Native CLI
+completion and timeout events include captured stdout/stderr, including partial
+output recovered when the process group is stopped. The callback must copy or
+serialize each payload before returning: HTTP conversation lists change during a run.
+
+These events are private raw evidence, not sanitized publication artifacts. The
+controller does not pass transport authorization headers, environment contents, or
+endpoint URLs to the callback. Provider or retrieved text can still contain sensitive
+content; this is not a guarantee that arbitrary raw payloads are secret-free. Keep
+raw evidence outside Git and review it before any publication. The aggregate export
+command continues to exclude raw text.
+
+The callback cannot recover output from an abrupt machine failure or a process
+killed before buffered output reaches the controller. Such an attempt must remain
+incomplete; do not report it as a successful or unattempted trial.
+
+### Private attempt storage and resume
+
+`run` creates an owner-only evidence directory next to its output (for example,
+`trial.evidence/` for `trial.json`) and a verified receipt at
+`trial.evidence.json`. Override the directory with `--evidence-dir PATH`.
+`pair` stores all attempts under `OUT_DIR/evidence/`, with one immutable receipt
+for each scheduled cell. Do not place these directories in Git.
+
+Resume a paired plan with the same questions and configuration:
+
+```bash
+ukrainian-llm-eval pair --questions questions.json --config config.json \
+  --out-dir paired-run --resume
+```
+
+Resume checks the frozen plan and existing evidence before reusing results. It
+never reruns a started cell. An interrupted cell retains its recorded events and
+is finalized as an interrupted failure; only cells that never started may make
+new provider calls. A newly failed trial stops execution; a deliberate resume can
+continue later cells while retaining that failure. The command exits 2 whenever
+any visited cell failed, including a failure retained from an earlier invocation.
+
+The schedule uses a POSIX file lock to exclude concurrent cooperating executors.
+Treat the evidence directory and its parent directories as trusted local storage.
+Hashes detect corruption against retained receipts; they do not prevent a local
+owner from rewriting an entire history and all its hashes. A crash during an event
+write may leave a truncated log: verification then fails closed and preserves it
+for investigation instead of inventing a complete record.
+
+Resume also binds hashes of the resolved completion and MCP endpoints. Changing
+an endpoint between invocations fails before preflight or a new provider call;
+rotating credentials for the same endpoint does not change that route identity.
+
+Inspect every attempt even when one is damaged:
+
+```bash
+ukrainian-llm-eval evidence-status --evidence-dir paired-run/evidence \
+  --output private-evidence-status.json
+```
+
+This command makes no provider calls. The private report includes each intact
+receipt and a corruption marker for unreadable entries; stdout contains counts
+only. Exit 2 means at least one entry is incomplete or corrupt. Paid resume remains
+blocked if any evidence is corrupt. Preserve the original directory, use this
+report to identify the affected entry, and investigate against retained copies or
+checksums. Do not delete a damaged entry to make resume pass or claim its cell was
+never attempted. A recovery that cannot establish the original evidence remains
+an explicit experiment gap.
+
+Evidence storage requires POSIX ownership and locking support. Windows is not
+supported for evidence-backed execution.
