@@ -148,6 +148,41 @@ score. ZNO-Eval v2 was still marked
 [release in progress](https://huggingface.co/datasets/NLPForUA/zno-eval-v2)
 when this workflow was prepared; it is not an implicit dependency.
 
+## Offline scoring smoke test
+
+You can verify the installation without provider access using the synthetic one-question example above. This is a **hand-authored fixture**, not evidence that any model took an exam. Never relabel it as a real candidate run. A score validates answers and packet binding; it does not authenticate a provider execution.
+
+After `prepare`, create `.runtime/zno-nmt-demo/manual-fixture.json` with the following script. The required run envelope contains `schema`, `packet_sha256`, `condition`, `status`, `responses`, `identity`, `comparison` and `metrics`. For actual experiments, use the runner-produced envelope and retain its identity/metrics rather than constructing them manually.
+
+```sh
+.venv/bin/python - <<'PYCODE'
+import json
+from pathlib import Path
+
+root = Path(".runtime/zno-nmt-demo")
+packet = json.loads((root / "questions.json").read_text())
+fixture = {
+    "schema": "zno-nmt.run.v1",
+    "packet_sha256": packet["packet_sha256"],
+    "condition": "closed-book",
+    "status": "ok",
+    "responses": {"q0001": "A"},
+    "identity": {"model": "synthetic-manual-fixture", "harness": "manual-fixture"},
+    "comparison": {},
+    "metrics": {}
+}
+with (root / "manual-fixture.json").open("x") as stream:
+    json.dump(fixture, stream)
+PYCODE
+.venv/bin/python -m ukrainian_llm_eval score \
+  --questions .runtime/zno-nmt-demo/questions.json \
+  --key .runtime/zno-nmt-demo/grading-key.json \
+  --run .runtime/zno-nmt-demo/manual-fixture.json \
+  --output .runtime/zno-nmt-demo/manual-score.json
+```
+
+Expected result: `raw_points: 1`, `max_points: 1`, `correct_items: 1`, and `passed: null` because this synthetic benchmark has no official passing threshold. For a negative integrity check, copy the question packet, change its question text without changing its stored digest, and score that copy to a new output path. Expected result: exit `2`, a digest-mismatch error, and no new score file. This proves tamper detection, not Ukrainian language competence.
+
 ## Configure a candidate
 
 Save a configuration as `.runtime/zno-nmt-demo/config.json`. Pin a concrete
