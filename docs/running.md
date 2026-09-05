@@ -386,6 +386,15 @@ backend the selected slug permits. See the official
 These controls do not themselves prove entitlement, token bounds, billing
 settlement, or effective reasoning effort.
 
+For a paid text route, also set `openrouter.max_price` to an object containing
+`prompt`, `completion`, and `request`. All three values must be nonnegative
+decimal strings, for example `{"prompt": "0.10", "completion": "0.34", "request": "0"}`.
+Prompt and completion ceilings are USD per million tokens; the request ceiling
+is USD per request. The adapter forwards these ceilings on every completion
+round without relaxing provider restrictions. Set them consistently with the
+frozen spending reservation. A price ceiling filters providers; the shared
+ledger still enforces the total spending cap and retains uncertain charges.
+
 ## Validation and contribution
 
 ```bash

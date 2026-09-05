@@ -186,7 +186,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
             raise AdapterError("configuration HTTP response format is unsupported")
         if "openrouter" in config:
             routing = config["openrouter"]
-            if not isinstance(routing, Mapping) or set(routing) != {"provider_endpoint", "expected_provider_name", "reasoning_enabled"}:
+            required_routing = {"provider_endpoint", "expected_provider_name", "reasoning_enabled"}
+            if not isinstance(routing, Mapping) or not required_routing.issubset(routing) or set(routing) - required_routing - {"max_price"}:
                 raise AdapterError("configuration OpenRouter controls are invalid")
             for field in ("provider_endpoint", "expected_provider_name"):
                 value = routing[field]
@@ -194,6 +195,13 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
                     raise AdapterError("configuration OpenRouter provider identity is invalid")
             if type(routing["reasoning_enabled"]) is not bool or (not routing["reasoning_enabled"] and effort is not None):
                 raise AdapterError("configuration OpenRouter reasoning controls conflict")
+            if "max_price" in routing:
+                prices = routing["max_price"]
+                if not isinstance(prices, Mapping) or set(prices) != {"prompt", "completion", "request"}:
+                    raise AdapterError("configuration OpenRouter price ceilings are incomplete")
+                for value in prices.values():
+                    if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,9})?", value):
+                        raise AdapterError("configuration OpenRouter price ceiling must be a nonnegative decimal string")
     return dict(config)
 
 
@@ -859,6 +867,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     routing = checked.get("openrouter")
     if routing is not None:
         request_base["provider"] = {"only": [routing["provider_endpoint"]], "allow_fallbacks": False, "require_parameters": True}
+        if "max_price" in routing:
+            request_base["provider"]["max_price"] = dict(routing["max_price"])
         request_base["reasoning"] = {"enabled": routing["reasoning_enabled"]}
         if checked["effort"] is not None:
             request_base["reasoning"]["effort"] = checked["effort"]

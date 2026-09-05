@@ -61,6 +61,36 @@ def test_json_object_does_not_accept_foreign_question_ids(monkeypatch):
                                sources_url=None, prompt="Return JSON")
 
 
+def test_price_ceilings_reach_transport_with_provider_restrictions(monkeypatch):
+    monkeypatch.setenv("ZNO_NMT_ENDPOINT", "https://example.invalid/chat")
+    captured = []
+
+    def completion(_url, payload, **_kwargs):
+        captured.append(payload)
+        return response()
+
+    prices = {"prompt": "0.10", "completion": "0.34", "request": "0"}
+    monkeypatch.setattr(adapters, "_http_json", completion)
+    adapters.run_chat_http(_packet(), _config(openrouter={**ROUTING, "max_price": prices}),
+                           "closed-book", sources_url=None, prompt="Return JSON")
+    assert captured[0]["provider"] == {
+        "only": ["fixture/endpoint"], "allow_fallbacks": False,
+        "require_parameters": True, "max_price": prices,
+    }
+
+
+@pytest.mark.parametrize("prices", [
+    {}, {"prompt": "0.1", "completion": "0.3"},
+    {"prompt": "NaN", "completion": "0.3", "request": "0"},
+    {"prompt": "-1", "completion": "0.3", "request": "0"},
+    {"prompt": True, "completion": "0.3", "request": "0"},
+    {"prompt": "0.1", "completion": "0.3", "request": "0", "image": "0"},
+])
+def test_invalid_price_ceilings_rejected_before_transport(prices):
+    with pytest.raises(adapters.AdapterError, match="price"):
+        adapters.validate_config(_config(openrouter={**ROUTING, "max_price": prices}))
+
+
 @pytest.mark.parametrize("change", [
     {"http_response_format": []}, {"http_response_format": "text"},
     {"openrouter": {**ROUTING, "allow_fallbacks": True}},
