@@ -43,8 +43,14 @@ def execute_attempt(
     }
     if segment_context is not None:
         fields = {"execution_plan_sha256", "cell_id", "segment_id", "reservation_id", "reserved_micro_usd"}
-        if not isinstance(segment_context, Mapping) or set(segment_context) != fields:
+        admission_fields = {"admission_attempt_id", "admission_receipt_sha256"}
+        if not isinstance(segment_context, Mapping) or set(segment_context) not in (fields, fields | admission_fields):
             raise ExamError("invalid segment execution context")
+        if admission_fields <= set(segment_context):
+            if not isinstance(segment_context["admission_attempt_id"], str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", segment_context["admission_attempt_id"]) is None:
+                raise ExamError("invalid admission attempt identity")
+            if not isinstance(segment_context["admission_receipt_sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", segment_context["admission_receipt_sha256"]) is None:
+                raise ExamError("invalid admission receipt digest")
         if not isinstance(segment_context["execution_plan_sha256"], str) or re.fullmatch(
             r"[0-9a-f]{64}", segment_context["execution_plan_sha256"]
         ) is None:

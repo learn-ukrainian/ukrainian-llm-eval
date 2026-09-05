@@ -2,14 +2,21 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
+import pytest
 from test_research_scheduling import inputs
 from test_research_scoring import sealed
 
 
 def invoke(*args, cwd):
+    source = Path(__file__).resolve().parents[2] / "src"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(source), environment.get("PYTHONPATH", "")) if item
+    )
     return subprocess.run([sys.executable, "-m", "ukrainian_llm_eval", *map(str, args)],
-                          cwd=cwd, env=os.environ.copy(), text=True, capture_output=True, check=False)
+                          cwd=cwd, env=environment, text=True, capture_output=True, check=False)
 
 
 def write(path, value):
@@ -78,3 +85,58 @@ def test_cli_offline_research_scoring_uses_relative_custodian_paths(monkeypatch,
     before = output.read_bytes()
     assert invoke(*argv, cwd=tmp_path).returncode == 2
     assert output.read_bytes() == before
+
+
+def test_cli_research_runtime_map_resolves_relative_files_and_rejects_keys(tmp_path):
+    packets, plans, _manifest, _plan, configs = inputs()
+    write(tmp_path / "packet.json", packets["ulp"])
+    write(tmp_path / "segments.json", plans["ulp"])
+    write(tmp_path / "config.json", configs["fixture"])
+    runtime = {
+        "schema": "ukrainian-llm-eval.research-runtime-inputs.v1",
+        "packets": {"ulp": "packet.json"},
+        "segment_plans": {"ulp": "segments.json"},
+        "configs": {"fixture": "config.json"},
+    }
+    from ukrainian_llm_eval.__main__ import _research_runtime_inputs
+
+    loaded = _research_runtime_inputs(write(tmp_path / "runtime.json", runtime))
+    assert loaded["packets"]["ulp"] == packets["ulp"]
+    assert loaded["segment_plans"]["ulp"] == plans["ulp"]
+    assert loaded["configs"]["fixture"] == configs["fixture"]
+
+    runtime["keys"] = {"ulp": "key.json"}
+    with pytest.raises(ValueError, match="runtime input map"):
+        _research_runtime_inputs(write(tmp_path / "runtime-with-key.json", runtime))
+
+
+def test_cli_research_rejects_frozen_admission_command_before_creating_candidate_root(tmp_path):
+    packets, plans, manifest, plan, configs = inputs()
+    for name, value in (("packet.json", packets["ulp"]), ("segments.json", plans["ulp"]),
+                        ("config.json", configs["fixture"]), ("manifest.json", manifest), ("plan.json", plan)):
+        write(tmp_path / name, value)
+    runtime = write(tmp_path / "runtime.json", {
+        "schema": "ukrainian-llm-eval.research-runtime-inputs.v1",
+        "packets": {"ulp": "packet.json"},
+        "segment_plans": {"ulp": "segments.json"},
+        "configs": {"fixture": "config.json"},
+    })
+    # The command file is separate from candidate-visible benchmark inputs.
+    write(tmp_path / "bad-command.json", {})
+    write(tmp_path / "authorization.json", {})
+    specs = write(tmp_path / "admission-specs.json", {
+        "schema": "ukrainian-llm-eval.research-admission-specs.v1",
+        "routes": {"fixture": "bad-command.json"},
+    })
+    authorizations = write(tmp_path / "authorizations.json", {
+        "schema": "ukrainian-llm-eval.research-operator-authorizations.v1",
+        "routes": {"fixture": "authorization.json"},
+    })
+    root = tmp_path / "candidate-evidence"
+    result = invoke("run-research", "--inputs", runtime, "--manifest", tmp_path / "manifest.json",
+                    "--execution-plan", tmp_path / "plan.json", "--execution-root", root,
+                    "--admission-specs", specs, "--operator-authorizations", authorizations,
+                    cwd=tmp_path)
+    assert result.returncode == 2
+    assert not root.exists()
+    assert "candidate-evidence" not in result.stdout + result.stderr

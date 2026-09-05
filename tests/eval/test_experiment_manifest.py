@@ -56,7 +56,9 @@ def _metered_route(route_id: str = "route-a", *, conditions: list[str] | None = 
         "unsupported_condition_evidence": {condition: "9" * 64 for condition in unavailable},
         "capability_evidence_sha256": "a" * 64,
         "pricing_evidence_sha256": "b" * 64,
-        "entitlement_evidence_sha256": None,
+        "entitlement_evidence_sha256": "e" * 64,
+        "admission_command_sha256": "f" * 64,
+        "operator_authorization_sha256": "0" * 64,
         "billing": {
             "kind": "metered",
             "units": "tokens",
@@ -178,6 +180,7 @@ def test_route_limits_and_entitlements_are_conservative_and_receipt_bound() -> N
         _experiment_manifest(routes=[route])
 
     entitled = _metered_route()
+    entitled["entitlement_evidence_sha256"] = None
     entitled["billing"] = entitled["billing"] | {
         "kind": "verified_subscription",
         "input_micro_usd_per_million_tokens": 0,

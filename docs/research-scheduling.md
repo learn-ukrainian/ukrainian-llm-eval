@@ -5,12 +5,12 @@ or UA-GEC document. Matching rows stay together. Each model/effort/condition
 cell must cover the whole frozen suite before receiving a score. Whole-packet
 `run` and `pair` are separate endurance diagnostics.
 
-Preparation, planning and offline scoring have CLI commands. Live research
-execution still requires the Python controller interface; the trusted live
-admission integration and its CLI remain work in issue #3/#5. Do not substitute
+Preparation, planning, live execution and offline scoring have CLI commands.
+Live execution requires explicit runtime inputs, trusted admission command
+specifications and separate operator authorization files. Do not substitute
 the diagnostic `pair` command for a primary research experiment.
 The [trusted admission contract](admission.md) describes the implemented
-validation and subprocess boundary and its remaining integration gates.
+validation and subprocess boundary and its remaining live-provider gates.
 
 ## Preparation and custody
 
@@ -89,12 +89,24 @@ report when some cells could not be scored; retain that report and its evidence.
 
 ## Execution and resume
 
+The public live command is documented in [research execution](research-execution.md).
+It loads candidate-visible packets, segment plans and route configurations from
+an explicit runtime map, and loads trusted admission commands and operator
+authorizations from separate route maps. The runtime map has no key field.
+Relative file references resolve beside each map. Sources routes can be
+provided through a private route map or environment assignments.
+
 `scheduling.run_research` takes packets, segment plans, the frozen manifest and
 execution plan, base route configurations and a private output directory. Its
-required `admission_probe(route, config, condition)` controller callback must
-freshly verify current pricing, entitlement and capability evidence and return
-their manifest hashes. A callback that merely echoes those hashes is suitable
-only for deterministic tests. It is not a valid live provider admission probe.
+admission controller must expose `prepare(manifest, plan)` and, for each
+segment, receive the nonce-bound request, execution binding, reservation,
+remaining ceiling and private evidence directory. It must freshly verify
+current pricing, entitlement and capability evidence and return the admission
+receipt plus its evidence receipt. The CLI supplies
+`CommandAdmissionController`, which invokes only the explicitly supplied
+trusted command specs and separately validated operator authorization files. A
+callback that merely echoes hashes is suitable for deterministic tests only;
+it is not a valid live provider admission probe.
 
 The controller binds its actual prompt/adapter/tool implementation through
 `research_implementation_sha256`. Resolved endpoint fingerprints and base

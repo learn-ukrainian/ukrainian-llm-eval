@@ -516,7 +516,7 @@ def _normalise_billing(value: Any, where: str) -> dict[str, Any]:
         )
     ):
         raise ExamError(f"{where} has unknown or zero-only metered pricing; use a receipt-bound entitlement")
-    if kind != "metered" and any(
+    if kind == "verified_subscription" and any(
         normalized[field]
         for field in (
             "input_micro_usd_per_million_tokens", "output_micro_usd_per_million_tokens", "tool_round_micro_usd",
@@ -530,6 +530,7 @@ def _normalise_route(value: Any) -> dict[str, Any]:
     fields = {
         "route_id", "route_sha256", "config_sha256", "conditions", "unsupported_condition_evidence",
         "capability_evidence_sha256", "pricing_evidence_sha256", "entitlement_evidence_sha256", "billing",
+        "admission_command_sha256", "operator_authorization_sha256",
     }
     route = _require_exact_dict(value, fields, "route")
     conditions = _require_unique_identifiers(_require_list(route["conditions"], "route.conditions"), "route.conditions")
@@ -545,11 +546,7 @@ def _normalise_route(value: Any) -> dict[str, Any]:
     }
     billing = _normalise_billing(route["billing"], "route.billing")
     entitlement = route["entitlement_evidence_sha256"]
-    if billing["kind"] == "metered":
-        if entitlement is not None:
-            raise ExamError("metered route must not assert an entitlement evidence receipt")
-    else:
-        _require_digest(entitlement, "route.entitlement_evidence_sha256")
+    _require_digest(entitlement, "route.entitlement_evidence_sha256")
     return {
         "route_id": _require_identifier(route["route_id"], "route.route_id"),
         "route_sha256": _require_digest(route["route_sha256"], "route.route_sha256"),
@@ -558,9 +555,9 @@ def _normalise_route(value: Any) -> dict[str, Any]:
         "unsupported_condition_evidence": normalized_unsupported,
         "capability_evidence_sha256": _require_digest(route["capability_evidence_sha256"], "route.capability_evidence_sha256"),
         "pricing_evidence_sha256": _require_digest(route["pricing_evidence_sha256"], "route.pricing_evidence_sha256"),
-        "entitlement_evidence_sha256": None if entitlement is None else _require_digest(
-            entitlement, "route.entitlement_evidence_sha256"
-        ),
+        "entitlement_evidence_sha256": entitlement,
+        "admission_command_sha256": _require_digest(route["admission_command_sha256"], "route.admission_command_sha256"),
+        "operator_authorization_sha256": _require_digest(route["operator_authorization_sha256"], "route.operator_authorization_sha256"),
         "billing": billing,
     }
 

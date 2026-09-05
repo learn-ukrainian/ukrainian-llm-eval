@@ -16,7 +16,8 @@ from .runner import _failure, preflight
 
 def research_implementation_sha256():
     """Bind the actual controller/prompt/tool implementation, not a label."""
-    names = ("adapters.py", "runner.py", "mcp_proxy.py", "execution.py", "scheduling.py", "segmentation.py")
+    names = ("adapters.py", "runner.py", "mcp_proxy.py", "execution.py", "scheduling.py", "segmentation.py",
+             "admission.py", "admission_command.py")
     return digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names})
 
 
@@ -50,12 +51,11 @@ def _research_stop_reason(result, route, config):
     if tools is not None and (type(tools) is not int or tools < 0 or tools > config["max_tool_calls"]):
         return "tool_budget_overrun"
     billing = route["billing"]
-    if billing["kind"] == "metered":
-        for observed, limit in (("input_tokens", "max_total_input_tokens"),
-                                ("output_tokens", "max_total_output_tokens")):
-            value = metrics.get(observed)
-            if value is not None and (type(value) is not int or value < 0 or value > billing[limit]):
-                return "token_reservation_overrun"
+    for observed, limit in (("input_tokens", "max_total_input_tokens"),
+                            ("output_tokens", "max_total_output_tokens")):
+        value = metrics.get(observed)
+        if value is not None and (type(value) is not int or value < 0 or value > billing[limit]):
+            return "token_reservation_overrun"
     return None
 
 
@@ -158,18 +158,19 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                  admission_probe, sources_urls=None, resume=False):
     """Run the complete frozen experiment, retaining every started reservation.
 
-    ``admission_probe(route, config, condition)`` must freshly verify the
-    supplied pricing/entitlement/capability evidence and return their three
-    manifest hashes. It is a required controller boundary, never candidate
-    input. A manifest hash alone is not proof of current authorization or cost.
+    ``admission_probe`` implements the trusted controller protocol, including
+    whole-schedule preparation and fresh per-segment evidence. A manifest hash
+    alone is not proof of current authorization or cost.
     The experiment-wide POSIX lock covers admission, allocation and execution.
     """
+    from .adapters import build_prompt
+    from .admission import admission_composite_sha256, build_admission_request, verify_admission_evidence
     from .benchmark_manifest import validate_execution_plan
     from .runner import _comparison, _validated_packet
     from .segmentation import derive_segment_packet, reassemble_cell, validate_segment_plan
 
     validate_execution_plan(manifest, plan)
-    if not callable(admission_probe):
+    if not callable(admission_probe) or not callable(getattr(admission_probe, "prepare", None)):
         raise ExamError("research execution requires a live admission probe")
     if manifest["tool_policy_sha256"] != research_implementation_sha256():
         raise ExamError("research controller implementation drift")
@@ -191,6 +192,7 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
             raise ExamError("runtime base configuration drift")
         if route_fingerprint(configs[route_id], sources_urls.get(route_id)) != route["route_sha256"]:
             raise ExamError("runtime endpoint drift")
+    admission_probe.prepare(manifest, plan)
     if root.is_symlink():
         raise ExamError("research directory must not be a symlink")
     root.mkdir(mode=0o700, parents=True, exist_ok=resume)
@@ -202,6 +204,11 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
             return
         store = EvidenceStore(root / "evidence")
         existing = store.verify_all()
+        admission_store = EvidenceStore(root / "admission-evidence")
+        for probe_id, probe in admission_store.verify_all().items():
+            if not probe["complete"]:
+                admission_store.finalize(probe_id, {"schema": "ukrainian-llm-eval.admission-failure.v1",
+                                                     "status": "failed", "reason": "interrupted"}, status="interrupted")
         scheduled = {segment["attempt_id"] for cell in plan["cells"] for segment in cell["segments"]}
         if set(existing) - scheduled:
             raise ExamError("foreign attempt in research evidence")
@@ -228,12 +235,24 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                            "reservation_id": scheduled_segment["reservation_id"],
                            "reserved_micro_usd": scheduled_segment["reserved_micro_usd"]}
                 attempt_id = scheduled_segment["attempt_id"]
+                binding = {"execution_plan_sha256": plan["execution_plan_sha256"], "candidate_attempt_id": attempt_id,
+                           "cell_id": cell["cell_id"], "segment_id": segment_id,
+                           "segment_packet_sha256": segment["packet_sha256"], "config_sha256": digest(config),
+                           "condition": cell["condition"]}
+                composite = admission_composite_sha256(manifest, route, segmentation)
                 expected_metadata = {"denominator": len(segment["items"]),
                                      "packet_sha256": segment["packet_sha256"], "config_sha256": digest(config),
                                      "condition": cell["condition"], "route_sha256": route["route_sha256"],
                                      "segment_context": context}
                 receipt = existing.get(attempt_id)
                 if receipt is not None:
+                    stored_context = receipt["metadata"].get("segment_context", {})
+                    admission_id = stored_context.get("admission_attempt_id")
+                    if not isinstance(admission_id, str):
+                        raise ExamError("research receipt lacks admission evidence")
+                    admission_evidence = EvidenceStore(root / "admission-evidence").verify(admission_id)
+                    verify_admission_evidence(admission_evidence, binding, route, composite, scheduled_segment["reserved_micro_usd"])
+                    context.update(admission_attempt_id=admission_id, admission_receipt_sha256=digest(admission_evidence))
                     if receipt["metadata"] != expected_metadata:
                         raise ExamError("research receipt binding mismatch")
                     if not receipt["complete"]:
@@ -244,12 +263,23 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                     try:
                         if route_fingerprint(config, sources_urls.get(route_id)) != route["route_sha256"]:
                             raise ExamError("runtime endpoint drift")
-                        admission = admission_probe(route, config, cell["condition"])
-                        expected_admission = {field: route[field] for field in
-                                              ("pricing_evidence_sha256", "entitlement_evidence_sha256",
-                                               "capability_evidence_sha256")}
-                        if admission != expected_admission:
-                            raise ExamError("live admission evidence drift")
+                        request = build_admission_request(route, config, cell["condition"],
+                                                          input_utf8_bytes=len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"]).encode()),
+                                                          tool_policy_sha256=manifest["tool_policy_sha256"], composite_sha256=composite)
+                        # Full-schedule admission already reserves every slot;
+                        # this remainder excludes all other frozen reservations.
+                        available = plan["new_spend_cap_micro_usd"] - expected_total + scheduled_segment["reserved_micro_usd"]
+                        _, admission_evidence = admission_probe(route, config, cell["condition"], request=request,
+                                                                 execution_binding=binding,
+                                                                 reserved_micro_usd=scheduled_segment["reserved_micro_usd"],
+                                                                 remaining_ceiling_micro_usd=available,
+                                                                 evidence_dir=root / "admission-evidence")
+                        admission_id = admission_evidence["attempt_id"]
+                        verified = EvidenceStore(root / "admission-evidence").verify(admission_id)
+                        if verified != admission_evidence:
+                            raise ExamError("admission evidence differs from saved receipt")
+                        verify_admission_evidence(verified, binding, route, composite, scheduled_segment["reserved_micro_usd"])
+                        context.update(admission_attempt_id=admission_id, admission_receipt_sha256=digest(verified))
                     except (ExamError, OSError, TimeoutError) as exc:
                         stop = {"execution_plan_sha256": plan["execution_plan_sha256"],
                                 "reason": "admission_failed", "error_class": type(exc).__name__,
@@ -320,6 +350,7 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
             yield {"cell_id": cell["cell_id"], "status": result["status"],
                    "segments_completed": len(records), "segments_required": len(cell["segments"])}
         all_receipts = store.verify_all()
+        admission_receipts = admission_store.verify_all()
         ordered_receipts = [digest(all_receipts[segment["attempt_id"]]) for cell in plan["cells"]
                             for segment in cell["segments"] if segment["attempt_id"] in all_receipts]
         body = {"schema": "ukrainian-llm-eval.research-result-manifest.v1",
@@ -329,6 +360,8 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                 "cells_required": len(plan["cells"]),
                 "cells_complete": sum(result["status"] == "ok" for result in cell_results),
                 "attempts_started": len(all_receipts), "new_spend_cap_micro_usd": plan["new_spend_cap_micro_usd"],
+                "admission_attempts": len(admission_receipts),
+                "admission_receipt_set_sha256": digest({key: digest(value) for key, value in admission_receipts.items()}),
                 "reserved_micro_usd_started": sum(result["reserved_micro_usd_started"] for result in cell_results),
                 "scorer_sha256": manifest["scorer_sha256"]}
         _immutable_json(root / "result-manifest.json", {**body, "result_manifest_sha256": digest(body)})

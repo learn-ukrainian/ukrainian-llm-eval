@@ -6,6 +6,7 @@ neither an entitlement nor a matching hash is itself authority to spend money.
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import UTC, datetime
@@ -183,7 +184,8 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
 
 
 def invoke_validated_admission(spec, request, route, config, evidence_dir, *, reserved_micro_usd,
-                                remaining_ceiling_micro_usd, operator_authorization, max_age_seconds):
+                                remaining_ceiling_micro_usd, operator_authorization, max_age_seconds,
+                                execution_binding=None):
     """Retain one trusted probe attempt without retaining rejected raw streams."""
     from .admission_command import command_identity_sha256, invoke_admission
     from .evidence import EvidenceStore
@@ -193,7 +195,8 @@ def invoke_validated_admission(spec, request, route, config, evidence_dir, *, re
         raise ExamError("admission command differs from frozen identity")
     attempt = EvidenceStore(evidence_dir).start({"denominator": 0, "request_sha256": request["request_sha256"],
                                                 "route_sha256": route["route_sha256"], "command_sha256": identity,
-                                                "composite_sha256": request["composite_sha256"]})
+                                                "composite_sha256": request["composite_sha256"],
+                                                "execution_binding": execution_binding})
     attempt.append("admission_request", request)
     process = invoke_admission(spec, request)
     attempt.append("admission_process", {key: value for key, value in process.items() if key != "stdout"})
@@ -219,3 +222,81 @@ def invoke_validated_admission(spec, request, route, config, evidence_dir, *, re
     attempt.append("admission_result", result)
     evidence = attempt.finalize(receipt)
     return receipt, evidence
+
+
+def admission_composite_sha256(manifest, route, segment_plan):
+    return digest({"protocol_sha256": manifest["protocol_sha256"],
+                   "controller_tool_policy_sha256": manifest["tool_policy_sha256"],
+                   "command_declared_identity_sha256": route["admission_command_sha256"],
+                   "operator_authorization_sha256": route["operator_authorization_sha256"],
+                   "route_config_sha256": route["config_sha256"],
+                   "segment_plan_sha256": segment_plan["segment_plan_sha256"]})
+
+
+def verify_admission_evidence(evidence, request_binding, route, composite_sha256, reserved_micro_usd):
+    """Verify the saved successful probe before linking or resuming a candidate."""
+    if not evidence.get("complete") or evidence.get("terminal_status") != "completed":
+        raise ExamError("admission evidence is not a completed approval")
+    metadata = evidence["metadata"]
+    if metadata.get("execution_binding") != request_binding or metadata.get("route_sha256") != route["route_sha256"]:
+        raise ExamError("admission evidence execution binding mismatch")
+    if metadata.get("command_sha256") != route["admission_command_sha256"] or metadata.get("composite_sha256") != composite_sha256:
+        raise ExamError("admission evidence implementation drift")
+    receipt = evidence["result"]
+    fields = {"schema", "request_sha256", "result_sha256", "composite_sha256", "pricing_state_sha256",
+              "entitlement_state_sha256", "capability_state_sha256", "operator_authorization_sha256",
+              "incremental_segment_cost_micro_usd"}
+    _exact(receipt, fields, "evidence receipt")
+    if receipt["schema"] != "ukrainian-llm-eval.admission-receipt.v1" or receipt["request_sha256"] != metadata.get("request_sha256"):
+        raise ExamError("admission evidence request mismatch")
+    for field in fields - {"schema", "incremental_segment_cost_micro_usd"}:
+        _sha(receipt[field])
+    for kind in ("pricing", "entitlement", "capability"):
+        if receipt[kind + "_state_sha256"] != route[kind + "_evidence_sha256"]:
+            raise ExamError("admission evidence state mismatch")
+    if receipt["composite_sha256"] != composite_sha256 or receipt["operator_authorization_sha256"] != route["operator_authorization_sha256"]:
+        raise ExamError("admission evidence authorization mismatch")
+    if _integer(receipt["incremental_segment_cost_micro_usd"]) > _integer(reserved_micro_usd):
+        raise ExamError("admission evidence exceeds reservation")
+
+
+class CommandAdmissionController:
+    """Only explicitly supplied trusted specs; never discover commands in data."""
+
+    def __init__(self, specs, authorizations):
+        import copy
+
+        self.specs = copy.deepcopy(specs)
+        self.authorizations = copy.deepcopy(authorizations)
+
+    def prepare(self, manifest, plan):
+        from .admission_command import command_identity_sha256
+
+        routes = {route["route_id"]: route for route in manifest["routes"]}
+        if set(self.specs) != set(routes) or set(self.authorizations) != set(routes):
+            raise ExamError("admission integrations do not cover frozen routes")
+        for route_id, route in routes.items():
+            if command_identity_sha256(self.specs[route_id]) != route["admission_command_sha256"]:
+                raise ExamError("admission command drift")
+            auth = self.authorizations[route_id]
+            _exact(auth, {"schema", "route_sha256", "allow_paid", "max_new_spend_micro_usd"}, "operator authorization")
+            if digest(auth) != route["operator_authorization_sha256"] or auth["route_sha256"] != route["route_sha256"]:
+                raise ExamError("operator authorization drift")
+            if auth["schema"] != "ukrainian-llm-eval.operator-authorization.v1" or type(auth["allow_paid"]) is not bool:
+                raise ExamError("invalid operator authorization")
+            total = sum(segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
+                        for segment in cell["segments"])
+            if total > _integer(auth["max_new_spend_micro_usd"]) or (total and not auth["allow_paid"]):
+                raise ExamError("frozen route schedule exceeds operator authorization")
+
+    def __call__(self, route, config, condition, *, request, execution_binding, reserved_micro_usd,
+                 remaining_ceiling_micro_usd, evidence_dir):
+        if condition != request["condition"]:
+            raise ExamError("admission condition mismatch")
+        spec = self.specs[route["route_id"]]
+        return invoke_validated_admission(spec, request, route, config, evidence_dir,
+                                          reserved_micro_usd=reserved_micro_usd,
+                                          remaining_ceiling_micro_usd=remaining_ceiling_micro_usd,
+                                          operator_authorization=self.authorizations[route["route_id"]],
+                                          max_age_seconds=math.ceil(spec["timeout_seconds"]) + 1,
+                                          execution_binding=execution_binding)

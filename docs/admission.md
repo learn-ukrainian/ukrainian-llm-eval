@@ -1,9 +1,10 @@
 # Trusted live admission integrations
 
 The admission modules implement a controller boundary for user-owned provider
-probes. They are not yet wired into the research scheduler/CLI. Issue #3 must
-finish that integration before primary live experiments. An echo callback or
-constant-hash fixture is not a valid inaugural provider probe.
+probes. The segmented research scheduler and `run-research` CLI now use this
+validated path when supplied with explicit command-spec and operator-
+authorization maps. An echo callback or constant-hash fixture is suitable for
+deterministic tests only; it is not a valid inaugural provider probe.
 
 ## Command contract
 
@@ -64,11 +65,15 @@ hash are preserved. Rejected output is retained only as counts, hashes and a
 normalized failure, avoiding arbitrary credential-bearing streams. Interrupted
 probe attempts remain visible rather than being silently discarded.
 
-## Remaining integration gates
+## Remaining live-experiment gates
 
-The scheduler must bind the command/composite identity, operator authorization,
+The scheduler binds the command/composite identity, operator authorization,
 stable state hashes and fresh admission receipt to each segment's execution
-receipt. The public run command must use this validated path. The inaugural
-routes still require real pricing, entitlement, context/output and tool-control
+receipt. The public run command uses this validated path. The inaugural routes
+still require real pricing, entitlement, context/output and tool-control
 probes; mock subprocess tests establish controller behavior only. Independent
-review and installed end-to-end proof remain required before release.
+review and installed end-to-end proof remain required before release. Real
+metered and existing-credit routes also need request-level budget evidence for
+the exact serialized request, schema/history overhead, reasoning-inclusive
+output and cumulative credit commitments; the current CLI wiring does not
+claim that provider readiness has been proven.

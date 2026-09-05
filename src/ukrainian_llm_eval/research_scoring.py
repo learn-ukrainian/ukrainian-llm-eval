@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .admission import admission_composite_sha256, verify_admission_evidence
 from .benchmark_manifest import validate_execution_plan
 from .core import ExamError, digest, read_json, score_run
 from .evidence import EvidenceStore
@@ -78,6 +79,11 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
             raise ExamError("scoring route/config differs from frozen manifest")
     store = EvidenceStore(execution_root / "evidence")
     receipts = store.verify_all()
+    admission_receipts = EvidenceStore(execution_root / "admission-evidence").verify_all()
+    if (result_manifest.get("admission_attempts") != len(admission_receipts)
+            or result_manifest.get("admission_receipt_set_sha256") != digest(
+                {key: digest(value) for key, value in admission_receipts.items()})):
+        raise ExamError("result manifest admission set differs from evidence")
     scheduled = {s["attempt_id"] for c in execution_plan["cells"] for s in c["segments"]}
     if set(receipts) - scheduled:
         raise ExamError("foreign execution receipt")
@@ -103,6 +109,19 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
             expected = {"denominator": len(segment_plan_item["item_ids"]), "config_sha256": digest(derived_config),
                         "packet_sha256": segment["segment_packet_sha256"], "condition": cell["condition"],
                         "route_sha256": route["route_sha256"], "segment_context": {"execution_plan_sha256": execution_plan["execution_plan_sha256"], "cell_id": cell["cell_id"], "segment_id": segment["segment_id"], "reservation_id": segment["reservation_id"], "reserved_micro_usd": segment["reserved_micro_usd"]}}
+            admission_id = receipt["metadata"].get("segment_context", {}).get("admission_attempt_id")
+            if not isinstance(admission_id, str):
+                raise ExamError("scoring segment lacks admission evidence")
+            admission_evidence = admission_receipts.get(admission_id)
+            if admission_evidence is None:
+                raise ExamError("scoring segment admission evidence is missing")
+            binding = {"execution_plan_sha256": execution_plan["execution_plan_sha256"], "candidate_attempt_id": segment["attempt_id"],
+                       "cell_id": cell["cell_id"], "segment_id": segment["segment_id"],
+                       "segment_packet_sha256": segment["segment_packet_sha256"], "config_sha256": digest(derived_config),
+                       "condition": cell["condition"]}
+            verify_admission_evidence(admission_evidence, binding, route, admission_composite_sha256(manifest, route, plan),
+                                      segment["reserved_micro_usd"])
+            expected["segment_context"].update(admission_attempt_id=admission_id, admission_receipt_sha256=digest(admission_evidence))
             if not receipt["complete"] or receipt["metadata"] != expected:
                 raise ExamError("segment receipt binding mismatch")
             hashes.append(digest(receipt)); result = receipt["result"]

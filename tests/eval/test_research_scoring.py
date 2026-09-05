@@ -62,6 +62,13 @@ def test_failed_cell_keeps_explicit_no_score_and_no_partial_mean(monkeypatch, tm
     assert report["paired_deltas"] == []
 
 
+def test_unsealed_admission_attempt_prevents_offline_scoring(monkeypatch, tmp_path):
+    args, bindings, root = sealed(monkeypatch, tmp_path)
+    EvidenceStore(root / "admission-evidence").start({"denominator": 0}).finalize({"status": "failed"})
+    with pytest.raises(ExamError, match="admission set differs"):
+        score_sealed_experiment(*args, scorer_bindings=bindings)
+
+
 @pytest.mark.parametrize("target", ["cell", "manifest", "key", "stop"])
 def test_changed_scoring_inputs_fail_closed(monkeypatch, tmp_path, target):
     args, bindings, root = sealed(monkeypatch, tmp_path)

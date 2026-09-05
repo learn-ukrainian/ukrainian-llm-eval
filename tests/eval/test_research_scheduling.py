@@ -26,7 +26,8 @@ def inputs(*, metered=False):
     route = {"route_id": "fixture", "route_sha256": execution.route_fingerprint(config, None),
              "config_sha256": digest(config), "conditions": ["closed-book", "sources"],
              "unsupported_condition_evidence": {}, "capability_evidence_sha256": "d" * 64,
-             "pricing_evidence_sha256": "e" * 64, "entitlement_evidence_sha256": None if metered else "f" * 64,
+             "pricing_evidence_sha256": "e" * 64, "entitlement_evidence_sha256": "f" * 64,
+             "admission_command_sha256": "1" * 64, "operator_authorization_sha256": "2" * 64,
              "billing": {"kind": "metered" if metered else "verified_subscription", "units": "tokens",
                          "input_micro_usd_per_million_tokens": 1000 if metered else 0,
                          "output_micro_usd_per_million_tokens": 1000 if metered else 0,
@@ -38,9 +39,22 @@ def inputs(*, metered=False):
     return {"ulp": packet}, {"ulp": segmentation}, manifest, plan, {"fixture": config}
 
 
-def admit(route, _config, _condition):
-    return {field: route[field] for field in ("pricing_evidence_sha256", "entitlement_evidence_sha256",
-                                            "capability_evidence_sha256")}
+def admit(route, _config, _condition, *, request, execution_binding, reserved_micro_usd,
+          remaining_ceiling_micro_usd, evidence_dir):
+    # Synthetic controller fixture; never an eligible live provider probe.
+    receipt = {"schema": "ukrainian-llm-eval.admission-receipt.v1", "request_sha256": request["request_sha256"],
+               "result_sha256": "a" * 64, "composite_sha256": request["composite_sha256"],
+               "operator_authorization_sha256": route["operator_authorization_sha256"],
+               "incremental_segment_cost_micro_usd": reserved_micro_usd,
+               **{name + "_state_sha256": route[name + "_evidence_sha256"] for name in ("pricing", "entitlement", "capability")}}
+    attempt = EvidenceStore(evidence_dir).start({"denominator": 0, "request_sha256": request["request_sha256"],
+                                                "route_sha256": route["route_sha256"], "command_sha256": route["admission_command_sha256"],
+                                                "composite_sha256": request["composite_sha256"],
+                                                "execution_binding": execution_binding})
+    return receipt, attempt.finalize(receipt)
+
+
+admit.prepare = lambda _manifest, _plan: None
 
 
 def trial(calls, *, interrupt_at=None, failed_at=None, cost=None):
@@ -107,7 +121,10 @@ def test_admission_drift_stops_before_allocating_or_calling(monkeypatch, tmp_pat
     args = inputs()
     monkeypatch.setattr(execution, "run_exam", lambda *a, **kw: pytest.fail("provider called"))
     root = tmp_path / "research"
-    assert list(scheduling.run_research(*args, root, admission_probe=lambda *a: {})) == [
+    def rejected(*a, **kw):
+        raise ExamError("synthetic admission rejection")
+    rejected.prepare = admit.prepare
+    assert list(scheduling.run_research(*args, root, admission_probe=rejected)) == [
         {"status": "stopped", "reason": "admission_failed"}]
     assert EvidenceStore(root / "evidence").verify_all() == {}
     assert next(scheduling.run_research(*args, root, admission_probe=admit, resume=True))["status"] == "stopped"
@@ -155,8 +172,9 @@ def test_concurrent_executor_cannot_claim_second_reservation(monkeypatch, tmp_pa
     ({"metrics": {"tool_calls": 3}}, "tool_budget_overrun"),
     ({"metrics": {"input_tokens": 10001}}, "token_reservation_overrun"),
 ])
-def test_observed_drift_stops_with_evidence(monkeypatch, tmp_path, change, reason):
-    args = inputs(metered=True)
+@pytest.mark.parametrize("metered", [True, False])
+def test_observed_drift_stops_with_evidence(monkeypatch, tmp_path, change, reason, metered):
+    args = inputs(metered=metered)
     calls = []
     ordinary = trial(calls)
     monkeypatch.setattr(execution, "run_exam", lambda *a, **kw: {**ordinary(*a, **kw), **change})
