@@ -12,7 +12,7 @@ Report the three suites separately:
 | --- | --- | --- |
 | NMT 2022 demonstration Ukrainian language block | 20 tasks, 35 points | Official raw points |
 | ULP | 347 questions | Exact-option accuracy |
-| UA-GEC public `gec-only/test` | 2,704 sentences, 166 documents | Span-correction F0.5 |
+| UA-GEC public `gec-only/test` | 2,696 sentences, 166 documents | Span-correction F0.5 |
 
 Do not average these measures into an overall language score. These tasks do not
 establish general fluency or a CEFR level. Public availability also means training
@@ -31,6 +31,16 @@ Dataset licenses remain separate from the package's MIT license. NMT data is
 CC BY-NC 4.0, ULP is declared MIT by its publisher, and UA-GEC is CC BY 4.0. Preserve
 attribution when distributing any permitted data or result artifacts. Normative
 reference books mentioned by a dataset are not bundled in this project.
+
+## UA-GEC source denominator
+
+The pinned source contains 2,696 sentences and 43,603 tokens in 166 documents.
+The upstream README still reports 2,704 sentences and 43,605 tokens. Use the
+actual pinned source files, not that stale table: the M2 file contains 2,862
+blocks, comprising 166 generated document headings and all 2,696 content blocks.
+The content lines match the official tokenized source files in order. Upstream
+sentence-boundary changes account for the net eight-sentence difference; no
+content sentence is dropped to obtain this denominator. Preserve both annotators.
 
 ## GEC scorer equivalence
 

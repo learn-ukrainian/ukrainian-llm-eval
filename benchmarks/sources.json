@@ -57,9 +57,9 @@
       "selection": "gec-only/test",
       "license": "CC-BY-4.0",
       "denominator": {
-        "sentences": 2704,
+        "sentences": 2696,
         "documents": 166,
-        "annotated_errors": 6169
+        "tokens": 43603
       },
       "metric": "span-correction F0.5",
       "scorer": {
@@ -73,7 +73,20 @@
         "Preserve both annotators and all sentences.",
         "Official scorer parity and tokenizer-resource hashes remain required before execution.",
         "Live Sources may overlap with public correction examples; exact benchmark-answer lookup must not be exposed."
-      ]
+      ],
+      "upstream_readme_counts": {
+        "sentences": 2704,
+        "tokens": 43605,
+        "note": "Stale relative to the pinned tokenized source files; not the execution denominator.",
+        "annotated_errors": 6169
+      },
+      "denominator_evidence": {
+        "source_path": "data/gec-only/test/source-sentences-tokenized/*.src.txt",
+        "m2_blocks": 2862,
+        "document_heading_blocks": 166,
+        "content_blocks": 2696,
+        "note": "All content source lines match the tokenized source files in document order. Sentence-boundary realignment accounts for the net eight-sentence difference."
+      }
     }
   ]
 }
