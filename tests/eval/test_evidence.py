@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import stat
 import threading
 from pathlib import Path
@@ -167,6 +168,166 @@ def test_tampering_with_event_or_final_record_fails_verification(tmp_path: Path)
     final_path.write_text(final_path.read_text(encoding="utf-8").replace('"score":1', '"score":2'), encoding="utf-8")
     with pytest.raises(EvidenceIntegrityError):
         store.verify("final-tamper")
+
+
+def test_verifier_recovers_only_the_exact_linked_pending_finalization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = EvidenceStore(tmp_path / "evidence")
+    attempt = store.start({"denominator": 1}, attempt_id="crash-window")
+    original_unlink = Path.unlink
+    injected = False
+
+    def fail_after_link(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal injected
+        if path.name.startswith(".final-") and not injected:
+            injected = True
+            raise RuntimeError("injected crash after final link")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_after_link)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        attempt.finalize({"score": 1})
+    assert injected
+    final_path = store.root / "attempts" / attempt.id / "final.json"
+    pending_paths = list((final_path.parent).glob(".final-*.tmp"))
+    assert len(pending_paths) == 1
+    assert os.stat(final_path).st_ino == os.stat(pending_paths[0]).st_ino
+    assert os.stat(final_path).st_nlink == 2
+
+    receipt = store.verify(attempt.id)
+    assert receipt["status"] == "complete"
+    assert not list(final_path.parent.glob(".final-*.tmp"))
+    assert os.stat(final_path).st_nlink == 1
+
+    rejected = store.start({"denominator": 1}, attempt_id="foreign-pending")
+    rejected.finalize({"score": 1})
+    rejected_final = store.root / "attempts" / rejected.id / "final.json"
+    foreign_pending = rejected_final.parent / ".final-0123456789abcdef0123456789abcdef.tmp"
+    foreign_pending.write_text("foreign", encoding="utf-8")
+    foreign_pending.chmod(0o600)
+    with pytest.raises(EvidenceIntegrityError):
+        store.verify(rejected.id)
+    assert foreign_pending.exists()
+
+
+def test_verifier_publishes_valid_prelink_pending_final_and_rejects_multiple(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence")
+    attempt = store.start({"denominator": 1}, attempt_id="prelink-window")
+    original_link = evidence_module.os.link
+    original_unlink = Path.unlink
+    link_injected = False
+    unlink_injected = False
+
+    def fail_before_link(source: Path, destination: Path, *args: object, **kwargs: object) -> None:
+        nonlocal link_injected
+        if Path(source).name.startswith(".final-") and Path(destination).name == "final.json" and not link_injected:
+            link_injected = True
+            raise RuntimeError("injected crash before final link")
+        original_link(source, destination, *args, **kwargs)
+
+    def fail_pending_cleanup(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal unlink_injected
+        if path.name.startswith(".final-") and not unlink_injected:
+            unlink_injected = True
+            raise RuntimeError("injected crash during pre-link cleanup")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(evidence_module.os, "link", fail_before_link)
+    monkeypatch.setattr(Path, "unlink", fail_pending_cleanup)
+    with pytest.raises(RuntimeError, match="pre-link cleanup"):
+        attempt.finalize({"score": 1})
+    assert link_injected and unlink_injected
+    attempt_dir = store.root / "attempts" / attempt.id
+    pending_paths = list(attempt_dir.glob(".final-*.tmp"))
+    assert len(pending_paths) == 1
+    assert not (attempt_dir / "final.json").exists()
+    assert os.stat(pending_paths[0]).st_nlink == 1
+
+    receipt = store.verify(attempt.id)
+    assert receipt["status"] == "complete"
+    assert (attempt_dir / "final.json").exists()
+    assert not list(attempt_dir.glob(".final-*.tmp"))
+
+    multiple = store.start({"denominator": 1}, attempt_id="multiple-pending")
+    multiple.finalize({"score": 1})
+    multiple_dir = store.root / "attempts" / multiple.id
+    original_final = multiple_dir / "final.json"
+    first_pending = multiple_dir / ".final-0123456789abcdef0123456789abcdef.tmp"
+    original_final.rename(first_pending)
+    second_pending = multiple_dir / ".final-fedcba9876543210fedcba9876543210.tmp"
+    second_pending.write_bytes(first_pending.read_bytes())
+    second_pending.chmod(0o600)
+    with pytest.raises(EvidenceIntegrityError):
+        store.verify(multiple.id)
+    assert first_pending.exists()
+    assert second_pending.exists()
+    assert not original_final.exists()
+
+
+def test_invalid_duplicate_final_metadata_is_not_cleaned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = EvidenceStore(tmp_path / "evidence")
+    attempt = store.start({"denominator": 1}, attempt_id="invalid-duplicate")
+    original_unlink = Path.unlink
+    injected = False
+
+    def fail_after_link(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal injected
+        if path.name.startswith(".final-") and not injected:
+            injected = True
+            raise RuntimeError("injected crash after final link")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_after_link)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        attempt.finalize({"score": 1})
+    assert injected
+    final_path = store.root / "attempts" / attempt.id / "final.json"
+    pending_path = next(final_path.parent.glob(".final-*.tmp"))
+    final_record = json.loads(final_path.read_text(encoding="utf-8"))
+    final_record["event_count"] = 99
+    body = {key: value for key, value in final_record.items() if key != "final_sha256"}
+    final_record["final_sha256"] = hashlib.sha256(
+        json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    final_path.write_text(
+        json.dumps(final_record, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    with pytest.raises(EvidenceIntegrityError):
+        store.verify(attempt.id)
+    assert pending_path.exists()
+    assert os.stat(final_path).st_nlink == 2
+
+
+def test_store_requires_posix_ownership_and_file_locking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(evidence_module, "fcntl", None)
+    with pytest.raises(EvidenceError, match="POSIX ownership and file-locking"):
+        EvidenceStore(tmp_path / "unsupported")
+
+
+def test_inspect_all_reports_corruption_and_foreign_entries_without_hiding_valid_attempts(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence")
+    valid = store.start({"denominator": 1}, attempt_id="valid")
+    valid.finalize({"score": 1})
+    corrupt = store.start({"denominator": 1}, attempt_id="corrupt")
+    corrupt.finalize({"score": 1})
+    corrupt_final = store.root / "attempts" / corrupt.id / "final.json"
+    corrupt_final.write_text(corrupt_final.read_text(encoding="utf-8").replace('"score":1', '"score":2'), encoding="utf-8")
+    foreign = store.root / "attempts" / "foreign.txt"
+    foreign.write_text("unrecognized entry", encoding="utf-8")
+
+    reports = store.inspect_all()
+    assert reports["valid"]["status"] == "complete"
+    assert reports["corrupt"]["status"] == "corrupt"
+    assert reports["corrupt"]["error_class"] == "EvidenceIntegrityError"
+    assert reports["foreign.txt"]["status"] == "corrupt"
+    assert reports["foreign.txt"]["error_class"] == "EvidenceIntegrityError"
+    assert foreign.read_text(encoding="utf-8") == "unrecognized entry"
+    with pytest.raises(EvidenceIntegrityError):
+        store.verify_all()
 
 
 def test_path_traversal_and_symlink_paths_are_rejected_without_following(tmp_path: Path) -> None:

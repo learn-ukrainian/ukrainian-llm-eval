@@ -410,3 +410,26 @@ Hashes detect corruption against retained receipts; they do not prevent a local
 owner from rewriting an entire history and all its hashes. A crash during an event
 write may leave a truncated log: verification then fails closed and preserves it
 for investigation instead of inventing a complete record.
+
+Resume also binds hashes of the resolved completion and MCP endpoints. Changing
+an endpoint between invocations fails before preflight or a new provider call;
+rotating credentials for the same endpoint does not change that route identity.
+
+Inspect every attempt even when one is damaged:
+
+```bash
+ukrainian-llm-eval evidence-status --evidence-dir paired-run/evidence \
+  --output private-evidence-status.json
+```
+
+This command makes no provider calls. The private report includes each intact
+receipt and a corruption marker for unreadable entries; stdout contains counts
+only. Exit 2 means at least one entry is incomplete or corrupt. Paid resume remains
+blocked if any evidence is corrupt. Preserve the original directory, use this
+report to identify the affected entry, and investigate against retained copies or
+checksums. Do not delete a damaged entry to make resume pass or claim its cell was
+never attempted. A recovery that cannot establish the original evidence remains
+an explicit experiment gap.
+
+Evidence storage requires POSIX ownership and locking support. Windows is not
+supported for evidence-backed execution.

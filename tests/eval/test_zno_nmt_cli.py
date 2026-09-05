@@ -84,3 +84,24 @@ def test_cli_separates_key_and_refuses_overwrite(tmp_path):
 def test_runner_cli_cannot_accept_key():
     result = run_cli("run", "--key", "private")
     assert result.returncode == 2
+
+
+def test_evidence_status_reports_intact_attempt_alongside_corruption(tmp_path):
+    from ukrainian_llm_eval.evidence import EvidenceStore
+
+    root = tmp_path / "evidence"
+    store = EvidenceStore(root)
+    store.start({"denominator": 1}, attempt_id="intact").finalize({"status": "ok"})
+    store.start({"denominator": 1}, attempt_id="damaged")
+    log = root / "attempts" / "damaged" / "events.jsonl"
+    log.write_bytes(log.read_bytes()[:-1])
+    original = log.read_bytes()
+    output = tmp_path / "inspection.json"
+    result = run_cli("evidence-status", "--evidence-dir", root, "--output", output)
+    assert result.returncode == 2, result.stderr
+    assert json.loads(result.stdout) == {"attempts": 2, "complete": 1, "corrupt": 1}
+    report = json.loads(output.read_text())
+    assert report["intact"]["complete"] is True
+    assert report["damaged"]["status"] == "corrupt"
+    assert log.read_bytes() == original
+    assert output.stat().st_mode & 0o777 == 0o600

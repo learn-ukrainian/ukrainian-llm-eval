@@ -32,6 +32,7 @@ FINAL_SCHEMA: Final = "ukrainian-llm-eval.evidence-final.v1"
 
 _EVENT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _ATTEMPT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_TEMP_ID_RE = re.compile(r"^\.final-[0-9a-f]{32}\.tmp$")
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "interrupted"})
 _RESERVED_EVENT_KINDS = frozenset({"attempt_started"})
 _START_KIND = "attempt_started"
@@ -77,6 +78,17 @@ def _mode(path: Path) -> int:
 
 def _current_uid() -> int | None:
     return os.getuid() if hasattr(os, "getuid") else None
+
+
+def _require_posix_capabilities() -> None:
+    if (
+        os.name != "posix"
+        or not callable(getattr(os, "getuid", None))
+        or fcntl is None
+        or not callable(getattr(fcntl, "flock", None))
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise EvidenceError("EvidenceStore requires POSIX ownership and file-locking support")
 
 
 def _check_owner(st: os.stat_result, path: Path, *, expected_mode: int) -> None:
@@ -133,7 +145,7 @@ def _ensure_private_dir(path: Path, label: str) -> None:
     _check_dir(path, label)
 
 
-def _check_file(path: Path, label: str) -> None:
+def _check_file(path: Path, label: str, *, allowed_nlinks: tuple[int, ...] = (1,)) -> None:
     try:
         st = os.lstat(path)
     except FileNotFoundError as exc:
@@ -143,7 +155,7 @@ def _check_file(path: Path, label: str) -> None:
     if not stat.S_ISREG(st.st_mode):
         raise EvidenceIntegrityError(f"{label} is not a regular file: {path}")
     _check_owner(st, path, expected_mode=0o600)
-    if getattr(st, "st_nlink", 1) != 1:
+    if getattr(st, "st_nlink", 1) not in allowed_nlinks:
         raise EvidenceIntegrityError(f"{label} must not have additional hard links: {path}")
 
 
@@ -317,6 +329,30 @@ def _validate_final(record: Mapping[str, Any], attempt_id: str) -> None:
         raise EvidenceIntegrityError(f"attempt {attempt_id} final hash does not match its body")
 
 
+def _read_valid_final(
+    path: Path,
+    attempt_id: str,
+    records: list[dict[str, Any]],
+    *,
+    allowed_nlinks: tuple[int, ...],
+) -> tuple[dict[str, Any], bytes]:
+    raw = _read_private_file(
+        path,
+        f"attempt {attempt_id} final record",
+        allowed_nlinks=allowed_nlinks,
+    )
+    item = _strict_loads(raw, f"attempt {attempt_id} final record")
+    if not isinstance(item, dict):
+        raise EvidenceIntegrityError(f"attempt {attempt_id} final record is not an object")
+    _validate_final(item, attempt_id)
+    if (
+        item["event_count"] != len(records)
+        or item["last_event_sha256"] != records[-1]["record_sha256"]
+    ):
+        raise EvidenceIntegrityError(f"attempt {attempt_id} final record does not match event log")
+    return item, raw
+
+
 def _timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
@@ -345,8 +381,8 @@ def _locked_events(path: Path, attempt_id: str) -> Iterator[int]:
         os.close(fd)
 
 
-def _read_private_file(path: Path, label: str) -> bytes:
-    _check_file(path, label)
+def _read_private_file(path: Path, label: str, *, allowed_nlinks: tuple[int, ...] = (1,)) -> bytes:
+    _check_file(path, label, allowed_nlinks=allowed_nlinks)
     try:
         fd = os.open(path, _open_flags(os.O_RDONLY))
     except OSError as exc:
@@ -354,7 +390,7 @@ def _read_private_file(path: Path, label: str) -> bytes:
     try:
         st = os.fstat(fd)
         _check_owner(st, path, expected_mode=0o600)
-        if not stat.S_ISREG(st.st_mode) or getattr(st, "st_nlink", 1) != 1:
+        if not stat.S_ISREG(st.st_mode) or getattr(st, "st_nlink", 1) not in allowed_nlinks:
             raise EvidenceIntegrityError(f"{label} is not a private regular file: {path}")
         return _read_fd(fd)
     finally:
@@ -392,28 +428,31 @@ def _event_payload(records: list[dict[str, Any]]) -> tuple[int, dict[str, Any]]:
     return start["denominator"], start["metadata"]
 
 
-def _pending_finalization(attempt_path: Path, attempt_id: str) -> bool:
-    pending = False
-    for path in attempt_path.glob(".final-*.tmp"):
-        try:
-            st = os.lstat(path)
-        except FileNotFoundError:
+def _pending_final_paths(attempt_path: Path, attempt_id: str) -> list[Path]:
+    pending: list[Path] = []
+    try:
+        children = sorted(attempt_path.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise EvidenceIntegrityError(f"could not inspect attempt {attempt_id} temporary records") from exc
+    for path in children:
+        if path.name in {"events.jsonl", "final.json"}:
             continue
-        if stat.S_ISLNK(st.st_mode):
-            raise EvidenceIntegrityError(f"attempt {attempt_id} temporary record must not be a symlink")
-        if not stat.S_ISREG(st.st_mode):
-            raise EvidenceIntegrityError(f"attempt {attempt_id} temporary record is not regular")
-        _check_owner(st, path, expected_mode=0o600)
-        if getattr(st, "st_nlink", 1) != 1:
-            raise EvidenceIntegrityError(f"attempt {attempt_id} temporary record has hard links")
-        pending = True
+        if _TEMP_ID_RE.fullmatch(path.name) is None:
+            raise EvidenceIntegrityError(f"unexpected path in attempt {attempt_id}: {path.name}")
+        _check_file(path, f"attempt {attempt_id} finalization temporary", allowed_nlinks=(1, 2))
+        pending.append(path)
     return pending
+
+
+def _pending_finalization(attempt_path: Path, attempt_id: str) -> bool:
+    return bool(_pending_final_paths(attempt_path, attempt_id))
 
 
 class EvidenceStore:
     """Owner-only local evidence store with immutable finalization."""
 
     def __init__(self, root: Path | str) -> None:
+        _require_posix_capabilities()
         self.root = Path(root)
         _ensure_private_dir(self.root, "evidence root")
         self.attempts_root = self.root / "attempts"
@@ -433,25 +472,110 @@ class EvidenceStore:
     def _final_path(attempt_path: Path) -> Path:
         return attempt_path / "final.json"
 
-    def _read_verified_events(self, attempt_id: str) -> tuple[Path, list[dict[str, Any]]]:
+    def _read_verified_attempt(
+        self, attempt_id: str
+    ) -> tuple[Path, list[dict[str, Any]], dict[str, Any] | None]:
         attempt_path = self._attempt_path(attempt_id)
         events_path = self._events_path(attempt_path)
         with _locked_events(events_path, attempt_id) as fd:
             records = _parse_events(_read_fd(fd), attempt_id)
             _validate_chain(records, attempt_id)
-        return attempt_path, records
+            final_record = self._final_if_present(attempt_path, attempt_id, records)
+        return attempt_path, records, final_record
 
-    def _final_if_present(self, attempt_path: Path, attempt_id: str) -> dict[str, Any] | None:
+    def _final_if_present(
+        self,
+        attempt_path: Path,
+        attempt_id: str,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         final_path = self._final_path(attempt_path)
         try:
-            os.lstat(final_path)
+            final_stat = os.lstat(final_path)
         except FileNotFoundError:
-            return None
-        raw = _read_private_file(final_path, f"attempt {attempt_id} final record")
-        item = _strict_loads(raw, f"attempt {attempt_id} final record")
-        if not isinstance(item, dict):
-            raise EvidenceIntegrityError(f"attempt {attempt_id} final record is not an object")
-        _validate_final(item, attempt_id)
+            pending_paths = _pending_final_paths(attempt_path, attempt_id)
+            if len(pending_paths) > 1:
+                raise EvidenceIntegrityError(f"attempt {attempt_id} has multiple pending finalizations")
+            if not pending_paths:
+                return None
+            pending_path = pending_paths[0]
+            pending_stat = os.lstat(pending_path)
+            if getattr(pending_stat, "st_nlink", 1) != 1:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} pending finalization has unexpected hard links"
+                )
+            pending_record, _ = _read_valid_final(
+                pending_path,
+                attempt_id,
+                records,
+                allowed_nlinks=(1,),
+            )
+            try:
+                os.link(pending_path, final_path, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} final record appeared during recovery"
+                ) from exc
+            except OSError as exc:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} pending finalization could not be published"
+                ) from exc
+            _sync_dir(attempt_path)
+            pending_path.unlink()
+            _sync_dir(attempt_path)
+            recovered_stat = os.lstat(final_path)
+            if getattr(recovered_stat, "st_nlink", 1) != 1:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} finalization recovery left extra links"
+                )
+            _check_file(final_path, f"attempt {attempt_id} final record")
+            return pending_record
+        _check_file(final_path, f"attempt {attempt_id} final record", allowed_nlinks=(1, 2))
+        pending_paths = _pending_final_paths(attempt_path, attempt_id)
+        if getattr(final_stat, "st_nlink", 1) == 1:
+            if pending_paths:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} has an unlinked pending finalization"
+                )
+        elif getattr(final_stat, "st_nlink", 1) == 2 and len(pending_paths) == 1:
+            pending_path = pending_paths[0]
+            pending_stat = os.lstat(pending_path)
+            same_inode = (pending_stat.st_dev, pending_stat.st_ino) == (final_stat.st_dev, final_stat.st_ino)
+            if getattr(pending_stat, "st_nlink", 1) != 2 or not same_inode:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} finalization links do not identify one inode"
+                )
+        else:
+            raise EvidenceIntegrityError(f"attempt {attempt_id} final record has unexpected hard links")
+
+        item, raw = _read_valid_final(
+            final_path,
+            attempt_id,
+            records,
+            allowed_nlinks=(1, 2),
+        )
+        if pending_paths:
+            pending_path = pending_paths[0]
+            pending_raw = _read_private_file(
+                pending_path,
+                f"attempt {attempt_id} finalization temporary",
+                allowed_nlinks=(2,),
+            )
+            if pending_raw != raw:
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} pending finalization content differs from final record"
+                )
+            pending_path.unlink()
+            _sync_dir(attempt_path)
+            recovered_stat = os.lstat(final_path)
+            if (
+                recovered_stat.st_dev,
+                recovered_stat.st_ino,
+                getattr(recovered_stat, "st_nlink", 1),
+            ) != (final_stat.st_dev, final_stat.st_ino, 1):
+                raise EvidenceIntegrityError(
+                    f"attempt {attempt_id} finalization recovery changed final record identity"
+                )
         return item
 
     def start(self, metadata: Mapping[str, Any], *, attempt_id: str | None = None) -> Attempt:
@@ -603,9 +727,8 @@ class EvidenceStore:
 
     def verify(self, attempt_id: str) -> dict[str, Any]:
         attempt_id = _safe_attempt_id(attempt_id)
-        attempt_path, records = self._read_verified_events(attempt_id)
+        attempt_path, records, final_record = self._read_verified_attempt(attempt_id)
         denominator, metadata = _event_payload(records)
-        final_record = self._final_if_present(attempt_path, attempt_id)
         if final_record is None:
             status = "interrupted" if records[-1]["kind"] == _INTERRUPTED_KIND else "incomplete"
             return {
@@ -673,6 +796,42 @@ class EvidenceStore:
 
     def verify_all(self) -> dict[str, dict[str, Any]]:
         return {attempt_id: self.verify(attempt_id) for attempt_id in self.list_attempts()}
+
+    def inspect_all(self) -> dict[str, dict[str, Any]]:
+        """Inspect every entry and report corruption without discarding records.
+
+        Unlike verify_all, this diagnostic view converts a bad or foreign
+        entry into a structured corrupt receipt so one damaged attempt does
+        not hide the rest of the store.  Verification may perform valid
+        pending-final housekeeping after it has authenticated the record.
+        """
+
+        _check_dir(self.attempts_root, "attempts directory")
+        reports: dict[str, dict[str, Any]] = {}
+        try:
+            children = sorted(self.attempts_root.iterdir(), key=lambda path: path.name)
+        except OSError as exc:
+            raise EvidenceIntegrityError("could not inspect attempts directory") from exc
+        for child in children:
+            name = child.name
+            try:
+                child_stat = os.lstat(child)
+                if stat.S_ISLNK(child_stat.st_mode):
+                    raise EvidenceIntegrityError(f"attempt path must not be a symlink: {child}")
+                if not stat.S_ISDIR(child_stat.st_mode):
+                    raise EvidenceIntegrityError(f"unexpected path in attempts directory: {child}")
+                safe_id = _safe_attempt_id(name)
+                reports[safe_id] = self.verify(safe_id)
+            except Exception as exc:  # noqa: BLE001 - inspector must report each failure.
+                reports[name] = {
+                    "schema": STORE_SCHEMA,
+                    "attempt_id": name,
+                    "status": "corrupt",
+                    "complete": False,
+                    "error_class": type(exc).__name__,
+                    "error": str(exc),
+                }
+        return reports
 
 
 class Attempt:

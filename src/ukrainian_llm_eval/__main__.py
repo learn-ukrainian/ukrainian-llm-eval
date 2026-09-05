@@ -17,6 +17,7 @@ from .core import (
     validate_packet,
     write_private_json,
 )
+from .evidence import EvidenceStore
 from .execution import execute_attempt
 from .importers import import_zno
 from .runner import preflight, validate_config
@@ -66,6 +67,9 @@ def parser() -> argparse.ArgumentParser:
         else:
             scorer.add_argument("--control", type=Path, required=True)
             scorer.add_argument("--treatment", type=Path, required=True)
+    evidence_status = commands.add_parser("evidence-status", help="Inspect every private attempt without executing providers")
+    evidence_status.add_argument("--evidence-dir", type=Path, required=True)
+    evidence_status.add_argument("--output", type=Path, required=True)
     export = commands.add_parser("export", help="Emit allowlisted numeric aggregates only, without text, keys or logs")
     export.add_argument("--input", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
@@ -93,7 +97,16 @@ def public_aggregate(report: dict) -> dict:
 
 
 def execute(args: argparse.Namespace) -> int:
-    if args.command == "import-zno":
+    if args.command == "evidence-status":
+        if not args.evidence_dir.is_dir():
+            raise ExamError("evidence directory must already exist")
+        report = EvidenceStore(args.evidence_dir).inspect_all()
+        write_private_json(args.output, report)
+        complete = sum(item.get("complete") is True for item in report.values())
+        corrupt = sum(item.get("status") == "corrupt" for item in report.values())
+        print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
+        return 0 if complete == len(report) else 2
+    elif args.command == "import-zno":
         exam = import_zno(read_json(args.input), args.test_id, read_json(args.metadata))
         write_private_json(args.output, exam)
         print(json.dumps({"imported_items": len(exam["items"])}))

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .core import ExamError, digest, read_json, write_private_json
 from .evidence import EvidenceStore
-from .execution import execute_attempt
+from .execution import execute_attempt, route_fingerprint
 from .runner import _failure, preflight
 
 
@@ -36,7 +36,8 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
         for condition in (("closed-book", "sources") if repeat % 2 else ("sources", "closed-book"))
     ]
     plan = {"schema": "zno-nmt.plan.v1", "packet_sha256": packet["packet_sha256"],
-            "config": config, "config_sha256": digest(config), "schedule": schedule}
+            "config": config, "config_sha256": digest(config), "schedule": schedule,
+            "route_sha256": route_fingerprint(config, sources_url)}
     if root.is_symlink():
         raise ExamError("schedule directory must not be a symlink")
     root.mkdir(mode=0o700, parents=True, exist_ok=resume)
@@ -61,7 +62,8 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
             receipt = existing.get(slot)
             if receipt is not None:
                 expected = {"denominator": len(packet["items"]), "packet_sha256": packet["packet_sha256"],
-                            "config_sha256": digest(config), "condition": trial["condition"]}
+                            "config_sha256": digest(config), "condition": trial["condition"],
+                            "route_sha256": route_fingerprint(config, sources_url)}
                 if receipt["metadata"] != expected:
                     raise ExamError("attempt does not match frozen schedule")
                 if not receipt["complete"]:

@@ -62,3 +62,22 @@ def test_resume_accounts_for_interruption_and_runs_only_unstarted_slot(monkeypat
     assert len(receipts) == 2
     assert receipts["r001-closed-book"]["terminal_status"] == "interrupted"
     assert receipts["r001-closed-book"]["result"]["failure_reason"] == "interrupted"
+
+
+def test_resume_rejects_changed_resolved_endpoints_before_preflight(monkeypatch, tmp_path):
+    packet, config = inputs()
+    config = {**config, "adapter": "chat-http", "endpoint_env": "TEST_COMPLETION_URL"}
+    monkeypatch.setenv("TEST_COMPLETION_URL", "https://original.invalid/chat")
+    preflights = []
+    monkeypatch.setattr(scheduling, "preflight", lambda *args: preflights.append(args))
+    monkeypatch.setattr(execution, "run_exam", lambda *args, **kwargs: {"status": "ok", "responses": {}})
+    root = tmp_path / "pair"
+    list(scheduling.run_pair(packet, config, root, sources_url="https://original.invalid/mcp"))
+    count = len(preflights)
+    with pytest.raises(ExamError, match="frozen schedule"):
+        list(scheduling.run_pair(packet, config, root, sources_url="https://different.invalid/mcp", resume=True))
+    monkeypatch.setenv("TEST_COMPLETION_URL", "https://different.invalid/chat")
+    with pytest.raises(ExamError, match="frozen schedule"):
+        list(scheduling.run_pair(packet, config, root, sources_url="https://original.invalid/mcp", resume=True))
+    assert len(preflights) == count
+    assert "original.invalid" not in (root / "plan.json").read_text()
