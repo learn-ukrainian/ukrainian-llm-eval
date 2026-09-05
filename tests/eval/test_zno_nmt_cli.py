@@ -132,3 +132,28 @@ def test_ulp_cli_binds_source_and_keeps_category_outside_packet(tmp_path):
     assert "grammar" not in packet.read_text()
     assert "correct" not in packet.read_text()
     assert run_cli(*args).returncode == 2
+
+
+def test_gec_cli_keeps_both_references_private(tmp_path):
+    import hashlib
+
+    source = tmp_path / "input.m2"
+    source.write_text("S Я люблю мову .\n"
+                      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0\n"
+                      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||1\n\n")
+    provenance = tmp_path / "provenance.json"
+    provenance.write_text(json.dumps({"source_url": "https://example.org/synthetic",
+                                      "source_revision": "fixture", "license": "MIT", "exposure": "synthetic"}))
+    packet, key = tmp_path / "packet.json", tmp_path / "key.json"
+    args = ("prepare-gec", "--input", source, "--provenance", provenance,
+            "--questions", packet, "--key", key)
+    assert run_cli(*args, "--source-sha256", "wrong").returncode == 2
+    assert not packet.exists() and not key.exists()
+    result = run_cli(*args, "--source-sha256", hashlib.sha256(source.read_bytes()).hexdigest())
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["prepared_sentences"] == 1
+    assert "annotations" not in packet.read_text()
+    refs = json.loads(key.read_text())["items"][0]["annotations"]
+    assert {ref["annotator_id"] for ref in refs} == {"0", "1"}
+    assert packet.stat().st_mode & 0o777 == key.stat().st_mode & 0o777 == 0o600
+    assert run_cli(*args).returncode == 2

@@ -11,6 +11,11 @@ import urllib.request
 from pathlib import Path
 
 OFFICIAL_URL = "https://raw.githubusercontent.com/unlp-workshop/unlp-2023-shared-task/fbff22905f8c9a3677c900d56599284151c029e6/scripts/evaluate.py"
+EXPECTED_COUNTS = {
+    "deletion": [1, 0, 0], "insertion": [1, 0, 0], "replacement": [1, 0, 0],
+    "two_references": [1, 0, 0], "unchanged": [0, 0, 1], "wrong": [0, 1, 1],
+}
+
 OFFICIAL_SHA256 = "6e37b7a41a3a3c303647ca29507cd51b4b6deb9b0952c2a62d8e0b0374fae31a"
 
 
@@ -47,6 +52,8 @@ def main():
             expected = [float(value) for value in match.group(1).split()]
             report = json.loads(wrapped.stdout)
             actual = [report[field] for field in ("tp", "fp", "fn", "precision", "recall", "f0_5")]
+            if actual[:3] != EXPECTED_COUNTS[case.name]:
+                raise ValueError("fixture semantic outcome failed for " + case.name)
             if actual != expected:
                 raise ValueError("scorer parity failed for " + case.name)
             reports[case.name] = {"metrics": actual, "parity": True}

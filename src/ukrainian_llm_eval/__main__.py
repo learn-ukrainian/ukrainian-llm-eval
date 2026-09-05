@@ -22,6 +22,7 @@ from .core import (
 )
 from .evidence import EvidenceStore
 from .execution import execute_attempt
+from .gec import prepare_gec
 from .importers import import_zno
 from .runner import preflight, validate_config
 from .scheduling import run_pair
@@ -46,6 +47,12 @@ def parser() -> argparse.ArgumentParser:
     ulp.add_argument("--output", type=Path, required=True)
     ulp.add_argument("--sidecar", type=Path, required=True)
     ulp.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
+    gec = commands.add_parser("prepare-gec", help="Separate full UA-GEC M2 into source-only packet and private references")
+    gec.add_argument("--input", type=Path, required=True)
+    gec.add_argument("--provenance", type=Path, required=True)
+    gec.add_argument("--questions", type=Path, required=True)
+    gec.add_argument("--key", type=Path, required=True)
+    gec.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
     prep = commands.add_parser("prepare", help="Separate a normalized exam into question-only packet and key")
     prep.add_argument("--exam", type=Path, required=True)
     prep.add_argument("--questions", type=Path, required=True)
@@ -116,6 +123,16 @@ def execute(args: argparse.Namespace) -> int:
         corrupt = sum(item.get("status") == "corrupt" for item in report.values())
         print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
         return 0 if complete == len(report) else 2
+    elif args.command == "prepare-gec":
+        if args.questions.resolve() == args.key.resolve() or args.questions.exists() or args.key.exists():
+            raise ExamError("question and key destinations must be distinct new files")
+        raw = args.input.read_bytes()
+        if args.source_sha256 is not None and hashlib.sha256(raw).hexdigest() != args.source_sha256:
+            raise ExamError("UA-GEC source hash mismatch")
+        packet, key = prepare_gec(raw.decode("utf-8"), read_json(args.provenance))
+        write_private_json(args.questions, packet)
+        write_private_json(args.key, key)
+        print(json.dumps({"prepared_sentences": len(packet["items"]), "packet_sha256": packet["packet_sha256"]}))
     elif args.command == "import-ulp":
         if args.output.resolve() == args.sidecar.resolve() or args.output.exists() or args.sidecar.exists():
             raise ExamError("exam and sidecar must be distinct new files")

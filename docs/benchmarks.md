@@ -93,3 +93,21 @@ correct options but should still stay outside candidate access. The generic
 importer supports small synthetic fixtures; accepting a fixture does not admit it
 to the 347-question public experiment. Source rows must contain 3–5 choices and
 consistent zero-based answer index and Ukrainian answer letter.
+
+## Prepare UA-GEC references
+
+Download the pinned full M2 file into private storage. Supply a provenance JSON
+object containing `source_url`, `source_revision`, `license` and `exposure`.
+
+```bash
+ukrainian-llm-eval prepare-gec --input runtime/test.m2 \
+  --provenance runtime/gec-provenance.json \
+  --questions runtime/gec-questions.json --key runtime/gec-key.json
+```
+
+Use `--source-sha256` to enforce an expected downloaded-file hash. The preparation
+retains all content sentences and both reference annotators, removes the pinned
+generator's document headings, and binds the private references to the packet.
+Both destinations must be new files. The candidate packet contains only opaque
+IDs and source sentences. Preparation alone does not execute or score corrections;
+see `scorer/README.md` for the isolated scorer runtime.
