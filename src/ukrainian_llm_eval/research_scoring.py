@@ -7,12 +7,14 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .adapters import AdapterError, _extract_responses
 from .admission import admission_composite_sha256, verify_admission_evidence
 from .benchmark_manifest import validate_execution_plan
 from .core import ExamError, digest, read_json, score_run
 from .evidence import EvidenceStore
 from .gec_scoring import score_gec_attempt
-from .segmentation import reassemble_cell, validate_segment_plan
+from .request_budget import request_budget_attempt_id, verify_request_budget_evidence
+from .segmentation import derive_segment_packet, reassemble_cell, validate_segment_plan
 
 
 def mcq_scorer_code_sha256() -> str:
@@ -80,6 +82,11 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
     store = EvidenceStore(execution_root / "evidence")
     receipts = store.verify_all()
     admission_receipts = EvidenceStore(execution_root / "admission-evidence").verify_all()
+    budget_receipts = EvidenceStore(execution_root / "request-budget-evidence").verify_all()
+    if (result_manifest.get("request_budget_attempts") != len(budget_receipts)
+            or result_manifest.get("request_budget_receipt_set_sha256") != digest(
+                {key: digest(value) for key, value in budget_receipts.items()})):
+        raise ExamError("result manifest request-budget set differs from evidence")
     if (result_manifest.get("admission_attempts") != len(admission_receipts)
             or result_manifest.get("admission_receipt_set_sha256") != digest(
                 {key: digest(value) for key, value in admission_receipts.items()})):
@@ -99,11 +106,19 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
     for cell, artifact in zip(execution_plan["cells"], artifacts, strict=True):
         suite, route = suites[cell["suite_id"]], routes[cell["route_id"]]
         packet, plan = packets[cell["suite_id"]], segment_plans[cell["suite_id"]]
+        artifact_identity = {**{field: cell[field] for field in ("cell_id", "suite_id", "route_id", "repeat", "condition")},
+                             "packet_sha256": packet["packet_sha256"],
+                             "segment_plan_sha256": plan["segment_plan_sha256"]}
+        if any(artifact.get(field) != value for field, value in artifact_identity.items()):
+            raise ExamError("sealed cell identity differs from frozen schedule")
         records, hashes, missing = [], [], False
+        terminal_failure = False
         for segment in cell["segments"]:
             receipt = receipts.get(segment["attempt_id"])
             if receipt is None:
                 missing = True; continue
+            if missing or terminal_failure:
+                raise ExamError("segment receipt exists after a missing or failed segment")
             segment_plan_item = next(item for item in plan["segments"] if item["segment_id"] == segment["segment_id"])
             derived_config = {**configs[cell["route_id"]], **suite["limits"], "repeats": manifest["repeats"]}
             expected = {"denominator": len(segment_plan_item["item_ids"]), "config_sha256": digest(derived_config),
@@ -125,14 +140,39 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
             if not receipt["complete"] or receipt["metadata"] != expected:
                 raise ExamError("segment receipt binding mismatch")
             hashes.append(digest(receipt)); result = receipt["result"]
+            if route["request_budget_mechanism_sha256"] is not None:
+                budget_evidence = budget_receipts.get(request_budget_attempt_id(segment["attempt_id"]))
+                if budget_evidence is None:
+                    raise ExamError("scoring segment request-budget evidence is missing")
+                verify_request_budget_evidence(budget_evidence, route, derived_config, segment["attempt_id"], result)
+                if budget_evidence["metadata"]["account_sha256"] != admission_evidence["result"]["account_sha256"]:
+                    raise ExamError("request-budget account differs from admission evidence")
             if result.get("status") == "ok" and receipt["terminal_status"] != "completed":
                 raise ExamError("successful segment has non-completed evidence")
-            records.append({"segment_id": segment["segment_id"], "packet_sha256": result.get("packet_sha256"), "status": result.get("status"), "responses": result.get("responses")})
+            if result.get("status") != "ok":
+                terminal_failure = True
+                continue
+            derived_packet = derive_segment_packet(packet, segment_plan_item["item_ids"], segment_id=segment["segment_id"])
+            try:
+                normalized = _extract_responses({"responses": result.get("responses")}, derived_packet)
+                if result.get("packet_sha256") != derived_packet["packet_sha256"]:
+                    raise ExamError("segment packet identity drift")
+                if cell["suite_id"] == "ua-gec-public-gec-only-test" and any(value is None for value in normalized.values()):
+                    raise ExamError("incomplete GEC correction")
+            except (ExamError, AdapterError):
+                terminal_failure = True
+                continue
+            records.append({"segment_id": segment["segment_id"], "packet_sha256": result["packet_sha256"],
+                            "status": "ok", "responses": normalized})
         if artifact.get("receipt_sha256s") != hashes or artifact.get("execution_plan_sha256") != execution_plan["execution_plan_sha256"]:
             raise ExamError("sealed cell artifact differs from receipts")
-        if missing and artifact.get("status") == "ok":
-            raise ExamError("successful cell has missing segment receipts")
-        if artifact.get("status") != "ok":
+        if missing and not terminal_failure:
+            raise ExamError("missing segment has no preceding failure evidence")
+        if artifact.get("status") != ("failed" if terminal_failure else "ok"):
+            raise ExamError("cell status contradicts verified segment outcomes")
+        if terminal_failure:
+            if artifact.get("responses") is not None:
+                raise ExamError("failed cell contains a response aggregate")
             cells.append({"cell_id": cell["cell_id"], "suite_id": cell["suite_id"], "route_id": cell["route_id"], "repeat": cell["repeat"], "condition": cell["condition"], "status": "no_score"}); continue
         responses = reassemble_cell(plan, records)
         if artifact.get("responses") != responses or artifact.get("receipt_sha256s") != hashes or artifact.get("execution_plan_sha256") != execution_plan["execution_plan_sha256"]:

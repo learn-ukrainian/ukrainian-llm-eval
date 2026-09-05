@@ -50,6 +50,20 @@ paid execution is allowed and its maximum new-spend amount. Matching hashes
 alone do not prove provider health, entitlement, pricing, or model/effort
 support; every segment still requires a fresh nonce-bound admission result.
 
+Metered and existing-credit routes additionally require an explicit
+request-budget map. Its route files freeze the provider counting and output
+semantics plus a trusted local counter command. See
+[request-level budget control](request-budget.md). A verified-subscription
+route may omit the mechanism by freezing `request_budget_mechanism_sha256` as
+`null`; this discloses that exact request-level cost proof is unavailable.
+
+```json
+{
+  "schema": "ukrainian-llm-eval.research-request-budgets.v1",
+  "routes": {"my-route": "request-budgets/my-route.json"}
+}
+```
+
 Run a plan with private evidence storage as follows:
 
 ```sh
@@ -60,6 +74,7 @@ ukrainian-llm-eval run-research \
   --execution-root private-research-run \
   --admission-specs admission-specs.json \
   --operator-authorizations authorizations.json \
+  --request-budgets request-budgets.json \
   --sources-url-env my-route=SOURCES_MCP_URL
 ```
 
@@ -90,8 +105,7 @@ This command is an implementation interface and does not by itself establish
 that a provider route is eligible for the public experiment. Before a public
 run, verify the exact model/effort inventory, live route claims, spending
 authorization, installed behavior, independent review, and release gates.
-Request-level budget enforcement for real metered or existing-credit routes
-must also account for the exact serialized request, schema/history overhead,
-reasoning-inclusive output limits and cumulative credit commitments. Until
-those route-specific checks are proven, this CLI must not be used to claim
-public provider readiness.
+Request-level enforcement is implemented, but no bundled mechanism claims a
+real provider tokenizer or framing contract. Each inaugural paid route still
+needs a provider-specific counter and semantics receipt before the CLI can be
+used to claim that route is ready.

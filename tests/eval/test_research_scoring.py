@@ -69,6 +69,29 @@ def test_unsealed_admission_attempt_prevents_offline_scoring(monkeypatch, tmp_pa
         score_sealed_experiment(*args, scorer_bindings=bindings)
 
 
+def test_unsealed_request_budget_attempt_prevents_offline_scoring(monkeypatch, tmp_path):
+    args, bindings, root = sealed(monkeypatch, tmp_path)
+    EvidenceStore(root / "request-budget-evidence").start({"denominator": 0}).finalize({"status": "failed"})
+    with pytest.raises(ExamError, match="request-budget set differs"):
+        score_sealed_experiment(*args, scorer_bindings=bindings)
+
+
+def test_resealed_failure_flag_cannot_drop_a_successful_cell(monkeypatch, tmp_path):
+    args, bindings, root = sealed(monkeypatch, tmp_path)
+    cell_path = root / (args[4]["cells"][0]["cell_id"] + ".json")
+    cell = json.loads(cell_path.read_text())
+    cell.update(status="failed", responses=None, failure_reason="invented_failure")
+    cell_path.write_text(json.dumps(cell))
+    manifest_path = root / "result-manifest.json"
+    result = json.loads(manifest_path.read_text())
+    result["cell_result_sha256s"][0] = digest(cell)
+    result["cells_complete"] -= 1
+    result["result_manifest_sha256"] = digest({key: value for key, value in result.items() if key != "result_manifest_sha256"})
+    manifest_path.write_text(json.dumps(result))
+    with pytest.raises(ExamError, match="cell status contradicts"):
+        score_sealed_experiment(*args, scorer_bindings=bindings)
+
+
 @pytest.mark.parametrize("target", ["cell", "manifest", "key", "stop"])
 def test_changed_scoring_inputs_fail_closed(monkeypatch, tmp_path, target):
     args, bindings, root = sealed(monkeypatch, tmp_path)

@@ -32,6 +32,7 @@ from .execution import execute_attempt
 from .gec import prepare_gec, validate_gec_packet
 from .gec_scoring import score_gec_attempt
 from .importers import import_zno
+from .request_budget import RequestBudgetController
 from .research_scoring import score_sealed_experiment
 from .runner import preflight, validate_config
 from .scheduling import run_pair, run_research
@@ -71,6 +72,10 @@ def parser() -> argparse.ArgumentParser:
     research_run.add_argument(
         "--operator-authorizations", "--authorizations", dest="operator_authorizations", type=Path, required=True,
         help="JSON route map to separate operator authorization files",
+    )
+    research_run.add_argument(
+        "--request-budgets", type=Path,
+        help="Route map to frozen request-budget mechanisms and trusted local counter commands; required by paid/credit routes",
     )
     research_run.add_argument(
         "--sources-urls", "--sources-routes", dest="sources_urls", type=Path,
@@ -202,6 +207,7 @@ def _research_scoring_inputs(path):
 _RESEARCH_RUNTIME_INPUTS_SCHEMA = "ukrainian-llm-eval.research-runtime-inputs.v1"
 _RESEARCH_ADMISSION_SPECS_SCHEMA = "ukrainian-llm-eval.research-admission-specs.v1"
 _RESEARCH_AUTHORIZATIONS_SCHEMA = "ukrainian-llm-eval.research-operator-authorizations.v1"
+_RESEARCH_REQUEST_BUDGETS_SCHEMA = "ukrainian-llm-eval.research-request-budgets.v1"
 _RESEARCH_SOURCES_SCHEMA = "ukrainian-llm-eval.research-sources-inputs.v1"
 
 
@@ -240,12 +246,14 @@ def _research_runtime_inputs(path: Path):
     return loaded
 
 
-def _research_admission_map(path: Path, *, schema: str, field: str, label: str):
+def _research_admission_map(path: Path, *, schema: str, field: str, label: str, allow_empty: bool = False):
     """Load route-specific trusted integration files beside their map."""
     spec = read_json(path)
     expected = {"schema", field}
     if not isinstance(spec, dict) or set(spec) != expected or spec["schema"] != schema:
         raise ExamError(f"invalid research {label} map")
+    if allow_empty and spec[field] == {}:
+        return {}
     return _research_path_map(spec[field], path.parent, label)
 
 
@@ -360,6 +368,15 @@ def execute(args: argparse.Namespace) -> int:
             field="routes",
             label="operator-authorization",
         )
+        budget_specs = {}
+        if args.request_budgets is not None:
+            budget_specs = _research_admission_map(
+                args.request_budgets,
+                schema=_RESEARCH_REQUEST_BUDGETS_SCHEMA,
+                field="routes",
+                label="request-budget",
+                allow_empty=True,
+            )
         if (not isinstance(manifest, dict) or not isinstance(manifest.get("routes"), list)
                 or any(not isinstance(route, dict) or not isinstance(route.get("route_id"), str)
                        for route in manifest["routes"])):
@@ -370,10 +387,12 @@ def execute(args: argparse.Namespace) -> int:
             _research_sources_from_env(args.sources_url_env, manifest["routes"]),
         )
         controller = CommandAdmissionController(specs, authorizations)
+        budget_controller = RequestBudgetController(budget_specs)
         failed = False
         for progress in run_research(
             runtime["packets"], runtime["segment_plans"], manifest, plan, runtime["configs"],
-            args.execution_root, admission_probe=controller, sources_urls=sources_urls, resume=args.resume,
+            args.execution_root, admission_probe=controller, request_budget_controller=budget_controller,
+            sources_urls=sources_urls, resume=args.resume,
         ):
             print(json.dumps(progress, ensure_ascii=False), flush=True)
             failed |= progress.get("status") != "ok"

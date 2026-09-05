@@ -28,6 +28,7 @@ def execute_attempt(
     sources_url: str | None = None,
     attempt_id: str | None = None,
     segment_context: Mapping[str, Any] | None = None,
+    request_budget: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Allocate evidence before execution; retain incomplete attempts on interruption.
 
@@ -65,6 +66,9 @@ def execute_attempt(
         metadata["segment_context"] = dict(segment_context)
     store = EvidenceStore(evidence_dir)
     attempt = store.start(metadata, attempt_id=attempt_id)
-    result = run_exam(packet, config, condition, sources_url=sources_url, evidence=attempt.append)
+    budget_options = {"request_budget": request_budget} if request_budget is not None else {}
+    result = run_exam(
+        packet, config, condition, sources_url=sources_url, evidence=attempt.append, **budget_options
+    )
     receipt = attempt.finalize(result, status="completed" if result["status"] == "ok" else "failed")
     return result, receipt

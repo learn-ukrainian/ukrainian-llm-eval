@@ -59,6 +59,7 @@ def _metered_route(route_id: str = "route-a", *, conditions: list[str] | None = 
         "entitlement_evidence_sha256": "e" * 64,
         "admission_command_sha256": "f" * 64,
         "operator_authorization_sha256": "0" * 64,
+        "request_budget_mechanism_sha256": "1" * 64,
         "billing": {
             "kind": "metered",
             "units": "tokens",
@@ -187,6 +188,7 @@ def test_route_limits_and_entitlements_are_conservative_and_receipt_bound() -> N
         "output_micro_usd_per_million_tokens": 0,
         "tool_round_micro_usd": 0,
     }
+    entitled["request_budget_mechanism_sha256"] = None
     with pytest.raises(ExamError, match="entitlement_evidence_sha256"):
         _experiment_manifest(routes=[entitled])
 

@@ -180,7 +180,9 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
             "pricing_state_sha256": result["pricing"]["state_sha256"],
             "entitlement_state_sha256": result["entitlement"]["state_sha256"],
             "capability_state_sha256": result["capability"]["state_sha256"],
-            "operator_authorization_sha256": digest(authorization), "incremental_segment_cost_micro_usd": incremental}
+            "operator_authorization_sha256": digest(authorization), "incremental_segment_cost_micro_usd": incremental,
+            "credit_available_micro_usd": account["credit_available_micro_usd"],
+            "account_sha256": entitlement["account_sha256"]}
 
 
 def invoke_validated_admission(spec, request, route, config, evidence_dir, *, reserved_micro_usd,
@@ -229,6 +231,7 @@ def admission_composite_sha256(manifest, route, segment_plan):
                    "controller_tool_policy_sha256": manifest["tool_policy_sha256"],
                    "command_declared_identity_sha256": route["admission_command_sha256"],
                    "operator_authorization_sha256": route["operator_authorization_sha256"],
+                   "request_budget_mechanism_sha256": route["request_budget_mechanism_sha256"],
                    "route_config_sha256": route["config_sha256"],
                    "segment_plan_sha256": segment_plan["segment_plan_sha256"]})
 
@@ -245,11 +248,11 @@ def verify_admission_evidence(evidence, request_binding, route, composite_sha256
     receipt = evidence["result"]
     fields = {"schema", "request_sha256", "result_sha256", "composite_sha256", "pricing_state_sha256",
               "entitlement_state_sha256", "capability_state_sha256", "operator_authorization_sha256",
-              "incremental_segment_cost_micro_usd"}
+              "incremental_segment_cost_micro_usd", "credit_available_micro_usd", "account_sha256"}
     _exact(receipt, fields, "evidence receipt")
     if receipt["schema"] != "ukrainian-llm-eval.admission-receipt.v1" or receipt["request_sha256"] != metadata.get("request_sha256"):
         raise ExamError("admission evidence request mismatch")
-    for field in fields - {"schema", "incremental_segment_cost_micro_usd"}:
+    for field in fields - {"schema", "incremental_segment_cost_micro_usd", "credit_available_micro_usd"}:
         _sha(receipt[field])
     for kind in ("pricing", "entitlement", "capability"):
         if receipt[kind + "_state_sha256"] != route[kind + "_evidence_sha256"]:
@@ -258,6 +261,11 @@ def verify_admission_evidence(evidence, request_binding, route, composite_sha256
         raise ExamError("admission evidence authorization mismatch")
     if _integer(receipt["incremental_segment_cost_micro_usd"]) > _integer(reserved_micro_usd):
         raise ExamError("admission evidence exceeds reservation")
+    credit = receipt["credit_available_micro_usd"]
+    if route["billing"]["kind"] == "existing_credit":
+        _integer(credit)
+    elif credit is not None:
+        raise ExamError("admission evidence has an unexpected credit balance")
 
 
 class CommandAdmissionController:

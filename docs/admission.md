@@ -53,6 +53,13 @@ quoted provider charge while incremental spend remains zero. Unknown pricing,
 unknown fit, unhealthy routes, insufficient credit, changed identity or limits,
 expired entitlement and unauthorized paid cost all fail closed.
 
+Admission binds the complete request-budget mechanism SHA-256 into its
+composite identity. Its receipt also retains the account identity and observed
+existing-credit balance needed by the request controller. Admission remains a
+separate check: its prompt-size observation does not replace exact counting of
+the serialized request and cumulative tool history. See [request-level budget
+control](request-budget.md).
+
 Operator authorization is separate from entitlement. Its strict record binds
 the route, whether paid execution is allowed and a new-spend ceiling; the plan
 must pin its canonical hash. An account subscription or balance is not itself
@@ -73,7 +80,6 @@ receipt. The public run command uses this validated path. The inaugural routes
 still require real pricing, entitlement, context/output and tool-control
 probes; mock subprocess tests establish controller behavior only. Independent
 review and installed end-to-end proof remain required before release. Real
-metered and existing-credit routes also need request-level budget evidence for
-the exact serialized request, schema/history overhead, reasoning-inclusive
-output and cumulative credit commitments; the current CLI wiring does not
-claim that provider readiness has been proven.
+metered and existing-credit routes must supply the implemented request-budget
+integration. The repository does not bundle or claim a verified provider
+tokenizer; route-specific mechanism evidence remains an inaugural-run gate.

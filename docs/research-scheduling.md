@@ -7,10 +7,13 @@ cell must cover the whole frozen suite before receiving a score. Whole-packet
 
 Preparation, planning, live execution and offline scoring have CLI commands.
 Live execution requires explicit runtime inputs, trusted admission command
-specifications and separate operator authorization files. Do not substitute
+specifications, separate operator authorization files, and request-budget
+mechanisms for every paid or existing-credit route. Do not substitute
 the diagnostic `pair` command for a primary research experiment.
 The [trusted admission contract](admission.md) describes the implemented
 validation and subprocess boundary and its remaining live-provider gates.
+The [request-budget contract](request-budget.md) describes exact-body counting,
+cumulative limits, and retained account-level credit commitments.
 
 ## Preparation and custody
 
@@ -95,6 +98,8 @@ an explicit runtime map, and loads trusted admission commands and operator
 authorizations from separate route maps. The runtime map has no key field.
 Relative file references resolve beside each map. Sources routes can be
 provided through a private route map or environment assignments.
+Request-budget route files and their trusted counter commands come from a
+fourth explicit map; they are never discovered from candidate-visible data.
 
 `scheduling.run_research` takes packets, segment plans, the frozen manifest and
 execution plan, base route configurations and a private output directory. Its
@@ -109,10 +114,14 @@ callback that merely echoes hashes is suitable for deterministic tests only;
 it is not a valid live provider admission probe.
 
 The controller binds its actual prompt/adapter/tool implementation through
-`research_implementation_sha256`. Resolved endpoint fingerprints and base
-configurations must match before execution. Grading keys are not accepted by
-the executor. The candidate receives only its segment, shared instructions,
-response schema and condition-authorized reference tools.
+`research_implementation_sha256`, including the declared package modules that
+implement canonicalization, evidence persistence, packet validation and
+reservation arithmetic. This digest is a declared package boundary, not a
+freeze of the Python runtime, operating system or transitive dependencies.
+Resolved endpoint fingerprints and base configurations must match before
+execution. Grading keys are not accepted by the executor. The candidate
+receives only its segment, shared instructions, response schema and
+condition-authorized reference tools.
 
 A POSIX lock prevents concurrent executors in the same experiment directory.
 Each reservation is recorded in the append-only attempt metadata before the
@@ -130,8 +139,9 @@ pre-request bounds; a post-call overrun check cannot undo an incurred charge.
 
 Completed cell artifacts bind their ordered attempt receipts, original packet,
 segment plan and execution plan. The final result manifest binds all cell
-artifacts and the ordered receipt set. These are execution records, not official
-scores. Offline scoring must verify the complete sealed cell and scorer/key
+artifacts, candidate and admission receipts, and the complete request-budget
+receipt set. These are execution records, not official scores. Offline scoring
+must verify the complete sealed cell and scorer/key
 bindings before reporting all three repeats, their sample standard deviation,
 and complete paired deltas. Never average unrelated suites together.
 

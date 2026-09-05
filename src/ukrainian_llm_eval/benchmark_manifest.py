@@ -530,7 +530,7 @@ def _normalise_route(value: Any) -> dict[str, Any]:
     fields = {
         "route_id", "route_sha256", "config_sha256", "conditions", "unsupported_condition_evidence",
         "capability_evidence_sha256", "pricing_evidence_sha256", "entitlement_evidence_sha256", "billing",
-        "admission_command_sha256", "operator_authorization_sha256",
+        "admission_command_sha256", "operator_authorization_sha256", "request_budget_mechanism_sha256",
     }
     route = _require_exact_dict(value, fields, "route")
     conditions = _require_unique_identifiers(_require_list(route["conditions"], "route.conditions"), "route.conditions")
@@ -545,6 +545,9 @@ def _normalise_route(value: Any) -> dict[str, Any]:
         for condition in sorted(unsupported)
     }
     billing = _normalise_billing(route["billing"], "route.billing")
+    request_budget = route["request_budget_mechanism_sha256"]
+    if billing["kind"] in {"metered", "existing_credit"} or request_budget is not None:
+        _require_digest(request_budget, "route.request_budget_mechanism_sha256")
     entitlement = route["entitlement_evidence_sha256"]
     _require_digest(entitlement, "route.entitlement_evidence_sha256")
     return {
@@ -558,6 +561,7 @@ def _normalise_route(value: Any) -> dict[str, Any]:
         "entitlement_evidence_sha256": entitlement,
         "admission_command_sha256": _require_digest(route["admission_command_sha256"], "route.admission_command_sha256"),
         "operator_authorization_sha256": _require_digest(route["operator_authorization_sha256"], "route.operator_authorization_sha256"),
+        "request_budget_mechanism_sha256": request_budget,
         "billing": billing,
     }
 
