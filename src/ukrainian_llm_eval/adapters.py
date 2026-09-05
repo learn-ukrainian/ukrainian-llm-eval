@@ -778,13 +778,14 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
             raise AdapterError("CLI invocation failed")
         observed_tools = {_tool_ref(tool) for tool in checked["tools"]} if condition == "sources" else set()
         responses, effective_model, tool_calls, usage = _parse_stream_json(completed.stdout, packet, observed_tools, checked["max_tool_calls"])
-    expected_model = _claude_context_model_mapping(completed.stdout).get(checked["model"], checked["model"])
+    model_mapping = _claude_context_model_mapping(completed.stdout)
+    expected_model = model_mapping.get(checked["model"], checked["model"])
     if effective_model != "unknown" and effective_model != expected_model:
         raise AdapterError("CLI model drift")
     session_id = _claude_session_identity(completed.stdout)
     return {
         "responses": responses,
-        "identity": {"adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "max_output_tokens_configured": checked["max_output_tokens"], "max_output_tokens_effective": "unknown"},
+        "identity": {"model_context_mapping": model_mapping, "adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "max_output_tokens_configured": checked["max_output_tokens"], "max_output_tokens_effective": "unknown"},
         "metrics": {"elapsed_seconds": elapsed, "input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"], "cost_usd": usage["cost_usd"], "tool_calls": tool_calls},
     }
 

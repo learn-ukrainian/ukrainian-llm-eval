@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters
+from .candidate_outcome import CANDIDATE_RESPONSE_ERROR
 from .mcp_proxy import REFERENCE_TOOLS
 
 KIMI_ADAPTER = "kimi"
@@ -163,6 +164,19 @@ class _CliProbe:
     binary_path: Path
     binary_sha256: str
     version: str
+
+
+@dataclass(frozen=True)
+class _ParsedKimiStream:
+    """Integrity-validated stream state plus the independently parsed answer."""
+
+    responses: dict[str, Any] | None
+    session_id: str
+    version: str
+    tool_calls: int
+    usage: dict[str, int | float | None]
+    answer_failure_reason: str | None
+    answer_content: str | None
 
 
 def _fail(message: str) -> KimiAdapterError:
@@ -817,15 +831,21 @@ def _usage_number(value: Any) -> int | float | None:
     return value
 
 
-def _parse_stream_json(
+def _parse_stream_envelope(
     stdout: str,
     packet: Mapping[str, Any],
     allowed_tools: set[str],
     max_tools: int,
     requested_alias: str,
     expected_version: str | None = None,
-) -> tuple[dict[str, Any], str, str, int, dict[str, int | float | None]]:
-    """Parse the exact Kimi stream-json subset and reject unsupported events."""
+) -> _ParsedKimiStream:
+    """Validate the stream envelope before parsing the final answer payload.
+
+    Stream version/session identity, tool-call policy, and usage evidence are
+    integrity controls.  Once those controls pass, answer JSON remains a
+    separate task-level result: malformed, fenced, or missing answer content
+    is returned as an invalid answer with the validated envelope state intact.
+    """
 
     if len(stdout.encode("utf-8", errors="strict")) > _MAX_STREAM_BYTES:
         raise _fail("Kimi CLI output exceeds limit")
@@ -932,13 +952,76 @@ def _parse_stream_json(
     if tool_results != set(tool_calls):
         raise _fail("CLI tool result evidence is incomplete")
     if not contents:
-        raise _fail("CLI response missing assistant content")
+        return _ParsedKimiStream(
+            responses=None,
+            session_id=session_id,
+            version=version,
+            tool_calls=len(tool_calls),
+            usage=usage,
+            answer_failure_reason="CLI response missing assistant content",
+            answer_content=None,
+        )
+    answer_content = "".join(contents)
     try:
-        payload = adapters._strict_json_loads("".join(contents))
-    except adapters.AdapterError as exc:
-        raise _fail("CLI response is not JSON") from exc
-    responses = adapters._extract_responses(payload, packet)
-    return responses, session_id, version, len(tool_calls), usage
+        payload = adapters._strict_json_loads(answer_content)
+    except adapters.AdapterError:
+        return _ParsedKimiStream(
+            responses=None,
+            session_id=session_id,
+            version=version,
+            tool_calls=len(tool_calls),
+            usage=usage,
+            answer_failure_reason="CLI response is not JSON",
+            answer_content=answer_content,
+        )
+    try:
+        responses = adapters._extract_responses(payload, packet)
+    except adapters.AdapterError:
+        return _ParsedKimiStream(
+            responses=None,
+            session_id=session_id,
+            version=version,
+            tool_calls=len(tool_calls),
+            usage=usage,
+            answer_failure_reason="CLI response schema mismatch",
+            answer_content=answer_content,
+        )
+    return _ParsedKimiStream(
+        responses=responses,
+        session_id=session_id,
+        version=version,
+        tool_calls=len(tool_calls),
+        usage=usage,
+        answer_failure_reason=None,
+        answer_content=answer_content,
+    )
+
+
+def _parse_stream_json(
+    stdout: str,
+    packet: Mapping[str, Any],
+    allowed_tools: set[str],
+    max_tools: int,
+    requested_alias: str,
+    expected_version: str | None = None,
+) -> tuple[dict[str, Any], str, str, int, dict[str, int | float | None]]:
+    """Compatibility wrapper retaining the original strict parser contract."""
+
+    parsed = _parse_stream_envelope(
+        stdout,
+        packet,
+        allowed_tools,
+        max_tools,
+        requested_alias,
+        expected_version,
+    )
+    if parsed.answer_failure_reason is not None:
+        raise _fail(parsed.answer_failure_reason)
+    # ``_parse_stream_envelope`` only returns ``None`` responses for an answer
+    # failure, which was raised above.  Keep the old tuple API for callers and
+    # existing parser tests.
+    assert parsed.responses is not None
+    return parsed.responses, parsed.session_id, parsed.version, parsed.tool_calls, parsed.usage
 
 
 def _settings_hash(condition: str, config: Mapping[str, Any]) -> str:
@@ -1099,7 +1182,7 @@ def run_kimi(
                 raise _fail("Kimi CLI authentication unavailable")
             raise _fail("Kimi CLI invocation failed")
         allowed_tools = {f"mcp__sources__{tool}" for tool in options.config["tools"]} if condition == "sources" else set()
-        responses, session_id, version, tool_calls, usage = _parse_stream_json(
+        parsed = _parse_stream_envelope(
             completed.stdout or "",
             packet,
             allowed_tools,
@@ -1107,7 +1190,28 @@ def run_kimi(
             options.config["model"],
             probe.version,
         )
-    return {
+        if parsed.answer_failure_reason is not None:
+            responses = {str(item["id"]): None for item in packet["items"]}
+            if evidence is not None:
+                evidence(
+                    "candidate_answer_outcome",
+                    {
+                        "failure_reason": CANDIDATE_RESPONSE_ERROR,
+                        "parser_reason": parsed.answer_failure_reason,
+                        "answer_content": parsed.answer_content,
+                        "session_id": parsed.session_id,
+                        "tool_calls": parsed.tool_calls,
+                        "usage": dict(parsed.usage),
+                    },
+                )
+        else:
+            assert parsed.responses is not None
+            responses = parsed.responses
+        session_id = parsed.session_id
+        version = parsed.version
+        tool_calls = parsed.tool_calls
+        usage = parsed.usage
+    trial: dict[str, Any] = {
         "responses": responses,
         "identity": {
             "adapter": KIMI_ADAPTER,
@@ -1148,6 +1252,9 @@ def run_kimi(
             "tool_calls": tool_calls,
         },
     }
+    if parsed.answer_failure_reason is not None:
+        trial.update(status="failed", failure_reason=CANDIDATE_RESPONSE_ERROR)
+    return trial
 
 
 # Short aliases make the adapter easy for the parent runner to integrate while

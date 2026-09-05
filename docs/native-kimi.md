@@ -59,6 +59,16 @@ isolation hashes. Metrics preserve CLI-reported token/cost values when present a
 stdout/stderr for the caller's private evidence store; the returned trial and
 normal failure reason contain no raw provider output.
 
+When the stream envelope has passed its version, session, identity, tool-policy,
+and tool-result checks but the assistant answer cannot be parsed, `run_kimi`
+returns the same failed trial with `failure_reason="candidate_response_error"`.
+Its response map contains one `null` for every packet item, while the verified
+native identity and usage/tool-call metrics remain available. The private
+`candidate_answer_outcome` evidence event records the parser reason and exact
+answer payload. This stable task-only reason lets a scheduler count the attempt
+and continue later independent repeats without treating the candidate as
+measurement-unready.
+
 ## Provisioning contract
 
 The supplied directory must be an absolute owner-only directory with mode
@@ -112,12 +122,19 @@ No resume flag (`-S`, `-r`, or `-c`) is passed. The CLI is invoked with an
 explicit alias, profile, empty skills directory, and `--output-format
 stream-json`.
 
-The parser accepts only the observed version, assistant, tool-result, and
-resume-hint events. It rejects retries, unrecognized meta events, malformed or
-unallowlisted tool calls, missing tool results, fallback/identity drift,
-duplicate JSON keys, blank lines, oversized output, and non-JSON final content.
-The final content is parsed with the shared strict JSON loader and
-`_extract_responses`, preserving exact packet IDs and response types.
+The parser validates the observed version, assistant, tool-result, and
+resume-hint events as an integrity envelope. It rejects retries, unrecognized
+meta events, malformed or unallowlisted tool calls, missing tool results,
+fallback/identity drift, duplicate JSON keys, blank lines, and oversized output.
+Those failures remain generic fail-closed adapter failures. After the envelope
+passes, the answer content is parsed separately with the shared strict JSON
+loader and `_extract_responses`, preserving exact packet IDs and response
+types. Fences, explanatory text, non-JSON content, missing content, and answer
+schema mismatches are never stripped, repaired, or retried; they produce the
+stable `candidate_response_error` failed/null result while retaining the
+verified envelope identity and metrics. The compatibility `_parse_stream_json`
+helper keeps its original strict exception behavior for callers that use the
+low-level parser directly.
 
 The installed CLI exposes no authoritative backend-model event and no usage
 event is guaranteed. The adapter keeps those values explicitly unknown and

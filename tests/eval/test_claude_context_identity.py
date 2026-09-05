@@ -36,7 +36,21 @@ def test_native_context_selector_records_requested_and_canonical_models(monkeypa
     trial = adapters.run_claude(_packet(), config, "closed-book", sources_url=None, prompt="Synthetic")
     assert trial["identity"]["requested_model"] == "claude-fixture[1m]"
     assert trial["identity"]["effective_model"] == "claude-fixture"
+    assert trial["identity"]["model_context_mapping"] == {"claude-fixture[1m]": "claude-fixture"}
     assert trial["responses"] == {"q": "A"}
+
+
+@pytest.mark.parametrize("attested", [True, False])
+def test_research_controller_requires_native_attestation_for_context_selector(attested):
+    from ukrainian_llm_eval.scheduling import _research_stop_reason
+
+    config = {"adapter": "claude", "model": "claude-fixture[1m]", "effort": "low", "max_tool_calls": 1}
+    identity = {"adapter": "claude", "effective_model": "claude-fixture", "effective_effort": "unknown"}
+    if attested:
+        identity["model_context_mapping"] = {"claude-fixture[1m]": "claude-fixture"}
+    result = {"status": "ok", "identity": identity, "metrics": {}}
+    route = {"billing": {"max_total_input_tokens": 100, "max_total_output_tokens": 100}}
+    assert _research_stop_reason(result, route, config) == (None if attested else "model_identity_drift")
 
 
 @pytest.mark.parametrize("mutation", ["missing", "wrong_canonical", "wrong_context", "extra_model", "assistant_drift"])

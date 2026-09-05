@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from ukrainian_llm_eval import native_kimi
+from ukrainian_llm_eval.candidate_outcome import CANDIDATE_RESPONSE_ERROR, is_candidate_response_failure
 
 
 def _packet() -> dict[str, Any]:
@@ -199,9 +200,88 @@ def test_run_subprocess_fixture_matches_trial_shape_and_reports_unknown_usage(tm
     assert result["metrics"]["output_tokens"] is None
     assert result["metrics"]["total_tokens"] is None
     assert result["metrics"]["cost_usd"] is None
+    assert "status" not in result
+    assert "failure_reason" not in result
     raw_result = dict(events)["cli_result"]
     assert "0.41.0" in raw_result["stdout"]
     assert "fixture-access-token" not in json.dumps(events)
+
+
+def test_invalid_answer_after_verified_stream_preserves_identity_metrics_and_evidence(tmp_path: Path) -> None:
+    answer_content = "```json\n{\"responses\":{\"opaque-1\":\"A\"}}\n```"
+    stream = [
+        {"role": "meta", "type": "system.version", "version": "0.41.0"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "id": "tool-1",
+                    "function": {"name": "mcp__sources__verify_word", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tool-1", "content": "{}"},
+        {
+            "role": "assistant",
+            "content": answer_content,
+            "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7, "cost_usd": 0.01},
+        },
+        {"role": "meta", "type": "session.resume_hint", "session_id": "fixture-session"},
+    ]
+    binary = _fixture_cli(tmp_path, stream=stream)
+    private = _provisioning(tmp_path)
+    events: list[tuple[str, Any]] = []
+    result = native_kimi.run_kimi(
+        _packet(),
+        _config(str(binary)),
+        "sources",
+        sources_url="https://sources.example.test/mcp",
+        prompt="Return only the requested JSON.",
+        private_env_path=private,
+        evidence=lambda kind, payload: events.append((kind, payload)),
+    )
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == CANDIDATE_RESPONSE_ERROR
+    assert result["responses"] == {"opaque-1": None}
+    assert is_candidate_response_failure(result, expected_response_ids=["opaque-1"])
+    assert result["identity"]["session_id"] == "fixture-session"
+    assert result["identity"]["cli_version"] == "0.41.0"
+    assert result["metrics"]["tool_calls"] == 1
+    assert result["metrics"]["total_tokens"] == 7
+    answer_event = dict(events)["candidate_answer_outcome"]
+    assert answer_event["failure_reason"] == CANDIDATE_RESPONSE_ERROR
+    assert answer_event["parser_reason"] == "CLI response is not JSON"
+    assert answer_event["answer_content"] == answer_content
+    assert answer_event["session_id"] == "fixture-session"
+    assert answer_event["tool_calls"] == 1
+
+
+def test_malformed_stream_envelope_cannot_be_admitted_as_task_failure() -> None:
+    malformed = [
+        {"role": "meta", "type": "system.version", "version": "0.41.0"},
+        {"role": "assistant", "content": "```json\n{}\n```"},
+    ]
+    with pytest.raises(native_kimi.KimiAdapterError, match="session resume hint"):
+        native_kimi._parse_stream_envelope(
+            "\n".join(json.dumps(item) for item in malformed) + "\n",
+            _packet(),
+            set(),
+            2,
+            "kimi-code/k2.5",
+            "0.41.0",
+        )
+    assert not is_candidate_response_failure(
+        {
+            "status": "failed",
+            "failure_reason": CANDIDATE_RESPONSE_ERROR,
+            "responses": {"opaque-1": None},
+            "identity": {"session_id": None},
+            "metrics": {"tool_calls": 0},
+        },
+        expected_response_ids=["opaque-1"],
+    )
 
 
 def test_run_uses_fresh_neutral_controls_and_exact_source_proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

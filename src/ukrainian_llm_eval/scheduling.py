@@ -8,6 +8,7 @@ import os
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
+from .candidate_outcome import is_candidate_response_failure
 from .core import ExamError, digest, read_json, write_private_json
 from .evidence import EvidenceStore
 from .execution import execute_attempt, route_fingerprint
@@ -21,6 +22,7 @@ def research_implementation_sha256():
         "admission.py", "admission_command.py", "request_budget.py", "spending_ledger.py",
         "benchmark_manifest.py", "core.py",
         "evidence.py", "gec.py",
+        "native_kimi.py", "responses_http.py", "candidate_outcome.py",
     )
     return digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names})
 
@@ -43,12 +45,18 @@ def _research_stop_reason(result, route, config):
     """An observed overrun/identity drift stops the entire experiment."""
     if result.get("failure_reason") == "request_budget_error":
         return "request_budget_overrun"
-    if result.get("status") != "ok":
+    if result.get("status") != "ok" and not is_candidate_response_failure(result):
         return None
     identity = result.get("identity", {})
     observed_model = identity.get("effective_model", identity.get("model"))
     if observed_model not in (None, "unknown", config["model"]):
-        return "model_identity_drift"
+        context_mapping = identity.get("model_context_mapping")
+        # The native adapter emits this only after checking initial selector,
+        # terminal canonicalModel, and the actual contextWindow together.
+        if not (config.get("adapter") == "claude" and identity.get("adapter") == "claude"
+                and isinstance(observed_model, str) and config["model"] == observed_model + "[1m]"
+                and context_mapping == {config["model"]: observed_model}):
+            return "model_identity_drift"
     observed_effort = identity.get("effective_effort")
     if observed_effort not in (None, "unknown", config["effort"]):
         return "effort_identity_drift"
@@ -156,7 +164,8 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
                     write_private_json(path, payload)
             failed |= result["status"] != "ok"
             yield {**trial, "status": result["status"], "resumed": slot in existing, "failed": failed}
-            if result["status"] != "ok" and slot not in existing:
+            if (result["status"] != "ok" and slot not in existing
+                    and not is_candidate_response_failure(result, expected_response_ids=[item["id"] for item in packet["items"]])):
                 return
 
 
@@ -406,7 +415,10 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                                                         "receipt_sha256": digest(receipt)})
                     yield {"status": "stopped", "reason": stop_reason}
                     return
-                if result["status"] != "ok":
+                candidate_failed = is_candidate_response_failure(
+                    result, expected_response_ids=[item["id"] for item in segment["items"]]
+                )
+                if result["status"] != "ok" and not candidate_failed:
                     failure = result.get("failure_reason", "segment_failed")
                     break
                 session_id = result.get("identity", {}).get("session_id")
@@ -416,6 +428,11 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                     yield {"status": "stopped", "reason": "missing_or_reused_session"}
                     return
                 seen_sessions.add(session_id)
+                if candidate_failed:
+                    # Preserve the failed cell under its frozen stop-cell
+                    # policy, but continue later independently scheduled repeats.
+                    failure = result["failure_reason"]
+                    break
                 from .adapters import AdapterError, _extract_responses
 
                 try:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters, gec
+from .candidate_outcome import is_candidate_response_failure
 from .core import ExamError, digest, validate_packet
 from .request_budget import RequestBudgetError
 
@@ -216,6 +217,30 @@ def run_exam(
                 **budget_options,
                 **evidence_options,
             )
+        if trial.get("status") == "failed":
+            expected_ids = [str(item["id"]) for item in checked_packet["items"]]
+            if not is_candidate_response_failure(trial, expected_response_ids=expected_ids):
+                raise ExamError("candidate response failure evidence is invalid")
+            identity = dict(trial["identity"])
+            if request_budget is not None:
+                budget_receipt = request_budget.finalize("failed")
+                identity["request_budget_receipt_sha256"] = digest(budget_receipt)
+            identity["preflight_tool_schema_sha256"] = capability["tool_schema_sha256"]
+            identity["preflight_mcp_server_identity_sha256"] = capability["mcp_server_identity_sha256"]
+            failure = {
+                "schema": _run_schema(checked_packet),
+                "packet_sha256": checked_packet["packet_sha256"],
+                "condition": condition,
+                "status": "failed",
+                "responses": dict(trial["responses"]),
+                "identity": identity,
+                "comparison": _comparison(checked_packet, checked_config),
+                "metrics": dict(trial["metrics"]),
+                "failure_reason": trial["failure_reason"],
+            }
+            if evidence is not None:
+                evidence("trial_failure", failure)
+            return failure
     except (adapters.AdapterError, ExamError, RequestBudgetError, OSError, TimeoutError) as exc:
         budget_receipt = None
         if request_budget is not None:
