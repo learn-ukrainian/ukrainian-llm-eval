@@ -1,0 +1,79 @@
+{
+  "schema": "ukrainian-llm-eval.benchmark-sources.v1",
+  "scope": "Ukrainian language only",
+  "release_execution_approved": false,
+  "suites": [
+    {
+      "id": "nmt-2022-demo-ukrainian",
+      "source_repository": "https://github.com/NLPForUA/ZNO",
+      "revision": "35d4c976599243b08dcd04303b557a7c2dc86068",
+      "source_path": "tests/ukrainian_raw.json",
+      "source_sha256": "46528ee0044ca7f46d7bf74f1739f5b63733c85d7551c5c0a0d97f3868613fd9",
+      "selection": {
+        "test_id": "515"
+      },
+      "license": "CC-BY-NC-4.0",
+      "denominator": {
+        "items": 20,
+        "single_choice": 15,
+        "matching": 5,
+        "points": 35
+      },
+      "metric": "raw exam points",
+      "limitations": [
+        "Public demonstration exam; training contamination cannot be excluded.",
+        "Not the full historical ZNO benchmark.",
+        "Official PDF typography verification is required before candidate packets are approved."
+      ]
+    },
+    {
+      "id": "ulp",
+      "source_repository": "https://huggingface.co/datasets/SGaleshchuk/ULP-Ukrainian-Language-Proficiency",
+      "revision": "64167054f01513cb0a40a7dd74f8dfc8d0ce5c3a",
+      "source_sha256": "fee7ea2131bf4ea1d576ec356bf9c6b616b0bf1e31fd0ebf014371105ea3ede0",
+      "license": "MIT",
+      "selection": "all rows",
+      "denominator": {
+        "items": 347,
+        "points": 347
+      },
+      "categories": {
+        "grammar": 153,
+        "syntax": 100,
+        "orthography": 49,
+        "vocabulary": 45
+      },
+      "metric": "exact-option accuracy",
+      "limitations": [
+        "Public expert-curated questions; training contamination cannot be excluded.",
+        "The source defines no held-out train/test separation.",
+        "License is the dataset publisher declaration; normative reference books are not included in this project."
+      ]
+    },
+    {
+      "id": "ua-gec-public-gec-only-test",
+      "source_repository": "https://github.com/grammarly/ua-gec",
+      "revision": "4757f72f192c4a41e4c8fb1d9690a948f87cf6d6",
+      "selection": "gec-only/test",
+      "license": "CC-BY-4.0",
+      "denominator": {
+        "sentences": 2704,
+        "documents": 166,
+        "annotated_errors": 6169
+      },
+      "metric": "span-correction F0.5",
+      "scorer": {
+        "repository": "https://github.com/unlp-workshop/unlp-2023-shared-task",
+        "revision": "fbff22905f8c9a3677c900d56599284151c029e6",
+        "path": "scripts/evaluate.py",
+        "sha256": "6e37b7a41a3a3c303647ca29507cd51b4b6deb9b0952c2a62d8e0b0374fae31a"
+      },
+      "limitations": [
+        "This is the public UA-GEC test, not the hidden UNLP 2023 test.",
+        "Preserve both annotators and all sentences.",
+        "Official scorer parity and tokenizer-resource hashes remain required before execution.",
+        "Live Sources may overlap with public correction examples; exact benchmark-answer lookup must not be exposed."
+      ]
+    }
+  ]
+}

@@ -105,3 +105,30 @@ def test_evidence_status_reports_intact_attempt_alongside_corruption(tmp_path):
     assert report["damaged"]["status"] == "corrupt"
     assert log.read_bytes() == original
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_ulp_cli_binds_source_and_keeps_category_outside_packet(tmp_path):
+    import hashlib
+
+    raw = tmp_path / "rows.jsonl"
+    raw.write_text(json.dumps({"question": "Оберіть слово.", "choices": ["один", "два", "три"],
+                               "answer": 0, "answer_letter": "А", "debug_id": "source-private-id",
+                               "category": "grammar"}, ensure_ascii=False) + "\n")
+    meta = tmp_path / "metadata.json"
+    meta.write_text(json.dumps(metadata()))
+    exam, sidecar = tmp_path / "exam.json", tmp_path / "sidecar.json"
+    args = ("import-ulp", "--input", raw, "--metadata", meta, "--output", exam, "--sidecar", sidecar)
+    assert run_cli(*args, "--source-sha256", "wrong").returncode == 2
+    assert not exam.exists() and not sidecar.exists()
+    source_hash = hashlib.sha256(raw.read_bytes()).hexdigest()
+    result = run_cli(*args, "--source-sha256", source_hash)
+    assert result.returncode == 0, result.stdout + result.stderr
+    packet, key = tmp_path / "packet.json", tmp_path / "key.json"
+    assert run_cli("prepare", "--exam", exam, "--questions", packet, "--key", key).returncode == 0
+    receipt = json.loads(sidecar.read_text())
+    assert receipt["source_sha256"] == source_hash
+    assert receipt["packet_sha256"] == json.loads(packet.read_text())["packet_sha256"]
+    assert "source-private-id" not in packet.read_text()
+    assert "grammar" not in packet.read_text()
+    assert "correct" not in packet.read_text()
+    assert run_cli(*args).returncode == 2

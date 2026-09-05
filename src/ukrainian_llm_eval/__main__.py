@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 
 from .core import (
     ExamError,
+    _duplicate_rejecting_pairs,
+    _reject_json_constant,
     compare_runs,
     digest,
     prepare_exam,
@@ -22,6 +25,7 @@ from .execution import execute_attempt
 from .importers import import_zno
 from .runner import preflight, validate_config
 from .scheduling import run_pair
+from .ulp import import_ulp, ulp_sidecar
 
 
 def parser() -> argparse.ArgumentParser:
@@ -36,6 +40,12 @@ def parser() -> argparse.ArgumentParser:
     imp.add_argument("--test-id", required=True)
     imp.add_argument("--metadata", type=Path, required=True)
     imp.add_argument("--output", type=Path, required=True)
+    ulp = commands.add_parser("import-ulp", help="Import ULP JSONL with separate source/category receipt")
+    ulp.add_argument("--input", type=Path, required=True)
+    ulp.add_argument("--metadata", type=Path, required=True)
+    ulp.add_argument("--output", type=Path, required=True)
+    ulp.add_argument("--sidecar", type=Path, required=True)
+    ulp.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
     prep = commands.add_parser("prepare", help="Separate a normalized exam into question-only packet and key")
     prep.add_argument("--exam", type=Path, required=True)
     prep.add_argument("--questions", type=Path, required=True)
@@ -106,6 +116,23 @@ def execute(args: argparse.Namespace) -> int:
         corrupt = sum(item.get("status") == "corrupt" for item in report.values())
         print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
         return 0 if complete == len(report) else 2
+    elif args.command == "import-ulp":
+        if args.output.resolve() == args.sidecar.resolve() or args.output.exists() or args.sidecar.exists():
+            raise ExamError("exam and sidecar must be distinct new files")
+        raw = args.input.read_bytes()
+        source_hash = hashlib.sha256(raw).hexdigest()
+        if args.source_sha256 is not None and args.source_sha256 != source_hash:
+            raise ExamError("ULP source hash mismatch")
+        rows = [json.loads(line, object_pairs_hook=_duplicate_rejecting_pairs,
+                           parse_constant=_reject_json_constant)
+                for line in raw.decode("utf-8").splitlines() if line.strip()]
+        exam = import_ulp(rows, read_json(args.metadata))
+        packet, _key = prepare_exam(exam)
+        sidecar = {**ulp_sidecar(rows), "source_sha256": source_hash,
+                   "packet_sha256": packet["packet_sha256"], "exam_sha256": digest(exam)}
+        write_private_json(args.output, exam)
+        write_private_json(args.sidecar, sidecar)
+        print(json.dumps({"imported_items": len(rows), "source_sha256": source_hash}))
     elif args.command == "import-zno":
         exam = import_zno(read_json(args.input), args.test_id, read_json(args.metadata))
         write_private_json(args.output, exam)
