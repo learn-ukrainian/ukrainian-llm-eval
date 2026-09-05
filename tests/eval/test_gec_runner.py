@@ -297,3 +297,36 @@ def test_gec_packet_cannot_carry_a_grading_key_and_mcq_schema_stays_unchanged() 
     assert adapters.response_schema(mcq_packet)["properties"]["responses"]["properties"]["q0001"]["anyOf"][0] == {
         "type": "string"
     }
+
+
+def test_gec_pair_resume_retains_interrupted_trial_and_never_repeats_completed_calls(tmp_path, monkeypatch):
+    from ukrainian_llm_eval import scheduling
+    from ukrainian_llm_eval.evidence import EvidenceStore
+
+    capability = {"tool_schema_sha256": "a" * 64, "mcp_server_identity_sha256": None}
+    monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: capability)
+    monkeypatch.setattr(scheduling, "preflight", lambda *args, **kwargs: capability)
+    calls = []
+
+    def transport(packet, config, condition, *, prompt, evidence, **kwargs):
+        calls.append(condition)
+        evidence("synthetic_transport", {"condition": condition})
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return _trial({item["id"]: item["text"] for item in packet["items"]})
+
+    monkeypatch.setattr(adapters, "run_chat_http", transport)
+    root = tmp_path / "pair"
+    with pytest.raises(KeyboardInterrupt):
+        list(scheduling.run_pair(_gec_packet(), _config(), root))
+    progress = list(scheduling.run_pair(_gec_packet(), _config(), root, resume=True))
+    assert calls == ["closed-book", "sources"]
+    assert progress[0]["status"] == "failed" and progress[-1]["failed"] is True
+    receipts = EvidenceStore(root / "evidence").verify_all()
+    assert receipts["r001-closed-book"]["terminal_status"] == "interrupted"
+    assert receipts["r001-closed-book"]["result"]["schema"] == "ua-gec.run.v1"
+    assert receipts["r001-sources"]["result"]["schema"] == "ua-gec.run.v1"
+    before = {path.name: path.read_bytes() for path in root.glob("*.json")}
+    list(scheduling.run_pair(_gec_packet(), _config(), root, resume=True))
+    assert calls == ["closed-book", "sources"]
+    assert before == {path.name: path.read_bytes() for path in root.glob("*.json")}

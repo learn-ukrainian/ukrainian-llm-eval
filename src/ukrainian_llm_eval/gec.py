@@ -290,7 +290,7 @@ def validate_gec_packet(packet: Any) -> None:
         if item_id != expected_id:
             raise ExamError("GEC packet item ids must be consecutive opaque ids starting at q0001")
         text = _required_text(item["text"], f"GEC packet.items[{index}].text")
-        if "\n" in text or "\r" in text:
+        if text.splitlines() != [text]:
             raise ExamError(f"GEC packet.items[{index}].text must contain one source sentence")
         items.append({"id": item_id, "text": text})
     expected_hash = digest({"schema": GEC_PACKET_SCHEMA, "items": items})
@@ -329,13 +329,22 @@ def validate_gec_key(packet: Any, key: Any) -> None:
         raise ExamError("GEC key content hash mismatch")
 
 
-def prepare_gec(m2_text: str, provenance: dict) -> tuple[dict, dict]:
+def prepare_gec(m2_text: str, provenance: dict, *, expected_sentences: int | None = None,
+                expected_documents: int | None = None) -> tuple[dict, dict]:
     """Prepare a source-only packet and private full-reference key from M2."""
 
+    for name, value, minimum in (("sentences", expected_sentences, 1), ("documents", expected_documents, 0)):
+        if value is not None and (type(value) is not int or value < minimum):
+            raise ExamError(f"expected {name} must be an integer at least {minimum}")
     normalized_provenance = _validate_provenance(provenance)
     blocks = _parse_m2(m2_text)
     source_sha256 = _source_sha256(m2_text)
+    headings = [block["text"] for block in blocks if _is_document_heading(block)]
     content_blocks = [block for block in blocks if not _is_document_heading(block)]
+    if expected_documents is not None and (len(headings) != expected_documents or len(set(headings)) != len(headings)):
+        raise ExamError("M2 document denominator mismatch or duplicate heading")
+    if expected_sentences is not None and len(content_blocks) != expected_sentences:
+        raise ExamError("M2 sentence denominator mismatch")
     if not content_blocks:
         raise ExamError("M2 input contains no scored source sentences")
 

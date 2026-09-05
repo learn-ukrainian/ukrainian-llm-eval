@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 
+from .benchmark_manifest import verify_benchmark
 from .core import (
     ExamError,
     _duplicate_rejecting_pairs,
@@ -49,6 +50,13 @@ def parser() -> argparse.ArgumentParser:
     ulp.add_argument("--output", type=Path, required=True)
     ulp.add_argument("--sidecar", type=Path, required=True)
     ulp.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
+    verifier = commands.add_parser("verify-benchmark", help="Reconstruct artifacts from a pinned source and supplied profile")
+    for name in ("profiles", "source", "questions", "key", "output"):
+        verifier.add_argument("--" + name, type=Path, required=True)
+    verifier.add_argument("--suite", required=True)
+    verifier.add_argument("--exam", type=Path)
+    verifier.add_argument("--overlay", type=Path)
+    verifier.add_argument("--profile-sha256", help="Require this canonical profile digest")
     typography = commands.add_parser("apply-typography", help="Apply a source-bound, independently verified emphasis/headings overlay")
     for name in ("exam", "overlay", "output", "receipt"):
         typography.add_argument("--" + name, type=Path, required=True)
@@ -57,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
     gec.add_argument("--provenance", type=Path, required=True)
     gec.add_argument("--questions", type=Path, required=True)
     gec.add_argument("--key", type=Path, required=True)
+    gec.add_argument("--expected-sentences", type=int)
+    gec.add_argument("--expected-documents", type=int)
     gec.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
     prep = commands.add_parser("prepare", help="Separate a normalized exam into question-only packet and key")
     prep.add_argument("--exam", type=Path, required=True)
@@ -135,6 +145,26 @@ def execute(args: argparse.Namespace) -> int:
         corrupt = sum(item.get("status") == "corrupt" for item in report.values())
         print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
         return 0 if complete == len(report) else 2
+    elif args.command == "verify-benchmark":
+        if args.output.exists():
+            raise ExamError("refusing to replace a benchmark manifest")
+        profiles = read_json(args.profiles)
+        if not isinstance(profiles, dict) or profiles.get("schema") != "ukrainian-llm-eval.benchmark-sources.v1":
+            raise ExamError("unsupported source profile collection")
+        suites = profiles.get("suites")
+        if not isinstance(suites, list) or any(not isinstance(item, dict) for item in suites):
+            raise ExamError("invalid source profile collection")
+        selected = [item for item in suites if item.get("id") == args.suite]
+        if len(selected) != 1:
+            raise ExamError("suite must select exactly one source profile")
+        if args.profile_sha256 is not None and digest(selected[0]) != args.profile_sha256:
+            raise ExamError("source profile digest mismatch")
+        report = verify_benchmark(selected[0], args.source.read_bytes(), read_json(args.questions),
+                                  read_json(args.key), exam=read_json(args.exam) if args.exam else None,
+                                  overlay=read_json(args.overlay) if args.overlay else None)
+        write_private_json(args.output, report)
+        print(json.dumps({"verification": report["verification"], "profile_sha256": report["profile_sha256"],
+                          "packet_sha256": report["packet_sha256"]}))
     elif args.command == "apply-typography":
         if args.output.resolve() == args.receipt.resolve() or args.output.exists() or args.receipt.exists():
             raise ExamError("typography output and receipt must be distinct new files")
@@ -148,7 +178,8 @@ def execute(args: argparse.Namespace) -> int:
         raw = args.input.read_bytes()
         if args.source_sha256 is not None and hashlib.sha256(raw).hexdigest() != args.source_sha256:
             raise ExamError("UA-GEC source hash mismatch")
-        packet, key = prepare_gec(raw.decode("utf-8"), read_json(args.provenance))
+        packet, key = prepare_gec(raw.decode("utf-8"), read_json(args.provenance),
+                                  expected_sentences=args.expected_sentences, expected_documents=args.expected_documents)
         write_private_json(args.questions, packet)
         write_private_json(args.key, key)
         print(json.dumps({"prepared_sentences": len(packet["items"]), "packet_sha256": packet["packet_sha256"]}))

@@ -142,3 +142,26 @@ def test_key_digest_is_bound_to_every_reference_record() -> None:
     _packet, key = prepare_gec(_m2(), _PROVENANCE)
     body = {field: key[field] for field in ("schema", "packet_sha256", "source_sha256", "provenance", "items")}
     assert key["key_sha256"] == digest(body)
+
+
+def test_expected_denominators_reject_slice_or_heading_drift() -> None:
+    packet, _ = prepare_gec(_m2(), _PROVENANCE, expected_sentences=3, expected_documents=1)
+    assert len(packet["items"]) == 3
+    with pytest.raises(ExamError, match="sentence denominator"):
+        prepare_gec(_m2(), _PROVENANCE, expected_sentences=4)
+    with pytest.raises(ExamError, match="document denominator"):
+        prepare_gec(_m2(), _PROVENANCE, expected_documents=2)
+    heading = _m2().split("\n\n", 1)[0] + "\n\n"
+    with pytest.raises(ExamError, match="duplicate heading"):
+        prepare_gec(heading + _m2(), _PROVENANCE, expected_sentences=3, expected_documents=2)
+    with pytest.raises(ExamError, match="denominator"):
+        prepare_gec(_m2().replace("# 0001", "# 001"), _PROVENANCE,
+                    expected_sentences=3, expected_documents=1)
+
+
+def test_packet_rejects_unicode_line_separator_before_execution() -> None:
+    packet, _ = prepare_gec(_m2(), _PROVENANCE)
+    packet["items"][0]["text"] += "\u2028"
+    packet["packet_sha256"] = digest({"schema": packet["schema"], "items": packet["items"]})
+    with pytest.raises(ExamError, match="one source sentence"):
+        validate_gec_packet(packet)

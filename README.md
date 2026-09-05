@@ -4,7 +4,7 @@ Reproducible evaluation of **Ukrainian language** models and agents, with option
 
 This project is under development toward its first release. It does not yet publish a complete model leaderboard. Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
 
-The initial engine supports multiple-choice and matching questions with separate answer-key custody, native Claude execution and compatible chat-completions endpoints. ZNO/NMT language, ULP proficiency and UA-GEC correction integration, additional native adapters and the public evaluation are tracked work. No other exam subjects are planned.
+The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude execution and compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
 ## Development installation
 
@@ -27,4 +27,4 @@ A candidate receives questions, while the separate scorer receives the answer ke
 
 Scores concern the selected tasks and datasets. They do not certify overall fluency or a CEFR level. Requested effort and verified effective effort are distinct, and unsupported tool access is recorded rather than simulated.
 
-See [running an exam](docs/running.md), [the delivery plan](docs/delivery-plan.md), [contributing](CONTRIBUTING.md), [security](SECURITY.md) and [release procedure](docs/releasing.md). Code is MIT licensed; datasets and reference material retain their own rights.
+See [benchmark preparation and scoring](docs/benchmarks.md), [running an exam](docs/running.md), [the delivery plan](docs/delivery-plan.md), [contributing](CONTRIBUTING.md), [security](SECURITY.md) and [release procedure](docs/releasing.md). Code is MIT licensed; datasets and reference material retain their own rights.

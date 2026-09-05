@@ -101,14 +101,16 @@ object containing `source_url`, `source_revision`, `license` and `exposure`.
 
 ```bash
 ukrainian-llm-eval prepare-gec --input runtime/test.m2 \
-  --provenance runtime/gec-provenance.json \
+  --provenance runtime/gec-provenance.json --expected-sentences 2696 --expected-documents 166 \
   --questions runtime/gec-questions.json --key runtime/gec-key.json
 ```
 
 Use `--source-sha256` to enforce an expected downloaded-file hash. The preparation
 retains all content sentences and both reference annotators, removes the pinned
 generator's document headings, and binds the private references to the packet.
-Both destinations must be new files. The candidate packet contains only opaque
+For a verified full-corpus preparation, enforce both expected counts; a mismatch
+or duplicate document heading fails before writing output. Generic custom M2
+inputs may deliberately omit these assertions. Both destinations must be new files. The candidate packet contains only opaque
 IDs and source sentences. Preparation alone does not execute or score corrections;
 see `scorer/README.md` for the isolated scorer runtime.
 
@@ -175,3 +177,71 @@ change or unsupported edit fails. The receipt binds before/after exams and packe
 the overlay and declared official-source hash; it contains no question or key text.
 Original option order, matching rows and answers are preserved. Emphasis in a text
 prompt is a documented representation of paper typography, not pixel equivalence.
+
+### M2 fixture format
+
+Official UA-GEC files can be supplied directly. For a synthetic plumbing test,
+M2 uses an `S ` source line followed by `A ` annotations and a blank block
+separator. Annotation fields are separated by three vertical bars:
+`start end|||category|||replacement|||REQUIRED|||-NONE-|||annotator_id`.
+Offsets are zero-based, with an exclusive end. Both annotators `0` and `1` must
+be represented for each sentence. A deletion has an **empty replacement field**;
+`-NONE-` is the no-op marker, not the deletion replacement. For example, this
+artificial edit tests deleting the second token, without making a grammatical
+correctness claim:
+
+```text
+S Я дуже люблю чай
+A 1 2|||U||||||REQUIRED|||-NONE-|||0
+A 1 2|||U||||||REQUIRED|||-NONE-|||1
+
+```
+
+An unchanged reference uses `A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0`
+(and an equivalent line for annotator `1`). Invalid field counts or unsupported
+annotator IDs fail with a sanitized input error. Never repair official reference
+annotations to improve a model's score.
+
+Span-correction scores depend on edit alignment as well as corrected text. A
+synthetic repeated-token case produced the same corrected text from two possible
+deletion spans; ERRANT selected one while the reference specified the other,
+resulting in a false-positive/false-negative pair. Preserve official references
+and disclose this metric limitation instead of adjusting references after seeing
+a model's result.
+
+## Verify complete benchmark artifacts
+
+After preparation, reconstruct the artifacts from the original downloaded bytes
+and a selected source profile. This checks exact question/order/key identity and
+declared denominators, rather than trusting hashes recomputed from modified input.
+
+```bash
+ukrainian-llm-eval verify-benchmark --profiles benchmarks/sources.json \
+  --suite nmt-2022-demo-ukrainian --source runtime/nmt-source.json \
+  --exam runtime/nmt-restored.json --overlay runtime/nmt-reviewed-overlay.json \
+  --questions runtime/nmt-questions.json --key runtime/nmt-key.json \
+  --output runtime/nmt-benchmark-manifest.json
+```
+
+For ULP, use suite `ulp`, its original JSONL and normalized exam, without an overlay.
+For GEC, use `ua-gec-public-gec-only-test`, its original M2, packet and key, with
+neither `--exam` nor `--overlay`. `--profile-sha256` can enforce a previously
+approved canonical profile digest. The output must be new and remains private.
+Manifest `key_sha256` hashes the entire supplied key object; GEC's internal
+`key_sha256` field separately hashes its key body and has a different value.
+
+The manifest states `matches_supplied_profile`: a custom profile can intentionally
+select a synthetic fixture and gets a different profile identity. It is not a
+release-admission certificate or an independent PDF audit. Freeze the reviewed
+profile, fidelity receipts, routes, limits and scorer identity before execution.
+
+### Primary research runs versus diagnostics
+
+The `run`/`pair` examples above execute one whole packet per session and are useful
+engine or agent-endurance diagnostics. The primary research experiment requires
+fresh sessions per complete NMT task, ULP question and GEC document, preserving all
+material needed by each unit. Every cell must cover the full fixed dataset; GEC
+responses are reassembled in canonical order and scored once against both
+annotators. This segmented research scheduler is tracked in issue #3 and is not
+yet supplied by the whole-packet `pair` command. Do not label a partial dataset or
+a whole-packet endurance run as the primary research protocol.
