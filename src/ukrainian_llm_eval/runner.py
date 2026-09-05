@@ -15,6 +15,7 @@ from typing import Any
 
 from . import adapters, gec
 from .core import ExamError, digest, validate_packet
+from .request_budget import RequestBudgetError
 
 GEC_RUN_SCHEMA = "ua-gec.run.v1"
 GEC_COMPARISON_SCHEMA = "ua-gec.comparison.v1"
@@ -142,6 +143,7 @@ def run_exam(
     *,
     sources_url: str | None = None,
     evidence: Callable[[str, Any], None] | None = None,
+    request_budget: Any = None,
 ) -> dict[str, Any]:
     """Run exactly one fresh exam session under the requested condition.
 
@@ -166,6 +168,8 @@ def run_exam(
             evidence("prompt", {"text": prompt, "response_schema": adapters.response_schema(checked_packet)})
         evidence_options = {"evidence": evidence} if evidence is not None else {}
         if checked_config["adapter"] == "claude":
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the native CLI adapter")
             trial = adapters.run_claude(
                 checked_packet,
                 checked_config,
@@ -175,20 +179,30 @@ def run_exam(
                 **evidence_options,
             )
         else:
+            budget_options = {"request_budget": request_budget} if request_budget is not None else {}
             trial = adapters.run_chat_http(
                 checked_packet,
                 checked_config,
                 condition,
                 sources_url=sources_url,
                 prompt=prompt,
+                **budget_options,
                 **evidence_options,
             )
-    except (adapters.AdapterError, ExamError, OSError, TimeoutError) as exc:
+    except (adapters.AdapterError, ExamError, RequestBudgetError, OSError, TimeoutError) as exc:
+        budget_receipt = None
+        if request_budget is not None:
+            budget_receipt = request_budget.finalize("failed")
         failure = _failure(checked_packet, checked_config, condition, exc)
+        if budget_receipt is not None:
+            failure["identity"]["request_budget_receipt_sha256"] = digest(budget_receipt)
         if evidence is not None:
             evidence("trial_failure", failure)
         return failure
     identity = dict(trial["identity"])
+    if request_budget is not None:
+        budget_receipt = request_budget.finalize("completed")
+        identity["request_budget_receipt_sha256"] = digest(budget_receipt)
     identity["preflight_tool_schema_sha256"] = capability["tool_schema_sha256"]
     identity["preflight_mcp_server_identity_sha256"] = capability["mcp_server_identity_sha256"]
     return {

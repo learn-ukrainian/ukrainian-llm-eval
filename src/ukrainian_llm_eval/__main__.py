@@ -8,7 +8,13 @@ import json
 import os
 from pathlib import Path
 
-from .benchmark_manifest import verify_benchmark
+from .admission import CommandAdmissionController
+from .benchmark_manifest import (
+    build_execution_plan,
+    build_experiment_manifest,
+    validate_execution_plan,
+    verify_benchmark,
+)
 from .core import (
     ExamError,
     _duplicate_rejecting_pairs,
@@ -26,8 +32,11 @@ from .execution import execute_attempt
 from .gec import prepare_gec, validate_gec_packet
 from .gec_scoring import score_gec_attempt
 from .importers import import_zno
+from .request_budget import RequestBudgetController
+from .research_scoring import score_sealed_experiment
 from .runner import preflight, validate_config
-from .scheduling import run_pair
+from .scheduling import run_pair, run_research
+from .segmentation import derive_segment_plan
 from .typography import apply_typography
 from .ulp import import_ulp, ulp_sidecar
 
@@ -39,6 +48,49 @@ def parser() -> argparse.ArgumentParser:
         "See docs/running.md. Exit 0: success; 2: invalid input or failed trial.",
     )
     commands = cli.add_subparsers(dest="command", required=True)
+    segment = commands.add_parser("prepare-segments", help="Freeze a complete task/question/document partition")
+    for name in ("questions", "denominator", "output"):
+        segment.add_argument("--" + name, type=Path, required=True)
+    segment.add_argument("--suite", required=True)
+    segment.add_argument("--protocol-sha256", required=True)
+    segment.add_argument("--gec-source", type=Path, help="Original private M2; preparation only, never executor input")
+    research_plan = commands.add_parser("plan-research", help="Freeze experiment and exact conservative reservations; no provider calls")
+    for name in ("specification", "manifest", "execution-plan"):
+        research_plan.add_argument("--" + name, type=Path, required=True)
+    research_run = commands.add_parser(
+        "run-research",
+        help="Execute a frozen research plan with explicitly supplied runtime inputs and admission commands",
+    )
+    research_run.add_argument("--inputs", "--runtime-inputs", dest="inputs", type=Path, required=True,
+                              help="JSON map of packet, segment-plan and route-config files; never includes keys")
+    for name in ("manifest", "execution-plan", "execution-root"):
+        research_run.add_argument("--" + name, type=Path, required=True)
+    research_run.add_argument(
+        "--admission-specs", "--admission-commands", dest="admission_specs", type=Path, required=True,
+        help="JSON route map to trusted admission-command specification files",
+    )
+    research_run.add_argument(
+        "--operator-authorizations", "--authorizations", dest="operator_authorizations", type=Path, required=True,
+        help="JSON route map to separate operator authorization files",
+    )
+    research_run.add_argument(
+        "--request-budgets", type=Path,
+        help="Route map to frozen request-budget mechanisms and trusted local counter commands; required by paid/credit routes",
+    )
+    research_run.add_argument(
+        "--sources-urls", "--sources-routes", dest="sources_urls", type=Path,
+        help="Optional JSON route-to-URL map; values may be env:NAME references",
+    )
+    research_run.add_argument(
+        "--sources-url-env", action="append", default=[], metavar="ROUTE=ENV",
+        help="Resolve a Sources URL from an environment variable (repeat; ENV alone applies to every Sources route)",
+    )
+    research_run.add_argument("--resume", action="store_true",
+                              help="Resume the frozen root without retrying started segments")
+    research_score = commands.add_parser("score-research", help="Verify sealed full-cell evidence and score offline")
+    for name in ("inputs", "manifest", "execution-plan", "execution-root", "scorer-bindings", "output"):
+        research_score.add_argument("--" + name, type=Path, required=True)
+    research_score.add_argument("--scoring-evidence-dir", type=Path, help="Required for isolated UA-GEC scoring")
     imp = commands.add_parser("import-zno", help="Import one whole NLPForUA/ZNO paper, rejecting unsupported tasks")
     imp.add_argument("--input", type=Path, required=True)
     imp.add_argument("--test-id", required=True)
@@ -135,8 +187,230 @@ def public_aggregate(report: dict) -> dict:
     return result
 
 
+def _research_scoring_inputs(path):
+    spec = read_json(path)
+    fields = {"schema", "packets", "segment_plans", "keys", "configs"}
+    if not isinstance(spec, dict) or set(spec) != fields or spec["schema"] != "ukrainian-llm-eval.research-scoring-inputs.v1":
+        raise ExamError("invalid research scoring input map")
+    loaded = {}
+    for field in fields - {"schema"}:
+        if not isinstance(spec[field], dict) or not spec[field]:
+            raise ExamError("invalid research scoring file map")
+        loaded[field] = {}
+        for identifier, relative in spec[field].items():
+            if not isinstance(identifier, str) or not isinstance(relative, str) or not relative:
+                raise ExamError("invalid research scoring file reference")
+            loaded[field][identifier] = read_json(path.parent / relative)
+    return loaded
+
+
+_RESEARCH_RUNTIME_INPUTS_SCHEMA = "ukrainian-llm-eval.research-runtime-inputs.v1"
+_RESEARCH_ADMISSION_SPECS_SCHEMA = "ukrainian-llm-eval.research-admission-specs.v1"
+_RESEARCH_AUTHORIZATIONS_SCHEMA = "ukrainian-llm-eval.research-operator-authorizations.v1"
+_RESEARCH_REQUEST_BUDGETS_SCHEMA = "ukrainian-llm-eval.research-request-budgets.v1"
+_RESEARCH_SOURCES_SCHEMA = "ukrainian-llm-eval.research-sources-inputs.v1"
+
+
+def _research_path_map(value, base: Path, label: str):
+    """Load a strict identifier-to-JSON-file map relative to its map file."""
+    if not isinstance(value, dict) or not value:
+        raise ExamError(f"invalid {label} file map")
+    loaded = {}
+    for identifier, relative in value.items():
+        if not isinstance(identifier, str) or not identifier:
+            raise ExamError(f"invalid {label} file-map identifier")
+        if not isinstance(relative, str) or not relative:
+            raise ExamError(f"invalid {label} file reference")
+        loaded[identifier] = read_json(base / relative)
+    return loaded
+
+
+def _research_runtime_inputs(path: Path):
+    """Load candidate-visible runtime inputs while rejecting grading keys."""
+    spec = read_json(path)
+    required = {"schema", "packets", "segment_plans", "configs"}
+    optional = {"sources_urls"}
+    if not isinstance(spec, dict) or set(spec) - required - optional or not required <= set(spec):
+        raise ExamError("invalid research runtime input map")
+    if spec["schema"] != _RESEARCH_RUNTIME_INPUTS_SCHEMA:
+        raise ExamError("unsupported research runtime input map")
+    loaded = {
+        "packets": _research_path_map(spec["packets"], path.parent, "packet"),
+        "segment_plans": _research_path_map(spec["segment_plans"], path.parent, "segment-plan"),
+        "configs": _research_path_map(spec["configs"], path.parent, "configuration"),
+    }
+    if "sources_urls" in spec:
+        loaded["sources_urls"] = _resolve_research_sources(spec["sources_urls"])
+    else:
+        loaded["sources_urls"] = {}
+    return loaded
+
+
+def _research_admission_map(path: Path, *, schema: str, field: str, label: str, allow_empty: bool = False):
+    """Load route-specific trusted integration files beside their map."""
+    spec = read_json(path)
+    expected = {"schema", field}
+    if not isinstance(spec, dict) or set(spec) != expected or spec["schema"] != schema:
+        raise ExamError(f"invalid research {label} map")
+    if allow_empty and spec[field] == {}:
+        return {}
+    return _research_path_map(spec[field], path.parent, label)
+
+
+def _resolve_research_sources(spec):
+    if not isinstance(spec, dict):
+        raise ExamError("invalid research Sources route map")
+    result = {}
+    for route_id, value in spec.items():
+        if not isinstance(route_id, str) or not route_id or not isinstance(value, str) or not value.strip():
+            raise ExamError("invalid research Sources route")
+        value = value.strip()
+        if value.startswith("env:"):
+            env_name = value[4:]
+            if (not env_name or not env_name.isascii() or not env_name.replace("_", "a").isalnum()
+                    or env_name[0].isdigit()):
+                raise ExamError("invalid Sources environment name")
+            endpoint = os.environ.get(env_name)
+            if not endpoint:
+                raise ExamError("Sources route environment variable is not set")
+            result[route_id] = endpoint
+        else:
+            result[route_id] = value
+    return result
+
+
+def _research_sources_urls(path: Path | None):
+    if path is None:
+        return {}
+    spec = read_json(path)
+    if isinstance(spec, dict) and "schema" in spec:
+        if spec.get("schema") != _RESEARCH_SOURCES_SCHEMA or set(spec) != {"schema", "urls"}:
+            raise ExamError("invalid research Sources route map")
+        spec = spec["urls"]
+    return _resolve_research_sources(spec)
+
+
+def _research_sources_from_env(assignments, routes):
+    """Resolve ROUTE=ENV assignments without exposing endpoint values."""
+    source_routes = {route["route_id"] for route in routes if "sources" in route["conditions"]}
+    result = {}
+    for assignment in assignments:
+        if not isinstance(assignment, str) or not assignment:
+            raise ExamError("invalid Sources environment assignment")
+        if "=" in assignment:
+            route_id, env_name = assignment.split("=", 1)
+            if not route_id or not env_name:
+                raise ExamError("invalid Sources environment assignment")
+            route_ids = {route_id}
+        else:
+            env_name = assignment
+            route_ids = source_routes
+        if (not env_name.isascii() or not env_name.replace("_", "a").isalnum()
+                or env_name[0].isdigit()):
+            raise ExamError("invalid Sources environment name")
+        endpoint = os.environ.get(env_name)
+        if not endpoint:
+            raise ExamError("Sources route environment variable is not set")
+        for route_id in route_ids:
+            if route_id in result and result[route_id] != endpoint:
+                raise ExamError("duplicate Sources route assignment")
+            result[route_id] = endpoint
+    return result
+
+
+def _merge_research_sources(*maps):
+    result = {}
+    for source_map in maps:
+        for route_id, endpoint in source_map.items():
+            if route_id in result and result[route_id] != endpoint:
+                raise ExamError("conflicting Sources route assignment")
+            result[route_id] = endpoint
+    return result
+
+
 def execute(args: argparse.Namespace) -> int:
-    if args.command == "evidence-status":
+    if args.command == "prepare-segments":
+        if args.output.exists():
+            raise ExamError("refusing to replace a segment plan")
+        plan = derive_segment_plan(read_json(args.questions), suite_id=args.suite,
+                                   protocol_sha256=args.protocol_sha256, denominator=read_json(args.denominator),
+                                   gec_source=args.gec_source.read_text(encoding="utf-8") if args.gec_source else None)
+        write_private_json(args.output, plan)
+        print(json.dumps({"segments": len(plan["segments"]), "segment_plan_sha256": plan["segment_plan_sha256"]}))
+    elif args.command == "plan-research":
+        if args.manifest.resolve() == args.execution_plan.resolve() or args.manifest.exists() or args.execution_plan.exists():
+            raise ExamError("research manifest and execution plan must be distinct new files")
+        spec = read_json(args.specification)
+        required = {"protocol_sha256", "suites", "routes", "scorer_sha256", "tool_policy_sha256"}
+        if not isinstance(spec, dict) or not required <= set(spec) or set(spec) - required - {"repeats", "new_spend_cap_micro_usd"}:
+            raise ExamError("invalid research specification fields")
+        manifest = build_experiment_manifest(**spec)
+        plan = build_execution_plan(manifest)
+        write_private_json(args.manifest, manifest)
+        write_private_json(args.execution_plan, plan)
+        print(json.dumps({"cells": len(plan["cells"]), "reservation_total_micro_usd": plan["reservation_total_micro_usd"],
+                          "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
+                          "execution_plan_sha256": plan["execution_plan_sha256"], "execution_admitted": False}))
+    elif args.command == "run-research":
+        runtime = _research_runtime_inputs(args.inputs)
+        manifest = read_json(args.manifest)
+        plan = read_json(args.execution_plan)
+        validate_execution_plan(manifest, plan)
+        specs = _research_admission_map(
+            args.admission_specs,
+            schema=_RESEARCH_ADMISSION_SPECS_SCHEMA,
+            field="routes",
+            label="admission-command",
+        )
+        authorizations = _research_admission_map(
+            args.operator_authorizations,
+            schema=_RESEARCH_AUTHORIZATIONS_SCHEMA,
+            field="routes",
+            label="operator-authorization",
+        )
+        budget_specs = {}
+        if args.request_budgets is not None:
+            budget_specs = _research_admission_map(
+                args.request_budgets,
+                schema=_RESEARCH_REQUEST_BUDGETS_SCHEMA,
+                field="routes",
+                label="request-budget",
+                allow_empty=True,
+            )
+        if (not isinstance(manifest, dict) or not isinstance(manifest.get("routes"), list)
+                or any(not isinstance(route, dict) or not isinstance(route.get("route_id"), str)
+                       for route in manifest["routes"])):
+            raise ExamError("invalid research manifest")
+        sources_urls = _merge_research_sources(
+            runtime["sources_urls"],
+            _research_sources_urls(args.sources_urls),
+            _research_sources_from_env(args.sources_url_env, manifest["routes"]),
+        )
+        controller = CommandAdmissionController(specs, authorizations)
+        budget_controller = RequestBudgetController(budget_specs)
+        failed = False
+        for progress in run_research(
+            runtime["packets"], runtime["segment_plans"], manifest, plan, runtime["configs"],
+            args.execution_root, admission_probe=controller, request_budget_controller=budget_controller,
+            sources_urls=sources_urls, resume=args.resume,
+        ):
+            print(json.dumps(progress, ensure_ascii=False), flush=True)
+            failed |= progress.get("status") != "ok"
+        return 2 if failed else 0
+    elif args.command == "score-research":
+        if args.output.exists():
+            raise ExamError("refusing to replace a research score report")
+        values = _research_scoring_inputs(args.inputs)
+        report = score_sealed_experiment(values["packets"], values["segment_plans"], values["keys"],
+                                          read_json(args.manifest), read_json(args.execution_plan), values["configs"],
+                                          args.execution_root, scorer_bindings=read_json(args.scorer_bindings),
+                                          scoring_evidence_root=args.scoring_evidence_dir)
+        write_private_json(args.output, report)
+        complete = sum(cell["status"] == "ok" for cell in report["cells"])
+        print(json.dumps({"cells": len(report["cells"]), "cells_scored": complete,
+                          "complete_triples": len(report["summaries"]), "complete_pairs": len(report["paired_deltas"])}))
+        return 0 if complete == len(report["cells"]) else 2
+    elif args.command == "evidence-status":
         if not args.evidence_dir.is_dir():
             raise ExamError("evidence directory must already exist")
         report = EvidenceStore(args.evidence_dir).inspect_all()

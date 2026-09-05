@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,8 @@ def normalized_reason(exc: BaseException) -> str:
     """Keep failures useful without exporting command output or credentials."""
     if str(exc) in {_TOOL_POLICY_ERROR, _TOOL_LIMIT_ERROR}:
         return str(exc)
+    if exc.__class__.__name__ == "RequestBudgetError":
+        return "request_budget_error"
     if isinstance(exc, subprocess.TimeoutExpired):
         return "timeout"
     if isinstance(exc, urllib.error.HTTPError):
@@ -718,14 +721,15 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout: int, max_bytes: int, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
+def _http_json(url: str, payload: Mapping[str, Any] | bytes, *, key: str | None, timeout: float, max_bytes: int, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise AdapterError("HTTP endpoint scheme invalid")
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = "Bearer " + key
-    request = urllib.request.Request(url, data=canonical(payload).encode("utf-8"), headers=headers, method="POST")
+    request_bytes = payload if isinstance(payload, bytes) else canonical(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=request_bytes, headers=headers, method="POST")
     try:
         opener = urllib.request.build_opener(_RejectRedirects())
         with opener.open(request, timeout=timeout) as response:  # nosec B310 -- operator-configured endpoint
@@ -745,7 +749,7 @@ def _http_json(url: str, payload: Mapping[str, Any], *, key: str | None, timeout
     return value
 
 
-def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
+def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, request_budget: Any = None) -> dict[str, Any]:
     """Run one controller-mediated chat-completions session.
 
     Tool calls are checked before the MCP broker receives them; model text can
@@ -774,7 +778,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     max_bytes = min(2_000_000, max(65_536, checked["max_output_tokens"] * 64))
     response_name = "ua_gec_responses" if packet.get("schema") == GEC_PACKET_SCHEMA else "zno_nmt_responses"
-    request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, "max_tokens": checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
+    output_parameter = request_budget.output_parameter_name if request_budget is not None else "max_tokens"
+    request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, output_parameter: checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
     if checked["effort"] is not None:
         request_base["reasoning_effort"] = checked["effort"]
     if condition == "sources":
@@ -784,6 +789,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     retrieval_digests: list[str] = []
     usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     usage_known = {key: False for key in usage_totals}
+    reported_cost = Decimal(0)
+    reported_cost_known = False
     response: dict[str, Any] | None = None
     while True:
         remaining = deadline - time.monotonic()
@@ -791,8 +798,17 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             raise AdapterError("HTTP total timeout")
         if evidence is not None:
             evidence("completion_request", request_base)
+        prepared = None
+        request_payload: Mapping[str, Any] | bytes = request_base
+        if request_budget is not None:
+            request_payload, prepared = request_budget.commit_request(request_base)
+            if evidence is not None:
+                evidence("request_budget_commitment", prepared)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AdapterError("HTTP total timeout")
         http_options = {"evidence": evidence} if evidence is not None else {}
-        body = _http_json(endpoint, request_base, key=key, timeout=max(1, int(remaining)), max_bytes=max_bytes, **http_options)
+        body = _http_json(endpoint, request_payload, key=key, timeout=remaining, max_bytes=max_bytes, **http_options)
         if evidence is not None:
             evidence("completion_response", body)
         if body.get("model") != checked["model"]:
@@ -814,6 +830,23 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
                 if value is not None:
                     usage_totals[usage_key] += value
                     usage_known[usage_key] = True
+            raw_cost = body_usage.get("cost")
+            if raw_cost is not None:
+                if isinstance(raw_cost, bool) or not isinstance(raw_cost, (int, float, str)):
+                    raise AdapterError("HTTP completion cost invalid")
+                try:
+                    round_cost = Decimal(str(raw_cost))
+                except InvalidOperation as exc:
+                    raise AdapterError("HTTP completion cost invalid") from exc
+                if not round_cost.is_finite() or round_cost < 0:
+                    raise AdapterError("HTTP completion cost invalid")
+                reported_cost += round_cost
+                reported_cost_known = True
+        round_tool_calls = len(calls) if isinstance(calls, list) else 0
+        if request_budget is not None:
+            observation = request_budget.observe(body_usage, tool_calls=round_tool_calls)
+            if evidence is not None:
+                evidence("request_budget_observation", observation)
         if not calls:
             response = body
             content = message.get("content")
@@ -852,16 +885,21 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             if evidence is not None:
                 evidence("tool_request", {"name": name, "arguments": arguments, "id": call.get("id")})
             broker_result = _mcp_call(str(sources_url), name, arguments, max(1, int(remaining)))
+            serialized_result = (
+                request_budget.serialize_tool_result(broker_result)
+                if request_budget is not None
+                else canonical(broker_result)
+            )
             if evidence is not None:
                 evidence("tool_result", {"id": call.get("id"), "result": broker_result})
             retrieval_digests.append(digest(broker_result))
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id:
                 raise AdapterError("HTTP tool call id invalid")
-            messages.append({"role": "tool", "tool_call_id": call_id, "content": canonical(broker_result)})
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": serialized_result})
     assert response is not None
     return {
         "responses": responses,
         "identity": {"adapter": "chat-http", "harness": "chat-http", "model": checked["model"], "provider": checked.get("provider") or "chat-http", "session_id": str(uuid.uuid4()), "requested_model": checked["model"], "effective_model": checked["model"], "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": None, "tool_schema_sha256": digest(mcp_tools), "mcp_server_identity_sha256": identity, "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "retrieval_receipt_sha256": digest(retrieval_digests) if retrieval_digests else None},
-        "metrics": {"elapsed_seconds": time.monotonic() - started, "input_tokens": usage_totals["input_tokens"] if usage_known["input_tokens"] else None, "output_tokens": usage_totals["output_tokens"] if usage_known["output_tokens"] else None, "total_tokens": usage_totals["total_tokens"] if usage_known["total_tokens"] else None, "cost_usd": None, "tool_calls": tool_calls},
+        "metrics": {"elapsed_seconds": time.monotonic() - started, "input_tokens": usage_totals["input_tokens"] if usage_known["input_tokens"] else None, "output_tokens": usage_totals["output_tokens"] if usage_known["output_tokens"] else None, "total_tokens": usage_totals["total_tokens"] if usage_known["total_tokens"] else None, "cost_usd": float(reported_cost) if reported_cost_known else None, "tool_calls": tool_calls},
     }

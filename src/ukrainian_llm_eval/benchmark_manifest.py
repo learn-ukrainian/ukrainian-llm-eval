@@ -26,6 +26,15 @@ from .typography import apply_typography
 from .ulp import import_ulp
 
 MANIFEST_SCHEMA = "ukrainian-llm-eval.benchmark-manifest.v1"
+EXPERIMENT_MANIFEST_SCHEMA = "ukrainian-llm-eval.experiment-manifest.v1"
+EXECUTION_PLAN_SCHEMA = "ukrainian-llm-eval.execution-plan.v1"
+DEFAULT_NEW_SPEND_CAP_MICRO_USD = 10_000_000
+
+# Costs are represented as integer micro-dollars.  Token rates are per million
+# tokens because a per-token price is commonly below one micro-dollar.
+_MILLION_TOKENS = 1_000_000
+_CONDITIONS = ("closed-book", "sources")
+_IDENTIFIER_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 
 _SUPPORTED_SUITES = frozenset({
     "nmt-2022-demo-ukrainian",
@@ -350,4 +359,424 @@ def verify_benchmark(
     }
 
 
-__all__ = ["MANIFEST_SCHEMA", "verify_benchmark"]
+def _require_identifier(value: Any, where: str) -> str:
+    text = _require_string(value, where)
+    if _IDENTIFIER_RE.fullmatch(text) is None:
+        raise ExamError(f"{where} must be a lower-case identifier of at most 64 characters")
+    return text
+
+
+def _require_nonnegative_integer(value: Any, where: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ExamError(f"{where} must be a non-negative integer")
+    return value
+
+
+def _require_list(value: Any, where: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ExamError(f"{where} must be an array")
+    return value
+
+
+def _require_unique_identifiers(values: list[Any], where: str) -> list[str]:
+    result = [_require_identifier(value, f"{where}[{index}]") for index, value in enumerate(values)]
+    if len(set(result)) != len(result):
+        raise ExamError(f"{where} contains duplicate identifiers")
+    return result
+
+
+def _normalise_segment_plan(value: Any, suite_id: str) -> dict[str, Any]:
+    """Validate the segmentation owner's complete frozen plan without replacing it.
+
+    This module deliberately does not duplicate segment-plan construction.  It
+    needs just enough structural information to enumerate immutable segment
+    reservations, while the segmentation module remains the owner of packet
+    and denominator semantics.
+    """
+
+    fields = {
+        "schema", "protocol_sha256", "suite_id", "source_packet_sha256", "source_sha256", "denominator",
+        "unit", "segments", "segment_plan_sha256",
+    }
+    plan = _require_exact_dict(value, fields, "suite.segment_plan")
+    _require_string(plan["schema"], "suite.segment_plan.schema")
+    if _require_identifier(plan["suite_id"], "suite.segment_plan.suite_id") != suite_id:
+        raise ExamError("suite.segment_plan.suite_id does not match suite_id")
+    _require_digest(plan["protocol_sha256"], "suite.segment_plan.protocol_sha256")
+    _require_digest(plan["source_packet_sha256"], "suite.segment_plan.source_packet_sha256")
+    if plan["source_sha256"] is not None:
+        _require_digest(plan["source_sha256"], "suite.segment_plan.source_sha256")
+    _require_dict(plan["denominator"], "suite.segment_plan.denominator")
+    _require_identifier(plan["unit"], "suite.segment_plan.unit")
+    segments = _require_list(plan["segments"], "suite.segment_plan.segments")
+    if not segments:
+        raise ExamError("suite.segment_plan.segments must not be empty")
+    normalized_segments: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    seen_items: set[str] = set()
+    for index, segment in enumerate(segments):
+        item = _require_exact_dict(segment, {"segment_id", "item_ids", "packet_sha256"},
+                                   f"suite.segment_plan.segments[{index}]")
+        segment_id = _require_identifier(item["segment_id"], f"suite.segment_plan.segments[{index}].segment_id")
+        if segment_id in seen:
+            raise ExamError("suite.segment_plan.segments contains duplicate segment_id")
+        seen.add(segment_id)
+        item_ids = _require_unique_identifiers(
+            _require_list(item["item_ids"], f"suite.segment_plan.segments[{index}].item_ids"),
+            f"suite.segment_plan.segments[{index}].item_ids",
+        )
+        if not item_ids:
+            raise ExamError("suite.segment_plan segment must contain at least one item")
+        if seen_items.intersection(item_ids):
+            raise ExamError("suite.segment_plan.segments contains duplicate item_ids")
+        seen_items.update(item_ids)
+        normalized_segments.append({
+            "segment_id": segment_id,
+            "item_ids": item_ids,
+            "packet_sha256": _require_digest(
+                item["packet_sha256"], f"suite.segment_plan.segments[{index}].packet_sha256"
+            ),
+        })
+    supplied_hash = _require_digest(plan["segment_plan_sha256"], "suite.segment_plan.segment_plan_sha256")
+    normalized = {
+        "schema": _require_string(plan["schema"], "suite.segment_plan.schema"),
+        "protocol_sha256": plan["protocol_sha256"],
+        "suite_id": suite_id,
+        "source_packet_sha256": plan["source_packet_sha256"],
+        "source_sha256": plan["source_sha256"],
+        "denominator": copy.deepcopy(plan["denominator"]),
+        "unit": plan["unit"],
+        "segments": normalized_segments,
+    }
+    if digest(normalized) != supplied_hash:
+        raise ExamError("suite.segment_plan.segment_plan_sha256 does not match its frozen body")
+    return normalized | {"segment_plan_sha256": supplied_hash}
+
+
+def _normalise_suite(value: Any) -> dict[str, Any]:
+    suite = _require_exact_dict(value, {"suite_id", "source_sha256", "profile_sha256", "key_sha256", "segment_plan", "limits"},
+                                "suite")
+    suite_id = _require_identifier(suite["suite_id"], "suite.suite_id")
+    if suite_id not in _SUPPORTED_SUITES:
+        raise ExamError(f"unsupported benchmark suite: {suite_id!r}")
+    source_sha256 = _require_digest(suite["source_sha256"], "suite.source_sha256")
+    profile_sha256 = _require_digest(suite["profile_sha256"], "suite.profile_sha256")
+    key_sha256 = _require_digest(suite["key_sha256"], "suite.key_sha256")
+    limits = _require_exact_dict(suite["limits"], {"timeout_seconds", "max_output_tokens", "max_tool_calls"},
+                                 "suite.limits")
+    normalized_limits = {
+        "timeout_seconds": _require_count(limits["timeout_seconds"], "suite.limits.timeout_seconds"),
+        "max_output_tokens": _require_count(limits["max_output_tokens"], "suite.limits.max_output_tokens"),
+        "max_tool_calls": _require_nonnegative_integer(limits["max_tool_calls"], "suite.limits.max_tool_calls"),
+    }
+    segment_plan = _normalise_segment_plan(suite["segment_plan"], suite_id)
+    # MCQ plans intentionally retain no raw source hash; GEC plans do.  Where
+    # the plan has one, it must bind the same source receipt as this suite.
+    if segment_plan["source_sha256"] is not None and segment_plan["source_sha256"] != source_sha256:
+        raise ExamError("suite.segment_plan.source_sha256 does not match suite source")
+    return {
+        "suite_id": suite_id,
+        "source_sha256": source_sha256,
+        "profile_sha256": profile_sha256,
+        "key_sha256": key_sha256,
+        "segment_plan": segment_plan,
+        "limits": normalized_limits,
+    }
+
+
+def _normalise_billing(value: Any, where: str) -> dict[str, Any]:
+    fields = {
+        "kind", "units", "input_micro_usd_per_million_tokens", "output_micro_usd_per_million_tokens",
+        "max_total_input_tokens", "max_total_output_tokens", "max_tool_rounds", "tool_round_micro_usd",
+    }
+    billing = _require_exact_dict(value, fields, where)
+    kind = _require_string(billing["kind"], f"{where}.kind")
+    if kind not in {"metered", "verified_subscription", "existing_credit"}:
+        raise ExamError(f"{where}.kind is not supported")
+    if billing["units"] != "tokens":
+        raise ExamError(f"{where}.units must be 'tokens'")
+    normalized = {
+        "kind": kind,
+        "units": "tokens",
+        "input_micro_usd_per_million_tokens": _require_nonnegative_integer(
+            billing["input_micro_usd_per_million_tokens"], f"{where}.input_micro_usd_per_million_tokens"
+        ),
+        "output_micro_usd_per_million_tokens": _require_nonnegative_integer(
+            billing["output_micro_usd_per_million_tokens"], f"{where}.output_micro_usd_per_million_tokens"
+        ),
+        "max_total_input_tokens": _require_count(billing["max_total_input_tokens"], f"{where}.max_total_input_tokens"),
+        "max_total_output_tokens": _require_count(billing["max_total_output_tokens"], f"{where}.max_total_output_tokens"),
+        "max_tool_rounds": _require_nonnegative_integer(billing["max_tool_rounds"], f"{where}.max_tool_rounds"),
+        "tool_round_micro_usd": _require_nonnegative_integer(billing["tool_round_micro_usd"], f"{where}.tool_round_micro_usd"),
+    }
+    if kind == "metered" and not any(
+        normalized[field]
+        for field in (
+            "input_micro_usd_per_million_tokens", "output_micro_usd_per_million_tokens", "tool_round_micro_usd",
+        )
+    ):
+        raise ExamError(f"{where} has unknown or zero-only metered pricing; use a receipt-bound entitlement")
+    if kind == "verified_subscription" and any(
+        normalized[field]
+        for field in (
+            "input_micro_usd_per_million_tokens", "output_micro_usd_per_million_tokens", "tool_round_micro_usd",
+        )
+    ):
+        raise ExamError(f"{where} zero-incremental entitlement must not carry metered rates")
+    return normalized
+
+
+def _normalise_route(value: Any) -> dict[str, Any]:
+    fields = {
+        "route_id", "route_sha256", "config_sha256", "conditions", "unsupported_condition_evidence",
+        "capability_evidence_sha256", "pricing_evidence_sha256", "entitlement_evidence_sha256", "billing",
+        "admission_command_sha256", "operator_authorization_sha256", "request_budget_mechanism_sha256",
+    }
+    route = _require_exact_dict(value, fields, "route")
+    conditions = _require_unique_identifiers(_require_list(route["conditions"], "route.conditions"), "route.conditions")
+    if not conditions or any(condition not in _CONDITIONS for condition in conditions):
+        raise ExamError("route.conditions must be a non-empty subset of the frozen conditions")
+    unsupported = _require_dict(route["unsupported_condition_evidence"], "route.unsupported_condition_evidence")
+    expected_unsupported = set(_CONDITIONS) - set(conditions)
+    if set(unsupported) != expected_unsupported:
+        raise ExamError("route.unsupported_condition_evidence must explain exactly the unavailable conditions")
+    normalized_unsupported = {
+        condition: _require_digest(unsupported[condition], f"route.unsupported_condition_evidence.{condition}")
+        for condition in sorted(unsupported)
+    }
+    billing = _normalise_billing(route["billing"], "route.billing")
+    request_budget = route["request_budget_mechanism_sha256"]
+    if billing["kind"] in {"metered", "existing_credit"} or request_budget is not None:
+        _require_digest(request_budget, "route.request_budget_mechanism_sha256")
+    entitlement = route["entitlement_evidence_sha256"]
+    _require_digest(entitlement, "route.entitlement_evidence_sha256")
+    return {
+        "route_id": _require_identifier(route["route_id"], "route.route_id"),
+        "route_sha256": _require_digest(route["route_sha256"], "route.route_sha256"),
+        "config_sha256": _require_digest(route["config_sha256"], "route.config_sha256"),
+        "conditions": sorted(conditions),
+        "unsupported_condition_evidence": normalized_unsupported,
+        "capability_evidence_sha256": _require_digest(route["capability_evidence_sha256"], "route.capability_evidence_sha256"),
+        "pricing_evidence_sha256": _require_digest(route["pricing_evidence_sha256"], "route.pricing_evidence_sha256"),
+        "entitlement_evidence_sha256": entitlement,
+        "admission_command_sha256": _require_digest(route["admission_command_sha256"], "route.admission_command_sha256"),
+        "operator_authorization_sha256": _require_digest(route["operator_authorization_sha256"], "route.operator_authorization_sha256"),
+        "request_budget_mechanism_sha256": request_budget,
+        "billing": billing,
+    }
+
+
+def _validate_route_capacity(route: dict[str, Any], suite: dict[str, Any]) -> None:
+    billing = route["billing"]
+    limits = suite["limits"]
+    if billing["max_tool_rounds"] < limits["max_tool_calls"]:
+        raise ExamError("route billing max_tool_rounds is below the suite segment tool limit")
+    required_outputs = limits["max_output_tokens"]
+    if "sources" in route["conditions"]:
+        required_outputs *= limits["max_tool_calls"] + 1
+    if billing["max_total_output_tokens"] < required_outputs:
+        raise ExamError("route billing max_total_output_tokens is below the conservative segment output bound")
+
+
+def _ceil_rate_cost(rate_micro_per_million: int, tokens: int) -> int:
+    return (rate_micro_per_million * tokens + _MILLION_TOKENS - 1) // _MILLION_TOKENS
+
+
+def _reservation_micro_usd(route: dict[str, Any]) -> int:
+    billing = route["billing"]
+    if billing["kind"] != "metered":
+        return 0
+    return (
+        _ceil_rate_cost(billing["input_micro_usd_per_million_tokens"], billing["max_total_input_tokens"])
+        + _ceil_rate_cost(billing["output_micro_usd_per_million_tokens"], billing["max_total_output_tokens"])
+        + billing["max_tool_rounds"] * billing["tool_round_micro_usd"]
+    )
+
+
+def _config_binding_sha256(base_config_sha256: str, limits: dict[str, int], repeats: int) -> str:
+    """Bind the scheduler's explicit derived segment config without inventing a config body."""
+
+    return digest({"base_config_sha256": base_config_sha256, "limits": limits, "repeats": repeats})
+
+
+def _normalise_experiment_inputs(
+    protocol_sha256: Any, suites: Any, routes: Any, scorer_sha256: Any, tool_policy_sha256: Any,
+    repeats: Any, new_spend_cap_micro_usd: Any,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str, str, int, int]:
+    checked_protocol = _require_digest(protocol_sha256, "protocol_sha256")
+    checked_suites = [_normalise_suite(suite) for suite in _require_list(suites, "suites")]
+    if not checked_suites:
+        raise ExamError("suites must not be empty")
+    if len({suite["suite_id"] for suite in checked_suites}) != len(checked_suites):
+        raise ExamError("suites contains duplicate suite_id")
+    checked_suites.sort(key=lambda suite: suite["suite_id"])
+    for suite in checked_suites:
+        if suite["segment_plan"]["protocol_sha256"] != checked_protocol:
+            raise ExamError("suite.segment_plan.protocol_sha256 does not match experiment protocol")
+    checked_routes = [_normalise_route(route) for route in _require_list(routes, "routes")]
+    if not checked_routes:
+        raise ExamError("routes must not be empty")
+    if len({route["route_id"] for route in checked_routes}) != len(checked_routes):
+        raise ExamError("routes contains duplicate route_id")
+    checked_routes.sort(key=lambda route: route["route_id"])
+    for route in checked_routes:
+        for suite in checked_suites:
+            _validate_route_capacity(route, suite)
+    return (
+        checked_protocol,
+        checked_suites,
+        checked_routes,
+        _require_digest(scorer_sha256, "scorer_sha256"),
+        _require_digest(tool_policy_sha256, "tool_policy_sha256"),
+        _require_count(repeats, "repeats"),
+        _require_nonnegative_integer(new_spend_cap_micro_usd, "new_spend_cap_micro_usd"),
+    )
+
+
+def build_experiment_manifest(
+    protocol_sha256: str,
+    suites: list[dict[str, Any]],
+    routes: list[dict[str, Any]],
+    *,
+    scorer_sha256: str,
+    tool_policy_sha256: str,
+    repeats: int = 3,
+    new_spend_cap_micro_usd: int = DEFAULT_NEW_SPEND_CAP_MICRO_USD,
+) -> dict[str, Any]:
+    """Freeze a protocol-bound experiment description without admitting paid execution.
+
+    Evidence fields are only receipt bindings.  This pure function deliberately
+    records them as ``bound_not_verified``; a route preflight must authenticate
+    and validate the receipt before any provider request is allowed.
+    """
+
+    protocol, checked_suites, checked_routes, scorer, tool_policy, count, cap = _normalise_experiment_inputs(
+        protocol_sha256, suites, routes, scorer_sha256, tool_policy_sha256, repeats, new_spend_cap_micro_usd
+    )
+    body = {
+        "schema": EXPERIMENT_MANIFEST_SCHEMA,
+        "protocol_sha256": protocol,
+        "suites": checked_suites,
+        "routes": checked_routes,
+        "scorer_sha256": scorer,
+        "tool_policy_sha256": tool_policy,
+        "repeats": count,
+        "new_spend_cap_micro_usd": cap,
+        "evidence_status": "bound_not_verified",
+        "execution_admission": "requires_authoritative_runtime_preflight",
+    }
+    return body | {"experiment_manifest_sha256": digest(body)}
+
+
+def validate_experiment_manifest(manifest: Any) -> dict[str, Any]:
+    """Validate a frozen experiment artifact and return an isolated copy."""
+
+    fields = {
+        "schema", "protocol_sha256", "suites", "routes", "scorer_sha256", "tool_policy_sha256", "repeats",
+        "new_spend_cap_micro_usd", "evidence_status", "execution_admission", "experiment_manifest_sha256",
+    }
+    checked = _require_exact_dict(manifest, fields, "experiment manifest")
+    if checked["schema"] != EXPERIMENT_MANIFEST_SCHEMA:
+        raise ExamError("unsupported experiment manifest schema")
+    if checked["evidence_status"] != "bound_not_verified":
+        raise ExamError("experiment manifest must not claim evidence verification")
+    if checked["execution_admission"] != "requires_authoritative_runtime_preflight":
+        raise ExamError("experiment manifest must require authoritative runtime preflight")
+    rebuilt = build_experiment_manifest(
+        checked["protocol_sha256"], checked["suites"], checked["routes"],
+        scorer_sha256=checked["scorer_sha256"], tool_policy_sha256=checked["tool_policy_sha256"],
+        repeats=checked["repeats"], new_spend_cap_micro_usd=checked["new_spend_cap_micro_usd"],
+    )
+    if rebuilt != checked:
+        raise ExamError("experiment manifest does not match its canonical frozen construction")
+    return copy.deepcopy(rebuilt)
+
+
+def _condition_order(route: dict[str, Any], repeat: int) -> list[str]:
+    available = set(route["conditions"])
+    paired = ("closed-book", "sources") if repeat % 2 else ("sources", "closed-book")
+    return [condition for condition in paired if condition in available]
+
+
+def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
+    cells: list[dict[str, Any]] = []
+    for suite in manifest["suites"]:
+        for route in manifest["routes"]:
+            reservation = _reservation_micro_usd(route)
+            config_binding = _config_binding_sha256(route["config_sha256"], suite["limits"], manifest["repeats"])
+            for repeat in range(1, manifest["repeats"] + 1):
+                for condition in _condition_order(route, repeat):
+                    cell_id = "cell-" + digest({
+                        "suite_id": suite["suite_id"], "route_id": route["route_id"],
+                        "repeat": repeat, "condition": condition,
+                    })[:48]
+                    segments = []
+                    for segment in suite["segment_plan"]["segments"]:
+                        segment_id = segment["segment_id"]
+                        segments.append({
+                            "segment_id": segment_id,
+                            "segment_packet_sha256": segment["packet_sha256"],
+                            "attempt_id": "attempt-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
+                            "reservation_id": "reserve-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
+                            "reserved_micro_usd": reservation,
+                        })
+                    cells.append({
+                        "cell_id": cell_id,
+                        "suite_id": suite["suite_id"],
+                        "route_id": route["route_id"],
+                        "repeat": repeat,
+                        "condition": condition,
+                        "route_sha256": route["route_sha256"],
+                        "base_config_sha256": route["config_sha256"],
+                        "derived_config_sha256": config_binding,
+                        "segment_plan_sha256": suite["segment_plan"]["segment_plan_sha256"],
+                        "segments": segments,
+                    })
+    total = sum(segment["reserved_micro_usd"] for cell in cells for segment in cell["segments"])
+    if total > manifest["new_spend_cap_micro_usd"]:
+        raise ExamError("conservative segment reservations exceed the experiment new-spend cap")
+    body = {
+        "schema": EXECUTION_PLAN_SCHEMA,
+        "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
+        "new_spend_cap_micro_usd": manifest["new_spend_cap_micro_usd"],
+        "reservation_total_micro_usd": total,
+        "cells": cells,
+        "execution_admission": "requires_authoritative_runtime_preflight",
+    }
+    return body | {"execution_plan_sha256": digest(body)}
+
+
+def build_execution_plan(experiment_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Construct every immutable segment reservation and reject cap overrun."""
+
+    return _build_execution_plan(validate_experiment_manifest(experiment_manifest))
+
+
+def validate_execution_plan(experiment_manifest: dict[str, Any], execution_plan: Any) -> dict[str, Any]:
+    """Reject a rehashed schedule unless it is the exact canonical reconstruction."""
+
+    manifest = validate_experiment_manifest(experiment_manifest)
+    fields = {
+        "schema", "experiment_manifest_sha256", "new_spend_cap_micro_usd", "reservation_total_micro_usd", "cells",
+        "execution_admission", "execution_plan_sha256",
+    }
+    plan = _require_exact_dict(execution_plan, fields, "execution plan")
+    if plan["schema"] != EXECUTION_PLAN_SCHEMA:
+        raise ExamError("unsupported execution plan schema")
+    expected = _build_execution_plan(manifest)
+    if plan != expected:
+        raise ExamError("execution plan does not match the exact canonical frozen schedule")
+    return copy.deepcopy(expected)
+
+
+__all__ = [
+    "DEFAULT_NEW_SPEND_CAP_MICRO_USD",
+    "EXECUTION_PLAN_SCHEMA",
+    "EXPERIMENT_MANIFEST_SCHEMA",
+    "MANIFEST_SCHEMA",
+    "build_execution_plan",
+    "build_experiment_manifest",
+    "validate_execution_plan",
+    "validate_experiment_manifest",
+    "verify_benchmark",
+]

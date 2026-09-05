@@ -27,4 +27,4 @@ A candidate receives questions, while the separate scorer receives the answer ke
 
 Scores concern the selected tasks and datasets. They do not certify overall fluency or a CEFR level. Requested effort and verified effective effort are distinct, and unsupported tool access is recorded rather than simulated.
 
-See [benchmark preparation and scoring](docs/benchmarks.md), [running an exam](docs/running.md), [the delivery plan](docs/delivery-plan.md), [contributing](CONTRIBUTING.md), [security](SECURITY.md) and [release procedure](docs/releasing.md). Code is MIT licensed; datasets and reference material retain their own rights.
+See [benchmark preparation and scoring](docs/benchmarks.md), [running an exam](docs/running.md), [segmented research execution](docs/research-scheduling.md), [the delivery plan](docs/delivery-plan.md), [contributing](CONTRIBUTING.md), [security](SECURITY.md) and [release procedure](docs/releasing.md). Code is MIT licensed; datasets and reference material retain their own rights.
