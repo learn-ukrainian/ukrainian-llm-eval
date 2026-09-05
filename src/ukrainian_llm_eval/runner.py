@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +118,7 @@ def run_exam(
     condition: str,
     *,
     sources_url: str | None = None,
+    evidence: Callable[[str, Any], None] | None = None,
 ) -> dict[str, Any]:
     """Run exactly one fresh exam session under the requested condition.
 
@@ -129,11 +130,18 @@ def run_exam(
     checked_config = validate_config(config)
     if condition not in {"closed-book", "sources"}:
         raise ExamError("condition must be closed-book or sources")
+    if evidence is not None:
+        evidence("trial_input", {"packet": checked_packet, "config": checked_config, "condition": condition})
     try:
         capability = preflight(checked_config, condition, sources_url)
+        if evidence is not None:
+            evidence("preflight", capability)
         prompt = adapters.build_prompt(
             checked_packet, condition, max_tool_calls=checked_config["max_tool_calls"]
         )
+        if evidence is not None:
+            evidence("prompt", {"text": prompt, "response_schema": adapters.response_schema(checked_packet)})
+        evidence_options = {"evidence": evidence} if evidence is not None else {}
         if checked_config["adapter"] == "claude":
             trial = adapters.run_claude(
                 checked_packet,
@@ -141,6 +149,7 @@ def run_exam(
                 condition,
                 sources_url=sources_url,
                 prompt=prompt,
+                **evidence_options,
             )
         else:
             trial = adapters.run_chat_http(
@@ -149,9 +158,13 @@ def run_exam(
                 condition,
                 sources_url=sources_url,
                 prompt=prompt,
+                **evidence_options,
             )
     except (adapters.AdapterError, ExamError, OSError, TimeoutError) as exc:
-        return _failure(checked_packet, checked_config, condition, exc)
+        failure = _failure(checked_packet, checked_config, condition, exc)
+        if evidence is not None:
+            evidence("trial_failure", failure)
+        return failure
     identity = dict(trial["identity"])
     identity["preflight_tool_schema_sha256"] = capability["tool_schema_sha256"]
     identity["preflight_mcp_server_identity_sha256"] = capability["mcp_server_identity_sha256"]
