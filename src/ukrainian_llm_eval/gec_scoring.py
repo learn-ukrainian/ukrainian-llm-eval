@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .core import ExamError, digest, read_json
 from .evidence import EvidenceStore
-from .gec import validate_gec_key
+from .gec import _contains_line_separator, validate_gec_key
 
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -40,7 +40,7 @@ def scoring_inputs(packet, key, run):
             raise ExamError("GEC source must occupy exactly one serialized line")
         lines = ["S " + item["text"]]
         for edit in reference["annotations"]:
-            if any("\n" in edit[field] or "\r" in edit[field] or "|||" in edit[field]
+            if any(_contains_line_separator(edit[field]) or "|||" in edit[field]
                    for field in ("category", "replacement", "required", "metadata", "annotator_id")):
                 raise ExamError("GEC annotation cannot be serialized as one M2 field")
             lines.append(f"A {edit['start']} {edit['end']}|||{edit['category']}|||{edit['replacement']}"

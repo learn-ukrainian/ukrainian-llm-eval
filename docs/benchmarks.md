@@ -202,6 +202,11 @@ An unchanged reference uses `A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0`
 annotator IDs fail with a sanitized input error. Never repair official reference
 annotations to improve a model's score.
 
+Manually edited annotation fields must remain on one physical line. Key
+validation and M2 serialization reject every Unicode line boundary recognized
+by Python's `splitlines`, including vertical tab, next-line, and the Unicode
+line and paragraph separators.
+
 Span-correction scores depend on edit alignment as well as corrected text. A
 synthetic repeated-token case produced the same corrected text from two possible
 deletion spans; ERRANT selected one while the reference specified the other,
@@ -229,6 +234,14 @@ neither `--exam` nor `--overlay`. `--profile-sha256` can enforce a previously
 approved canonical profile digest. The output must be new and remains private.
 Manifest `key_sha256` hashes the entire supplied key object; GEC's internal
 `key_sha256` field separately hashes its key body and has a different value.
+
+GEC profiles must declare `denominator.sentences`; `documents` and `tokens` are
+optional. Verification checks every denominator field that the profile declares
+and leaves omitted optional fields out of the manifest, so a small custom M2
+fixture can verify sentence coverage without inventing document or token counts.
+Unknown fields, malformed counts and source drift fail before the manifest is
+created. A successful manifest is also write-once: rerunning the command against
+an existing output refuses to replace it and preserves its bytes.
 
 The manifest states `matches_supplied_profile`: a custom profile can intentionally
 select a synthetic fixture and gets a different profile identity. It is not a

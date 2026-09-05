@@ -1,5 +1,6 @@
 """Source-blind public CLI behavior using synthetic examples only."""
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import pytest
 
 from ukrainian_llm_eval.__main__ import public_aggregate
 from ukrainian_llm_eval.core import ExamError
+from ukrainian_llm_eval.gec import prepare_gec
 from ukrainian_llm_eval.importers import import_zno
 
 
@@ -135,8 +137,6 @@ def test_ulp_cli_binds_source_and_keeps_category_outside_packet(tmp_path):
 
 
 def test_gec_cli_keeps_both_references_private(tmp_path):
-    import hashlib
-
     source = tmp_path / "input.m2"
     source.write_text("S Я люблю мову .\n"
                       "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0\n"
@@ -157,6 +157,78 @@ def test_gec_cli_keeps_both_references_private(tmp_path):
     assert {ref["annotator_id"] for ref in refs} == {"0", "1"}
     assert packet.stat().st_mode & 0o777 == key.stat().st_mode & 0o777 == 0o600
     assert run_cli(*args).returncode == 2
+
+
+def _gec_verification_fixture(tmp_path, *, denominator=None):
+    raw = (
+        "S Це тест .\n"
+        "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0\n"
+        "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||1\n\n"
+    ).encode()
+    provenance = {
+        "source_url": "https://example.org/synthetic-gec",
+        "source_revision": "synthetic-cli-r1",
+        "license": "synthetic",
+        "exposure": "synthetic",
+    }
+    packet, key = prepare_gec(raw.decode("utf-8"), provenance)
+    profile = {
+        "id": "ua-gec-public-gec-only-test",
+        "revision": provenance["source_revision"],
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "license": provenance["license"],
+        "denominator": denominator if denominator is not None else {"sentences": 1},
+    }
+    profiles = {"schema": "ukrainian-llm-eval.benchmark-sources.v1", "suites": [profile]}
+    paths = {
+        "profiles": tmp_path / "profiles.json",
+        "source": tmp_path / "source.m2",
+        "questions": tmp_path / "questions.json",
+        "key": tmp_path / "key.json",
+        "output": tmp_path / "manifest.json",
+    }
+    paths["profiles"].write_text(json.dumps(profiles, ensure_ascii=False))
+    paths["source"].write_bytes(raw)
+    paths["questions"].write_text(json.dumps(packet, ensure_ascii=False))
+    paths["key"].write_text(json.dumps(key, ensure_ascii=False))
+    args = (
+        "verify-benchmark",
+        "--profiles", paths["profiles"],
+        "--suite", profile["id"],
+        "--source", paths["source"],
+        "--questions", paths["questions"],
+        "--key", paths["key"],
+        "--output", paths["output"],
+    )
+    return paths, args, profile
+
+
+def test_verify_benchmark_cli_succeeds_fresh_and_preserves_existing_manifest(tmp_path):
+    paths, args, profile = _gec_verification_fixture(tmp_path)
+
+    fresh = run_cli(*args)
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+    report_bytes = paths["output"].read_bytes()
+    report = json.loads(report_bytes)
+    assert report["verification"] == "matches_supplied_profile"
+    assert report["denominator"] == profile["denominator"]
+    assert json.loads(fresh.stdout)["packet_sha256"] == report["packet_sha256"]
+
+    repeated = run_cli(*args)
+    assert repeated.returncode == 2
+    assert paths["output"].read_bytes() == report_bytes
+
+
+def test_verify_benchmark_cli_rejects_malformed_profile_without_output(tmp_path):
+    paths, args, _profile = _gec_verification_fixture(tmp_path)
+    malformed = json.loads(paths["profiles"].read_text())
+    malformed["suites"][0]["denominator"] = {"sentences": 1, "unknown": 3}
+    paths["profiles"].write_text(json.dumps(malformed, ensure_ascii=False))
+
+    result = run_cli(*args)
+
+    assert result.returncode == 2
+    assert not paths["output"].exists()
 
 
 def test_typography_cli_restores_emphasis_without_revealing_key(tmp_path):

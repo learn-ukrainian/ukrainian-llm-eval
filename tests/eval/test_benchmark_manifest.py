@@ -157,14 +157,14 @@ def _ulp_fixture() -> tuple[dict, bytes, dict, dict, dict]:
     return profile, raw, exam, packet, key
 
 
-def _gec_fixture() -> tuple[dict, bytes, dict, dict]:
+def _gec_fixture(*, denominator: dict | None = None) -> tuple[dict, bytes, dict, dict]:
     profile = {
         "id": "ua-gec-public-gec-only-test",
         "revision": "synthetic-gec-r1",
         "source_sha256": "0" * 64,
         "license": "synthetic-license",
         "source_path": "synthetic.m2",
-        "denominator": {"sentences": 1, "documents": 0, "tokens": 3},
+        "denominator": denominator if denominator is not None else {"sentences": 1, "documents": 0, "tokens": 3},
     }
     raw = (
         b"S \xd0\xa6\xd0\xb5 \xd1\x82\xd0\xb5\xd1\x81\xd1\x82 .\n"
@@ -242,6 +242,23 @@ def test_verify_valid_gec_manifest_reconstructs_both_annotators() -> None:
     assert manifest["exam_sha256"] is None
     assert manifest["overlay_sha256"] is None
     assert manifest["denominator"] == profile["denominator"]
+
+
+@pytest.mark.parametrize(
+    "denominator",
+    [
+        {"sentences": 1},
+        {"sentences": 1, "documents": 0},
+        {"sentences": 1, "tokens": 3},
+        {"sentences": 1, "documents": 0, "tokens": 3},
+    ],
+)
+def test_gec_profile_checks_only_declared_optional_denominators(denominator: dict[str, int]) -> None:
+    profile, raw, packet, key = _gec_fixture(denominator=denominator)
+
+    manifest = verify_benchmark(profile, raw, packet, key)
+
+    assert manifest["denominator"] == denominator
 
 
 def test_profile_and_source_hashes_are_required() -> None:
