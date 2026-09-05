@@ -361,7 +361,8 @@ def _mcp_request(url: str, payload: Mapping[str, Any], timeout: int, session_id:
         headers["Mcp-Session-Id"] = session_id
     request = urllib.request.Request(url, data=canonical(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 -- operator-configured endpoint
+        opener = urllib.request.build_opener(_RejectRedirects())
+        with opener.open(request, timeout=timeout) as response:  # nosec B310 -- operator-configured endpoint
             raw = response.read(2_000_001)
             if len(raw) > 2_000_000:
                 raise AdapterError("MCP response exceeds limit")

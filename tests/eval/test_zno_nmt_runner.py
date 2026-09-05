@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import urllib.error
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
 
 from ukrainian_llm_eval import adapters, runner
 from ukrainian_llm_eval.core import prepare_exam
+from ukrainian_llm_eval.mcp_proxy import Bridge
 
 
 def _packet() -> dict[str, Any]:
@@ -55,6 +60,89 @@ def test_config_is_exact_and_sources_tools_are_proxy_allowlist() -> None:
         adapters.validate_config(_config(tools=["search_external"]))
     with pytest.raises(adapters.AdapterError, match="allowlisted"):
         adapters.validate_config(_config(tools=["mcp__sources__verify_word"]))
+
+
+def test_mcp_clients_reject_redirects_without_forwarding_session_header() -> None:
+    seen = {
+        "source_requests": 0,
+        "source_sessions": [],
+        "destination_requests": 0,
+        "destination_methods": [],
+        "destination_sessions": [],
+    }
+
+    class DestinationHandler(BaseHTTPRequestHandler):
+        def _record(self) -> None:
+            seen["destination_requests"] += 1
+            seen["destination_methods"].append(self.command)
+            seen["destination_sessions"].append(self.headers.get("Mcp-Session-Id"))
+
+        def do_GET(self) -> None:
+            self._record()
+            self.send_response(HTTPStatus.OK)
+            self.end_headers()
+
+        def do_POST(self) -> None:
+            self._record()
+            self.send_response(HTTPStatus.OK)
+            self.end_headers()
+
+        def log_message(self, *_args: Any) -> None:
+            return
+
+    destination_server = ThreadingHTTPServer(("127.0.0.1", 0), DestinationHandler)
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            if self.path == "/redirect":
+                seen["source_requests"] += 1
+                seen["source_sessions"].append(self.headers.get("Mcp-Session-Id"))
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{destination_server.server_port}/destination",
+                )
+                self.end_headers()
+                return
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+
+        def log_message(self, *_args: Any) -> None:
+            return
+
+    source_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    servers = [source_server, destination_server]
+    server_threads = [
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in servers
+    ]
+    for server_thread in server_threads:
+        server_thread.start()
+    url = f"http://127.0.0.1:{source_server.server_port}/redirect"
+    try:
+        with pytest.raises(adapters.AdapterError, match="MCP request failed"):
+            adapters._mcp_request(url, {}, timeout=2, session_id="session-secret")
+
+        bridge = Bridge(url, ["verify_word"])
+        bridge.headers["Mcp-Session-Id"] = "session-secret"
+        with pytest.raises(urllib.error.HTTPError) as redirect:
+            bridge.request("tools/list", {})
+        assert redirect.value.code == HTTPStatus.FOUND
+    finally:
+        for server in servers:
+            server.shutdown()
+        for server_thread in server_threads:
+            server_thread.join(timeout=2)
+        for server in servers:
+            server.server_close()
+
+    assert seen == {
+        "source_requests": 2,
+        "source_sessions": ["session-secret", "session-secret"],
+        "destination_requests": 0,
+        "destination_methods": [],
+        "destination_sessions": [],
+    }
 
 
 def test_http_malicious_tool_never_reaches_broker(monkeypatch: pytest.MonkeyPatch) -> None:

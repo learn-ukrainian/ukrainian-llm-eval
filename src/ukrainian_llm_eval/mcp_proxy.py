@@ -20,6 +20,11 @@ REFERENCE_TOOLS = frozenset({
 MAX_BYTES = 2_000_000
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
 def decode_response(raw: bytes) -> dict:
     text = raw.decode("utf-8")
     if text.lstrip().startswith("{"):
@@ -50,7 +55,8 @@ class Bridge:
         if ident is not None:
             data["id"] = ident
         request = urllib.request.Request(self.url, data=json.dumps(data).encode(), headers=self.headers)
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        opener = urllib.request.build_opener(_RejectRedirects())
+        with opener.open(request, timeout=self.timeout) as response:
             session = response.headers.get("Mcp-Session-Id")
             if session:
                 self.headers["Mcp-Session-Id"] = session

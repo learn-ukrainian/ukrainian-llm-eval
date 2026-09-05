@@ -8,7 +8,7 @@ The initial engine supports multiple-choice and matching questions with separate
 
 ## Development installation
 
-Requires Python 3.11 or newer. From a clean clone:
+Requires Python 3.11 or newer. Validation targets Linux and macOS; Windows behavior is unverified. From a clean clone:
 
 ```sh
 python3 -m venv .venv
