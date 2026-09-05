@@ -9,6 +9,8 @@ Preparation, planning and offline scoring have CLI commands. Live research
 execution still requires the Python controller interface; the trusted live
 admission integration and its CLI remain work in issue #3/#5. Do not substitute
 the diagnostic `pair` command for a primary research experiment.
+The [trusted admission contract](admission.md) describes the implemented
+validation and subprocess boundary and its remaining integration gates.
 
 ## Preparation and custody
 
