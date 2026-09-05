@@ -225,6 +225,21 @@ def test_claude_empty_builtins_and_model_drift_is_rejected(monkeypatch: pytest.M
     assert "secret-never-in-prompt" not in observed["input"]
 
 
+@pytest.mark.parametrize("sessions", [(None, None), ("first", None), ("first", "second")])
+def test_claude_native_session_requires_consistent_terminal_identity(sessions) -> None:
+    events = [{"type": "system", "session_id": sessions[0]},
+              {"type": "result", "session_id": sessions[1]}]
+    with pytest.raises(adapters.AdapterError, match="session identity"):
+        adapters._claude_session_identity("\n".join(map(json.dumps, events)))
+
+
+def test_claude_native_session_does_not_invent_fresh_identity() -> None:
+    stream = "\n".join(map(json.dumps, [{"type": "system", "session_id": "native-session"},
+                                       {"type": "result", "session_id": "native-session"}]))
+    assert adapters._claude_session_identity(stream) == "native-session"
+    assert adapters._claude_session_identity(stream) == "native-session"
+
+
 def test_claude_child_env_keeps_local_keychain_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USER", "fixture-user")
     monkeypatch.setenv("LOGNAME", "fixture-login")

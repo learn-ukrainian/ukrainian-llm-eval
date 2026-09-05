@@ -1,9 +1,8 @@
 """Provider-specific request accounting before a paid candidate call.
 
-This module does not estimate tokens.  A caller supplies a frozen, trusted
-provider counter command and an attestation of the provider's request and
-output semantics.  The exact canonical JSON bytes counted by that command are
-the bytes returned to the HTTP adapter for transmission.
+Version 1 uses a trusted exact counter. Version 2 commits an explicitly labeled
+provider-documented context upper bound. Both return the canonical request bytes
+that the HTTP adapter transmits.
 """
 
 from __future__ import annotations
@@ -23,6 +22,8 @@ from .evidence import EvidenceStore
 
 MECHANISM_SCHEMA = "ukrainian-llm-eval.request-budget-mechanism.v1"
 ROUTE_SPEC_SCHEMA = "ukrainian-llm-eval.request-budget-route.v1"
+PROVIDER_BOUND_MECHANISM_SCHEMA = "ukrainian-llm-eval.request-budget-mechanism.v2"
+PROVIDER_BOUND_ROUTE_SPEC_SCHEMA = "ukrainian-llm-eval.request-budget-route.v2"
 COUNTER_RESULT_SCHEMA = "ukrainian-llm-eval.request-token-count.v1"
 SERIALIZER = "canonical-json-utf8-newline-v1"
 INPUT_SEMANTICS = "provider-native-full-request-v1"
@@ -42,6 +43,11 @@ _MECHANISM_FIELDS = {
     "usage",
     "cache_billing",
     "max_tool_result_utf8_bytes",
+}
+_PROVIDER_BOUND_FIELDS = {
+    "schema", "route_sha256", "provider", "serializer", "input_bound", "output_parameter",
+    "usage", "cache_billing", "max_tool_result_utf8_bytes", "pricing_evidence_sha256",
+    "backend_identity_evidence_sha256",
 }
 
 
@@ -78,6 +84,8 @@ def _path(value: Any, label: str) -> list[str]:
 def validate_mechanism(value: Any) -> dict[str, Any]:
     """Validate an attested provider mechanism without claiming its accuracy."""
 
+    if isinstance(value, Mapping) and value.get("schema") == PROVIDER_BOUND_MECHANISM_SCHEMA:
+        return _validate_provider_bound_mechanism(value)
     if not isinstance(value, Mapping) or set(value) != _MECHANISM_FIELDS:
         _fail("invalid request-budget mechanism fields")
     if value["schema"] != MECHANISM_SCHEMA:
@@ -149,6 +157,114 @@ def validate_mechanism(value: Any) -> dict[str, Any]:
     }
 
 
+def _validate_provider_bound_mechanism(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate conservative documented provider bounds, explicitly not tokenization."""
+
+    if set(value) != _PROVIDER_BOUND_FIELDS:
+        _fail("invalid provider-bound request-budget mechanism fields")
+    provider = value["provider"]
+    if not isinstance(provider, str) or not provider.strip():
+        _fail("invalid request-budget provider")
+    if value["serializer"] != SERIALIZER or value["cache_billing"] != CACHE_BILLING:
+        _fail("unknown provider-bound serialization or cache semantics")
+    input_bound = value["input_bound"]
+    input_fields = {
+        "kind", "max_input_tokens_per_request", "max_requests_per_segment",
+        "includes_hidden_provider_framing", "evidence_sha256",
+    }
+    if not isinstance(input_bound, Mapping) or set(input_bound) != input_fields:
+        _fail("invalid provider input upper bound")
+    if (
+        input_bound["kind"] != "provider_context_upper_bound"
+        or input_bound["includes_hidden_provider_framing"] is not True
+    ):
+        _fail("provider input bound must cover hidden provider framing")
+    output = value["output_parameter"]
+    output_fields = {
+        "name", "max_tokens_per_request", "includes_reasoning", "includes_tool_calls",
+        "includes_final_output", "evidence_sha256",
+    }
+    if not isinstance(output, Mapping) or set(output) != output_fields:
+        _fail("invalid provider output upper bound")
+    if (
+        not isinstance(output["name"], str)
+        or _PATH_RE.fullmatch(output["name"]) is None
+        or output["name"] in {"model", "messages", "reasoning_effort", "response_format", "tools", "tool_choice"}
+        or output["includes_reasoning"] is not True
+        or output["includes_tool_calls"] is not True
+        or output["includes_final_output"] is not True
+    ):
+        _fail("unknown reasoning-inclusive output semantics")
+    usage = value["usage"]
+    usage_fields = {
+        "input_tokens_path", "output_tokens_path", "output_includes_reasoning",
+        "reported_cost_path", "reported_cost_kind", "reported_cost_scope",
+    }
+    if not isinstance(usage, Mapping) or set(usage) != usage_fields:
+        _fail("invalid provider usage semantics")
+    if usage["output_includes_reasoning"] is not True:
+        _fail("unknown provider reasoning usage semantics")
+    input_path = _path(usage["input_tokens_path"], "input usage")
+    output_path = _path(usage["output_tokens_path"], "output usage")
+    if input_path == output_path:
+        _fail("input and output usage accounting paths must differ")
+    if (
+        usage["reported_cost_path"] is None
+        and usage["reported_cost_kind"] is None
+        and usage["reported_cost_scope"] is None
+    ):
+        cost_path = cost_kind = cost_scope = None
+    elif usage["reported_cost_kind"] == "account_charge" and usage["reported_cost_scope"] == "request":
+        cost_path = _path(usage["reported_cost_path"], "reported cost")
+        cost_kind, cost_scope = "account_charge", "request"
+    else:
+        _fail("provider-bound cost semantics must be absent or an authoritative per-request account charge")
+    max_tool_result = _positive(value["max_tool_result_utf8_bytes"], "maximum tool-result size")
+    if max_tool_result > 16 * 1024 * 1024:
+        _fail("maximum tool-result size exceeds controller limit")
+    return {
+        "schema": PROVIDER_BOUND_MECHANISM_SCHEMA,
+        "route_sha256": _sha(value["route_sha256"], "route"),
+        "provider": provider,
+        "serializer": SERIALIZER,
+        "input_bound": {
+            "kind": "provider_context_upper_bound",
+            "max_input_tokens_per_request": _positive(
+                input_bound["max_input_tokens_per_request"], "maximum provider input tokens"
+            ),
+            "max_requests_per_segment": _positive(
+                input_bound["max_requests_per_segment"], "maximum segment requests"
+            ),
+            "includes_hidden_provider_framing": True,
+            "evidence_sha256": _sha(input_bound["evidence_sha256"], "provider context evidence"),
+        },
+        "output_parameter": {
+            "name": output["name"],
+            "max_tokens_per_request": _positive(
+                output["max_tokens_per_request"], "maximum reasoning-inclusive output tokens"
+            ),
+            "includes_reasoning": True,
+            "includes_tool_calls": True,
+            "includes_final_output": True,
+            "evidence_sha256": _sha(output["evidence_sha256"], "provider output evidence"),
+        },
+        "usage": {
+            "input_tokens_path": input_path,
+            "output_tokens_path": output_path,
+            "output_includes_reasoning": True,
+            "reported_cost_path": cost_path,
+            "reported_cost_kind": cost_kind,
+            "reported_cost_scope": cost_scope,
+        },
+        "cache_billing": CACHE_BILLING,
+        "max_tool_result_utf8_bytes": max_tool_result,
+        "pricing_evidence_sha256": _sha(value["pricing_evidence_sha256"], "pricing evidence"),
+        "backend_identity_evidence_sha256": _sha(
+            value["backend_identity_evidence_sha256"], "backend identity evidence"
+        ),
+    }
+
+
 def mechanism_sha256(value: Any) -> str:
     return digest(validate_mechanism(value))
 
@@ -179,13 +295,19 @@ def verify_request_budget_evidence(evidence, route, config, candidate_attempt_id
     if evidence.get("attempt_id") != request_budget_attempt_id(candidate_attempt_id):
         raise ExamError("request-budget attempt identity mismatch")
     metadata = evidence.get("metadata")
-    fields = {
+    base_fields = {
         "denominator", "candidate_attempt_id", "route_sha256", "account_sha256",
         "mechanism_sha256", "billing_kind", "credit_commitment_micro_usd",
         "maximum_segment_charge_micro_usd",
     }
-    if not isinstance(metadata, Mapping) or set(metadata) != fields or metadata["denominator"] != 0:
+    if not isinstance(metadata, Mapping):
         raise ExamError("request-budget metadata is invalid")
+    provider_bound = "shared_reservation_sha256" in metadata
+    fields = base_fields | ({"shared_reservation_sha256"} if provider_bound else set())
+    if set(metadata) != fields or metadata["denominator"] != 0:
+        raise ExamError("request-budget metadata is invalid")
+    if provider_bound and _SHA256_RE.fullmatch(str(metadata["shared_reservation_sha256"])) is None:
+        raise ExamError("request-budget shared reservation identity is invalid")
     if (
         metadata["candidate_attempt_id"] != candidate_attempt_id
         or metadata["route_sha256"] != route["route_sha256"]
@@ -215,16 +337,22 @@ def verify_request_budget_evidence(evidence, route, config, candidate_attempt_id
         "output_tokens_including_reasoning_observed", "tool_calls_observed",
         "formula_charge_micro_usd", "provider_reported_charge_micro_usd", "reported_cost_kind",
     }
+    if provider_bound:
+        result_fields.add("shared_settlement_sha256")
     if not isinstance(result, Mapping) or set(result) != result_fields:
         raise ExamError("request-budget result is invalid")
     if (
-        result["schema"] != "ukrainian-llm-eval.request-budget-receipt.v1"
+        result["schema"] != (
+            "ukrainian-llm-eval.request-budget-receipt.v2"
+            if provider_bound else "ukrainian-llm-eval.request-budget-receipt.v1"
+        )
         or result["status"] != expected_terminal
         or result["mechanism_sha256"] != route["request_budget_mechanism_sha256"]
     ):
         raise ExamError("request-budget result binding mismatch")
     count_fields = result_fields - {
         "schema", "status", "mechanism_sha256", "provider_reported_charge_micro_usd", "reported_cost_kind",
+        "shared_settlement_sha256",
     }
     counts = {field: result[field] for field in count_fields}
     if any(type(value) is not int or value < 0 for value in counts.values()):
@@ -234,6 +362,10 @@ def verify_request_budget_evidence(evidence, route, config, candidate_attempt_id
         raise ExamError("request-budget provider charge is invalid")
     if result["reported_cost_kind"] not in {None, "account_charge", "nonincremental_estimate"}:
         raise ExamError("request-budget reported cost kind is invalid")
+    if provider_bound:
+        settlement = result["shared_settlement_sha256"]
+        if settlement is not None and _SHA256_RE.fullmatch(str(settlement)) is None:
+            raise ExamError("request-budget shared settlement identity is invalid")
     expected_formula_charge = (
         _ceil_cost(route["billing"]["input_micro_usd_per_million_tokens"], result["input_tokens_observed"])
         + _ceil_cost(
@@ -305,13 +437,18 @@ def _serialize(payload: Mapping[str, Any]) -> bytes:
 class RequestBudget:
     """One segment's durable, cumulative pre-request budget."""
 
-    def __init__(self, route, config, mechanism, counter_command, attempt, *, maximum_charge: int):
+    def __init__(
+        self, route, config, mechanism, counter_command, attempt, *, maximum_charge: int,
+        shared_ledger=None, shared_reservation_id: str | None = None,
+    ):
         self.route = route
         self.config = config
         self.mechanism = mechanism
         self.counter_command = counter_command
         self.attempt = attempt
         self.maximum_charge = maximum_charge
+        self.shared_ledger = shared_ledger
+        self.shared_reservation_id = shared_reservation_id
         self.rounds = 0
         self.input_tokens = 0
         self.output_tokens_reserved = 0
@@ -320,6 +457,7 @@ class RequestBudget:
         self.tool_calls = 0
         self.formula_charge = 0
         self.provider_reported_charge: int | None = None
+        self.authoritative_charge_rounds = 0
         self._pending: dict[str, Any] | None = None
         self._closed = False
 
@@ -345,33 +483,37 @@ class RequestBudget:
             _fail("provider output parameter differs from frozen semantics")
         request_bytes = _serialize(payload)
         request_sha256 = hashlib.sha256(request_bytes).hexdigest()
-        process = invoke_admission(self.counter_command, dict(payload))
-        self.attempt.append(
-            "request_counter_process", {key: value for key, value in process.items() if key != "stdout"}
-        )
-        if (
-            process.get("status") != "success"
-            or process.get("command_identity_sha256") != self.mechanism["counter_command_sha256"]
-        ):
-            _fail("trusted request counter failed")
-        try:
-            result = json.loads(
-                process["stdout"].decode("utf-8"),
-                object_pairs_hook=_duplicate_rejecting_pairs,
-                parse_constant=_reject_json_constant,
+        provider_bound = self.mechanism["schema"] == PROVIDER_BOUND_MECHANISM_SCHEMA
+        if provider_bound:
+            counted = self.mechanism["input_bound"]["max_input_tokens_per_request"]
+        else:
+            process = invoke_admission(self.counter_command, dict(payload))
+            self.attempt.append(
+                "request_counter_process", {key: value for key, value in process.items() if key != "stdout"}
             )
-        except (KeyError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-            raise RequestBudgetError("trusted request counter returned invalid evidence") from exc
-        fields = {"schema", "request_sha256", "counter_semantics_sha256", "input_tokens"}
-        if not isinstance(result, Mapping) or set(result) != fields:
-            _fail("trusted request counter returned invalid evidence")
-        if (
-            result["schema"] != COUNTER_RESULT_SCHEMA
-            or result["request_sha256"] != request_sha256
-            or result["counter_semantics_sha256"] != self.mechanism["counter_semantics_sha256"]
-        ):
-            _fail("trusted request counter identity mismatch")
-        counted = _positive(result["input_tokens"], "counted input tokens")
+            if (
+                process.get("status") != "success"
+                or process.get("command_identity_sha256") != self.mechanism["counter_command_sha256"]
+            ):
+                _fail("trusted request counter failed")
+            try:
+                result = json.loads(
+                    process["stdout"].decode("utf-8"),
+                    object_pairs_hook=_duplicate_rejecting_pairs,
+                    parse_constant=_reject_json_constant,
+                )
+            except (KeyError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+                raise RequestBudgetError("trusted request counter returned invalid evidence") from exc
+            fields = {"schema", "request_sha256", "counter_semantics_sha256", "input_tokens"}
+            if not isinstance(result, Mapping) or set(result) != fields:
+                _fail("trusted request counter returned invalid evidence")
+            if (
+                result["schema"] != COUNTER_RESULT_SCHEMA
+                or result["request_sha256"] != request_sha256
+                or result["counter_semantics_sha256"] != self.mechanism["counter_semantics_sha256"]
+            ):
+                _fail("trusted request counter identity mismatch")
+            counted = _positive(result["input_tokens"], "counted input tokens")
         next_input = self.input_tokens + counted
         next_output = self.output_tokens_reserved + self.config["max_output_tokens"]
         billing = self.route["billing"]
@@ -396,7 +538,10 @@ class RequestBudget:
                 {"request_sha256": request_sha256, "committed_charge_micro_usd": committed_charge},
             )
         entry = {
-            "schema": "ukrainian-llm-eval.request-budget-commitment.v1",
+            "schema": (
+                "ukrainian-llm-eval.request-budget-commitment.v2"
+                if provider_bound else "ukrainian-llm-eval.request-budget-commitment.v1"
+            ),
             "round": self.rounds + 1,
             "request_sha256": request_sha256,
             "request_utf8_bytes": len(request_bytes),
@@ -406,9 +551,13 @@ class RequestBudget:
             "cumulative_tool_calls": self.tool_calls,
             "committed_charge_micro_usd": committed_charge,
             "mechanism_sha256": digest(self.mechanism),
-            "counter_command_sha256": self.mechanism["counter_command_sha256"],
-            "counter_semantics_sha256": self.mechanism["counter_semantics_sha256"],
         }
+        if provider_bound:
+            entry["input_bound_kind"] = "provider_context_upper_bound"
+            entry["input_bound_evidence_sha256"] = self.mechanism["input_bound"]["evidence_sha256"]
+        else:
+            entry["counter_command_sha256"] = self.mechanism["counter_command_sha256"]
+            entry["counter_semantics_sha256"] = self.mechanism["counter_semantics_sha256"]
         self.attempt.append("request_budget_committed", entry)
         self.rounds += 1
         self.input_tokens = next_input
@@ -506,6 +655,8 @@ class RequestBudget:
         self.tool_calls = next_tools
         self.formula_charge = observed_charge
         self.provider_reported_charge = cumulative_provider_charge
+        if provider_charge is not None and self.mechanism["usage"]["reported_cost_kind"] == "account_charge":
+            self.authoritative_charge_rounds += 1
         self._pending = None
         return copy.deepcopy(observation)
 
@@ -527,8 +678,30 @@ class RequestBudget:
             _fail("request budget already finalized")
         if status == "completed" and self._pending is not None:
             _fail("successful request budget lacks provider observation")
+        provider_bound = self.mechanism["schema"] == PROVIDER_BOUND_MECHANISM_SCHEMA
+        shared_settlement = None
+        if self.shared_ledger is not None:
+            authoritative = self.rounds == 0 or (
+                self._pending is None and self.authoritative_charge_rounds == self.rounds
+            )
+            if authoritative:
+                charge = self.provider_reported_charge or 0
+                settlement_evidence = digest({
+                    "reservation_id": self.shared_reservation_id,
+                    "rounds": self.rounds,
+                    "authoritative_account_charge_micro_usd": charge,
+                    "mechanism_sha256": digest(self.mechanism),
+                })
+                shared_settlement = self.shared_ledger.settle(
+                    self.shared_reservation_id,
+                    charged_micro_usd=charge,
+                    evidence_sha256=settlement_evidence,
+                )
         result = {
-            "schema": "ukrainian-llm-eval.request-budget-receipt.v1",
+            "schema": (
+                "ukrainian-llm-eval.request-budget-receipt.v2"
+                if provider_bound else "ukrainian-llm-eval.request-budget-receipt.v1"
+            ),
             "status": status,
             "mechanism_sha256": digest(self.mechanism),
             "rounds_committed": self.rounds,
@@ -541,6 +714,10 @@ class RequestBudget:
             "provider_reported_charge_micro_usd": self.provider_reported_charge,
             "reported_cost_kind": self.mechanism["usage"]["reported_cost_kind"],
         }
+        if provider_bound:
+            result["shared_settlement_sha256"] = (
+                None if shared_settlement is None else shared_settlement["reservation_sha256"]
+            )
         receipt = self.attempt.finalize(result, status=status)
         self._closed = True
         return receipt
@@ -549,11 +726,14 @@ class RequestBudget:
 class RequestBudgetController:
     """Strict route-spec registry and non-recyclable credit commitment ledger."""
 
-    def __init__(self, route_specs: Mapping[str, Any]):
+    def __init__(self, route_specs: Mapping[str, Any], *, shared_ledger_path: Path | None = None):
         self._raw_route_specs = copy.deepcopy(dict(route_specs))
         self.route_specs: dict[str, Any] = {}
         self._routes: dict[str, Any] = {}
         self._store: EvidenceStore | None = None
+        self._shared_ledger_path = None if shared_ledger_path is None else Path(shared_ledger_path)
+        self._shared_ledger = None
+        self._spending_policy: dict[str, Any] | None = None
 
     def prepare(self, manifest, _plan) -> None:
         routes = {route["route_id"]: route for route in manifest["routes"]}
@@ -566,10 +746,16 @@ class RequestBudgetController:
         normalized: dict[str, Any] = {}
         for route_id in sorted(required):
             value = self._raw_route_specs[route_id]
-            if not isinstance(value, Mapping) or set(value) != {"schema", "mechanism", "counter_command"}:
+            if not isinstance(value, Mapping):
                 raise ExamError("invalid request-budget route specification")
-            if value["schema"] != ROUTE_SPEC_SCHEMA:
+            if value.get("schema") == ROUTE_SPEC_SCHEMA:
+                expected_fields = {"schema", "mechanism", "counter_command"}
+            elif value.get("schema") == PROVIDER_BOUND_ROUTE_SPEC_SCHEMA:
+                expected_fields = {"schema", "mechanism"}
+            else:
                 raise ExamError("unsupported request-budget route specification")
+            if set(value) != expected_fields:
+                raise ExamError("invalid request-budget route specification")
             try:
                 mechanism = validate_mechanism(value["mechanism"])
             except RequestBudgetError as exc:
@@ -585,16 +771,64 @@ class RequestBudgetController:
                 raise ExamError("request-budget route identity drift")
             if digest(mechanism) != route["request_budget_mechanism_sha256"]:
                 raise ExamError("request-budget mechanism drift")
-            counter_spec = validate_command_spec(value["counter_command"])
-            if counter_spec["env_names"]:
-                raise ExamError("request-budget counter must not receive environment values")
-            if command_identity_sha256(counter_spec) != mechanism["counter_command_sha256"]:
-                raise ExamError("request-budget counter command drift")
-            normalized[route_id] = {"mechanism": mechanism, "counter_command": counter_spec}
+            if mechanism["schema"] == PROVIDER_BOUND_MECHANISM_SCHEMA:
+                if value["schema"] != PROVIDER_BOUND_ROUTE_SPEC_SCHEMA:
+                    raise ExamError("provider-bound mechanism requires its explicit v2 route specification")
+                bounds = mechanism["input_bound"]
+                output = mechanism["output_parameter"]
+                maximum_requests = max(
+                    suite["limits"]["max_tool_calls"] + 1 for suite in manifest["suites"]
+                )
+                if bounds["max_requests_per_segment"] < maximum_requests:
+                    raise ExamError("provider input bound omits permitted segment requests")
+                if route["billing"]["max_total_input_tokens"] < (
+                    bounds["max_input_tokens_per_request"] * bounds["max_requests_per_segment"]
+                ):
+                    raise ExamError("route input billing bound is below documented provider-context commitment")
+                if any(
+                    suite["limits"]["max_output_tokens"] != output["max_tokens_per_request"]
+                    for suite in manifest["suites"]
+                ):
+                    raise ExamError("provider output bound differs from frozen suite output parameter")
+                if mechanism["pricing_evidence_sha256"] != route["pricing_evidence_sha256"]:
+                    raise ExamError("provider-bound pricing evidence drift")
+                normalized[route_id] = {"mechanism": mechanism, "counter_command": None}
+            else:
+                if value["schema"] != ROUTE_SPEC_SCHEMA:
+                    raise ExamError("exact-counter mechanism requires its v1 route specification")
+                counter_spec = validate_command_spec(value["counter_command"])
+                if counter_spec["env_names"]:
+                    raise ExamError("request-budget counter must not receive environment values")
+                if command_identity_sha256(counter_spec) != mechanism["counter_command_sha256"]:
+                    raise ExamError("request-budget counter command drift")
+                normalized[route_id] = {"mechanism": mechanism, "counter_command": counter_spec}
         self.route_specs = normalized
         self._routes = routes
+        policy = manifest.get("spending_policy")
+        has_provider_bound_paid = any(
+            item["mechanism"]["schema"] == PROVIDER_BOUND_MECHANISM_SCHEMA
+            and routes[route_id]["billing"]["kind"] in {"metered", "existing_credit"}
+            for route_id, item in normalized.items()
+        )
+        if has_provider_bound_paid:
+            if not isinstance(policy, Mapping) or policy.get("mode") != "sequential_shared_cap":
+                raise ExamError("provider-bound paid request budgets require sequential shared spending policy")
+            if self._shared_ledger_path is None:
+                raise ExamError("sequential shared spending policy requires a runtime ledger path")
+            self._spending_policy = copy.deepcopy(dict(policy))
+        elif policy is not None:
+            raise ExamError("sequential shared spending policy has no provider-bound paid route")
 
     def bind(self, root: Path) -> None:
+        self.validate_execution_root(root)
+        if self._spending_policy is not None and self._shared_ledger is None:
+            from .spending_ledger import SharedSpendingLedger
+
+            self._shared_ledger = SharedSpendingLedger(
+                self._shared_ledger_path,
+                ledger_id=self._spending_policy["ledger_id"],
+                cap_micro_usd=self._spending_policy["authorized_cap_micro_usd"],
+            )
         self._store = EvidenceStore(root / "request-budget-evidence")
         # The enclosing scheduler lock proves no cooperating executor can still
         # own these attempts. Preserve the commitment and mark the abandoned
@@ -615,7 +849,29 @@ class RequestBudgetController:
                     status="interrupted",
                 )
 
-    def for_attempt(self, route, config, attempt_id: str, admission_receipt: Mapping[str, Any]) -> RequestBudget | None:
+    def validate_execution_root(self, root: Path) -> None:
+        """Reject a per-run ledger path before the scheduler creates outputs."""
+
+        if self._spending_policy is None:
+            return
+        root_resolved = root.resolve()
+        ledger_resolved = self._shared_ledger_path.resolve()
+        if ledger_resolved == root_resolved or ledger_resolved.is_relative_to(root_resolved):
+            raise ExamError("shared spending ledger must be outside the execution root")
+
+    def remaining_ceiling_micro_usd(self) -> int:
+        if self._shared_ledger is None:
+            raise ExamError("request-budget controller has no shared spending ledger")
+        return self._shared_ledger.snapshot()["remaining_new_spend_micro_usd"]
+
+    @property
+    def uses_sequential_shared_cap(self) -> bool:
+        return self._spending_policy is not None
+
+    def for_attempt(
+        self, route, config, attempt_id: str, admission_receipt: Mapping[str, Any], *,
+        reservation_id: str | None = None, reservation_binding: Mapping[str, Any] | None = None,
+    ) -> RequestBudget | None:
         kind = route["billing"]["kind"]
         if route["request_budget_mechanism_sha256"] is None:
             return None
@@ -651,12 +907,35 @@ class RequestBudgetController:
             if retained_account == account_sha256:
                 committed_credit += commitment
         if kind == "existing_credit":
-            if type(credit) is not int or credit < 0 or committed_credit + maximum_charge > credit:
+            if self._shared_ledger is None and (
+                type(credit) is not int or credit < 0 or committed_credit + maximum_charge > credit
+            ):
                 raise ExamError("existing-credit balance cannot cover retained request commitments")
         elif credit is not None:
             raise ExamError("metered request budget must not claim a credit balance")
-        attempt = self._store.start(
-            {
+        shared_reservation = None
+        mechanism = self.route_specs[route["route_id"]]["mechanism"]
+        if mechanism["schema"] == PROVIDER_BOUND_MECHANISM_SCHEMA:
+            if self._shared_ledger is None or reservation_id is None or reservation_binding is None:
+                raise ExamError("provider-bound request budget lacks shared reservation inputs")
+            from .spending_ledger import SpendingCapExceeded, SpendingLedgerError
+
+            try:
+                shared_reservation = self._shared_ledger.reserve(
+                    reservation_id,
+                    reservation_binding,
+                    maximum_micro_usd=maximum_charge,
+                    funding_kind=kind,
+                    account_sha256=account_sha256,
+                    credit_available_micro_usd=credit,
+                )
+            except SpendingCapExceeded:
+                raise
+            except SpendingLedgerError as exc:
+                raise ExamError(str(exc)) from exc
+            if shared_reservation["replayed"]:
+                raise ExamError("shared spending reservation already exists for candidate attempt")
+        metadata = {
                 "denominator": 0,
                 "candidate_attempt_id": attempt_id,
                 "route_sha256": route["route_sha256"],
@@ -665,7 +944,11 @@ class RequestBudgetController:
                 "billing_kind": kind,
                 "credit_commitment_micro_usd": maximum_charge if kind == "existing_credit" else 0,
                 "maximum_segment_charge_micro_usd": maximum_charge,
-            },
+            }
+        if shared_reservation is not None:
+            metadata["shared_reservation_sha256"] = shared_reservation["reservation_sha256"]
+        attempt = self._store.start(
+            metadata,
             attempt_id=budget_id,
         )
         spec = self.route_specs[route["route_id"]]
@@ -676,6 +959,8 @@ class RequestBudgetController:
             spec["counter_command"],
             attempt,
             maximum_charge=maximum_charge,
+            shared_ledger=self._shared_ledger if shared_reservation is not None else None,
+            shared_reservation_id=reservation_id,
         )
 
 
@@ -684,6 +969,8 @@ __all__ = [
     "COUNTER_RESULT_SCHEMA",
     "INPUT_SEMANTICS",
     "MECHANISM_SCHEMA",
+    "PROVIDER_BOUND_MECHANISM_SCHEMA",
+    "PROVIDER_BOUND_ROUTE_SPEC_SCHEMA",
     "ROUTE_SPEC_SCHEMA",
     "SERIALIZER",
     "RequestBudget",

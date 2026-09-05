@@ -95,3 +95,35 @@ def test_whole_schedule_rejects_new_spend_when_allow_paid_is_false(tmp_path):
 
     with pytest.raises(ExamError, match="unauthorized new spend"):
         controller.prepare(manifest, build_execution_plan(manifest))
+
+
+def test_sequential_authorization_covers_each_segment_while_ledger_owns_total(tmp_path):
+    _packets, _segments, manifest, _plan, _configs = inputs(metered=True)
+    route = manifest["routes"][0]
+    script, lock = _fixture(tmp_path, "print('{}')\n")
+    spec = _command_spec(script, lock)
+    route["admission_command_sha256"] = command_identity_sha256(spec)
+    authorization = {
+        "schema": "ukrainian-llm-eval.operator-authorization.v1",
+        "route_sha256": route["route_sha256"],
+        "allow_paid": True,
+        "max_new_spend_micro_usd": 11,
+    }
+    route["operator_authorization_sha256"] = digest(authorization)
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        manifest["protocol_sha256"], manifest["suites"], [route],
+        scorer_sha256=manifest["scorer_sha256"], tool_policy_sha256=manifest["tool_policy_sha256"],
+        new_spend_cap_micro_usd=11, spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    assert plan["reservation_total_micro_usd"] > authorization["max_new_spend_micro_usd"]
+    CommandAdmissionController({"fixture": spec}, {"fixture": authorization}).prepare(manifest, plan)

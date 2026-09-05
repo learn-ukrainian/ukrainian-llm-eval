@@ -4,7 +4,10 @@
 `existing_credit` research route. A route cannot enter candidate execution
 unless its experiment-manifest entry freezes a non-null
 `request_budget_mechanism_sha256` and the runtime supplies the matching trusted
-integration. A `verified_subscription` route may freeze a mechanism when its
+integration. Version 1 retains the exact provider counter and upfront
+full-schedule admission. Version 2 uses a documented provider context upper
+bound and a shared sequential spending ledger. Receipts from one version are
+never interpreted as the other. A `verified_subscription` route may freeze a v1 mechanism when its
 HTTP provider supports exact accounting, or use `null` to disclose that this
 stronger cost proof is unavailable. That disclosure must not be reported as an
 equivalent token or cost guarantee.
@@ -53,6 +56,25 @@ and arguments, and serialized tool results from prior rounds. Provider framing
 outside the HTTP body is part of the counter's frozen semantics and must be
 included by that provider-specific counter.
 
+## Documented provider upper bounds
+
+The strict `ukrainian-llm-eval.request-budget-mechanism.v2` schema is an
+explicit alternative for paid APIs whose official interface does not expose an
+exact pre-send tokenizer for complete provider framing. It records the
+documented maximum accepted input tokens per request, maximum requests per
+segment, coverage of hidden provider framing, and the evidence SHA-256. It also
+binds the reasoning-inclusive output parameter and maximum, pricing evidence,
+concrete backend-identity evidence, and either authoritative per-request
+account-charge usage paths or an explicit all-null declaration that no inline
+authoritative charge is available.
+
+This mechanism labels its input commitment as
+`provider_context_upper_bound`; it does not claim exact tokenization. Before
+each request it commits the complete documented context maximum. The route
+billing totals must cover every permitted request and output, including tool
+rounds, full-rate cache treatment, fees, and integer rounding. Missing final
+account-charge evidence leaves the full segment reservation unresolved.
+
 ## Cumulative limits and credit
 
 Each request reserves its full reasoning-inclusive output allowance before it
@@ -70,7 +92,7 @@ Sources results are canonically serialized once. A result above the frozen
 byte limit is rejected without truncation; only its byte count and SHA-256 are
 added to budget evidence.
 
-For existing credit, the full maximum segment charge is committed in evidence
+For v1 existing credit, the full maximum segment charge is committed in evidence
 before the first candidate request. All earlier commitments, including failed
 or interrupted attempts, remain charged against later balance observations.
 The implementation does not release them based on an estimate or a repeated
@@ -88,6 +110,25 @@ On resume, this orphan commitment stops the entire experiment with a durable
 `admission_failed` result. Remaining routes and cells do not run from that
 execution root; the commitment and incomplete experiment remain evidence.
 
+Version 2 also requires a private absolute runtime path to one shared SQLite ledger. The
+portable manifest contains only the logical ledger ID, cap, reservation scope,
+settlement rule, and cap-stop outcome. The ledger lives outside every execution
+root and is shared by canaries and scored runs. On first use it binds the exact
+logical ID and cap; reopening the path with a changed ID or cap fails.
+The ledger does not discover other files with the same logical ID. Runtime
+orchestration must pin and reuse the same absolute path for the complete
+canary-and-benchmark authorization.
+
+Under one atomic transaction, the ledger enforces
+`settled_new_spend + unresolved_sent_reservations + next_worst_case <= cap`.
+A whole segment is reserved after admission and before its first provider
+request. Timeout, lost response, missing billing, interruption, and restart
+retain its full worst case. Only authoritative final account charges for every
+sent request settle the reservation and release the unused portion. Estimates
+never settle it. Existing-credit settlement remains retained against later
+balance observations until separate authoritative reconciliation proves that
+the charge is reflected in the observed balance.
+
 ## Runtime map
 
 `run-research --request-budgets request-budgets.json` loads an explicit route
@@ -100,7 +141,10 @@ map. The map and every referenced file should remain private:
 }
 ```
 
-Each route file has schema
+Each exact-counter route file has schema
 `ukrainian-llm-eval.request-budget-route.v1` and exactly `mechanism` plus
-`counter_command` objects. Commands are supplied by the operator and are never
-discovered from benchmark, manifest or model output.
+`counter_command` objects. A provider-bound route file has schema
+`ukrainian-llm-eval.request-budget-route.v2` and exactly its `mechanism`; the
+runtime controller receives the shared ledger path separately. Commands and
+evidence are supplied by the operator and are never discovered from benchmark,
+manifest or model output.

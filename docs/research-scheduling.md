@@ -38,8 +38,11 @@ counts explicitly rather than returning an empty summary. Unsupported conditions
 explaining their absence and remain visible in the experiment definition.
 
 `build_execution_plan` constructs every ordered cell and reservation. Conditions
-alternate order across repeats. It rejects a total reservation above the shared
-new-spend ceiling, initially USD 10. Amounts use integer micro-USD; metered rates
+alternate order across repeats. The v1 policy rejects a total reservation above
+the shared new-spend ceiling, initially USD 10. The explicit v2
+`sequential_shared_cap` policy preserves the complete matrix and order even when
+its conservative total exceeds the cap; runtime reserves each whole segment
+atomically against the shared ledger. Amounts use integer micro-USD; metered rates
 are per million tokens and multiplication rounds up. Input bounds must cover
 all requests, including repeated histories and tool results. Output bounds
 cover all permitted tool rounds. Unknown pricing is not zero cost. Subscription
@@ -59,7 +62,7 @@ ukrainian-llm-eval plan-research --specification experiment-specification.json \
 The denominator file is a JSON object, such as `{"items":347,"points":347}`
 for the complete ULP source. GEC preparation also requires `--gec-source`.
 The specification uses the named arguments of `build_experiment_manifest`,
-including full segment plans. Planning reports `execution_admitted: false`
+including full segment plans. V1 planning reports `execution_admitted: false`
 and writes no outputs if the complete reservation total exceeds the ceiling.
 
 ## Offline scoring CLI
@@ -125,6 +128,10 @@ receives only its segment, shared instructions, response schema and
 condition-authorized reference tools.
 
 A POSIX lock prevents concurrent executors in the same experiment directory.
+For v2 paid execution, a separate SQLite transaction serializes commitments
+across execution directories, canaries, and scored runs sharing the logical
+ledger ID. The private ledger path is outside those directories; its logical ID
+and cap must match the portable manifest.
 Each reservation is recorded in the append-only attempt metadata before the
 provider call. No reservation is reused to fund extra work. A failed segment
 stops its cell; later independent cells may proceed. Resume finalizes a started
@@ -137,6 +144,12 @@ overruns, or failed admission stop the whole experiment. A durable stop record
 prevents resume from bypassing that decision. Raw results remain preserved.
 Reported provider usage is evidence, not a replacement for conservative
 pre-request bounds; a post-call overrun check cannot undo an incurred charge.
+
+If the next immutable segment does not fit, execution stops without retry,
+reordering, truncation, or substitution. Immutable `budget-stop.json` records
+every remaining scheduled segment as `not_executed_budget` with its denominator.
+The durable stop prevents resume, and no complete or subset result manifest is
+produced.
 
 Completed cell artifacts bind their ordered attempt receipts, original packet,
 segment plan and execution plan. The final result manifest binds all cell

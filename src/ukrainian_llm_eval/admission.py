@@ -300,10 +300,17 @@ class CommandAdmissionController:
                 raise ExamError("invalid operator authorization")
             total = sum(segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
                         for segment in cell["segments"])
+            largest = max(
+                (segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
+                 for segment in cell["segments"]),
+                default=0,
+            )
             max_new_spend = _integer(auth["max_new_spend_micro_usd"])
             if total and not auth["allow_paid"]:
                 raise ExamError("frozen route schedule has unauthorized new spend")
-            if total > max_new_spend:
+            sequential = plan.get("spending_policy", {}).get("mode") == "sequential_shared_cap"
+            authorized_amount = largest if sequential else total
+            if authorized_amount > max_new_spend:
                 raise ExamError("frozen route schedule exceeds operator authorization")
 
     def __call__(self, route, config, condition, *, request, execution_binding, reserved_micro_usd,

@@ -18,7 +18,8 @@ def research_implementation_sha256():
     """Bind the actual controller/prompt/tool implementation, not a label."""
     names = (
         "adapters.py", "runner.py", "mcp_proxy.py", "execution.py", "scheduling.py", "segmentation.py",
-        "admission.py", "admission_command.py", "request_budget.py", "benchmark_manifest.py", "core.py",
+        "admission.py", "admission_command.py", "request_budget.py", "spending_ledger.py",
+        "benchmark_manifest.py", "core.py",
         "evidence.py", "gec.py",
     )
     return digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names})
@@ -174,6 +175,7 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
     from .request_budget import request_budget_attempt_id, verify_request_budget_evidence
     from .runner import _comparison, _validated_packet
     from .segmentation import derive_segment_packet, reassemble_cell, validate_segment_plan
+    from .spending_ledger import SpendingCapExceeded
 
     validate_execution_plan(manifest, plan)
     if not callable(admission_probe) or not callable(getattr(admission_probe, "prepare", None)):
@@ -213,6 +215,11 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
         if route_fingerprint(configs[route_id], sources_urls.get(route_id)) != route["route_sha256"]:
             raise ExamError("runtime endpoint drift")
     admission_probe.prepare(manifest, plan)
+    if plan.get("spending_policy", {}).get("mode") == "sequential_shared_cap":
+        validate_root = getattr(request_budget_controller, "validate_execution_root", None)
+        if not callable(validate_root):
+            raise ExamError("sequential spending controller cannot validate its execution root")
+        validate_root(root)
     if root.is_symlink():
         raise ExamError("research directory must not be a symlink")
     root.mkdir(mode=0o700, parents=True, exist_ok=resume)
@@ -237,11 +244,16 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
         scheduled = {segment["attempt_id"] for cell in plan["cells"] for segment in cell["segments"]}
         if set(existing) - scheduled:
             raise ExamError("foreign attempt in research evidence")
-        # The frozen sum covers even untouched/failed cells; never recycle a
-        # reservation or admit extra work using an estimated actual saving.
+        sequential = plan.get("spending_policy", {}).get("mode") == "sequential_shared_cap"
+        if sequential and not getattr(request_budget_controller, "uses_sequential_shared_cap", False):
+            raise ExamError("sequential spending plan lacks its shared runtime ledger")
+        # V1 admits the full frozen sum up front. V2 preserves that same full
+        # schedule but atomically admits each segment against a shared ledger.
         expected_total = sum(segment["reserved_micro_usd"] for cell in plan["cells"]
                              for segment in cell["segments"])
-        if expected_total != plan["reservation_total_micro_usd"] or expected_total > plan["new_spend_cap_micro_usd"]:
+        if expected_total != plan["reservation_total_micro_usd"] or (
+            not sequential and expected_total > plan["new_spend_cap_micro_usd"]
+        ):
             raise ExamError("research reservation ceiling mismatch")
         seen_sessions = set()
         cell_results = []
@@ -292,9 +304,16 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                         request = build_admission_request(route, config, cell["condition"],
                                                           input_utf8_bytes=len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"]).encode()),
                                                           tool_policy_sha256=manifest["tool_policy_sha256"], composite_sha256=composite)
-                        # Full-schedule admission already reserves every slot;
-                        # this remainder excludes all other frozen reservations.
-                        available = plan["new_spend_cap_micro_usd"] - expected_total + scheduled_segment["reserved_micro_usd"]
+                        if sequential:
+                            available = request_budget_controller.remaining_ceiling_micro_usd()
+                            if scheduled_segment["reserved_micro_usd"] > available:
+                                raise SpendingCapExceeded(
+                                    "next reservation exceeds the authorized shared new-spend cap"
+                                )
+                        else:
+                            # Full-schedule admission already reserves every slot;
+                            # this remainder excludes all other frozen reservations.
+                            available = plan["new_spend_cap_micro_usd"] - expected_total + scheduled_segment["reserved_micro_usd"]
                         _, admission_evidence = admission_probe(route, config, cell["condition"], request=request,
                                                                  execution_binding=binding,
                                                                  reserved_micro_usd=scheduled_segment["reserved_micro_usd"],
@@ -307,11 +326,59 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                         verify_admission_evidence(verified, binding, route, composite, scheduled_segment["reserved_micro_usd"])
                         context.update(admission_attempt_id=admission_id, admission_receipt_sha256=digest(verified))
                         if request_budget_controller is not None:
-                            request_budget = request_budget_controller.for_attempt(
-                                route, config, attempt_id, verified["result"]
-                            )
+                            if sequential:
+                                request_budget = request_budget_controller.for_attempt(
+                                    route, config, attempt_id, verified["result"],
+                                    reservation_id=scheduled_segment["reservation_id"],
+                                    reservation_binding=binding,
+                                )
+                            else:
+                                request_budget = request_budget_controller.for_attempt(
+                                    route, config, attempt_id, verified["result"]
+                                )
                         if route_id in budgeted_routes and request_budget is None:
                             raise ExamError("candidate with required budgeting lacks a request-level budget")
+                    except SpendingCapExceeded as exc:
+                        remaining = []
+                        found = False
+                        for pending_cell in plan["cells"]:
+                            pending_plan = segment_plans[pending_cell["suite_id"]]
+                            segment_sizes = {
+                                item["segment_id"]: len(item["item_ids"])
+                                for item in pending_plan["segments"]
+                            }
+                            for pending in pending_cell["segments"]:
+                                if pending["attempt_id"] == attempt_id:
+                                    found = True
+                                if found:
+                                    remaining.append({
+                                        "cell_id": pending_cell["cell_id"],
+                                        "segment_id": pending["segment_id"],
+                                        "attempt_id": pending["attempt_id"],
+                                        "reservation_id": pending["reservation_id"],
+                                        "denominator": segment_sizes[pending["segment_id"]],
+                                        "status": "not_executed_budget",
+                                    })
+                        budget_stop = {
+                            "schema": "ukrainian-llm-eval.research-budget-stop.v1",
+                            "execution_plan_sha256": plan["execution_plan_sha256"],
+                            "ledger_id": plan["spending_policy"]["ledger_id"],
+                            "next_attempt_id": attempt_id,
+                            "reason": "not_executed_budget",
+                            "error_class": type(exc).__name__,
+                            "remaining": remaining,
+                            "remaining_denominator": sum(item["denominator"] for item in remaining),
+                        }
+                        _immutable_json(root / "budget-stop.json", budget_stop)
+                        stop = {
+                            "execution_plan_sha256": plan["execution_plan_sha256"],
+                            "reason": "budget_exhausted",
+                            "next_attempt_id": attempt_id,
+                            "budget_stop_sha256": digest(budget_stop),
+                        }
+                        _immutable_json(root / "stop.json", stop)
+                        yield {"status": "stopped", "reason": stop["reason"]}
+                        return
                     except (ExamError, OSError, TimeoutError) as exc:
                         stop = {"execution_plan_sha256": plan["execution_plan_sha256"],
                                 "reason": "admission_failed", "error_class": type(exc).__name__,

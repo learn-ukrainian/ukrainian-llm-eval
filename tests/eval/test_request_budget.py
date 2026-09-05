@@ -12,12 +12,15 @@ from ukrainian_llm_eval.request_budget import (
     COUNTER_RESULT_SCHEMA,
     INPUT_SEMANTICS,
     MECHANISM_SCHEMA,
+    PROVIDER_BOUND_MECHANISM_SCHEMA,
+    PROVIDER_BOUND_ROUTE_SPEC_SCHEMA,
     ROUTE_SPEC_SCHEMA,
     SERIALIZER,
     RequestBudgetController,
     RequestBudgetError,
     validate_mechanism,
 )
+from ukrainian_llm_eval.spending_ledger import SharedSpendingLedger
 
 
 def _packet():
@@ -343,3 +346,146 @@ def test_paid_controller_cannot_return_no_budget_before_candidate(monkeypatch, t
     )
     assert progress == [{"status": "stopped", "reason": "admission_failed"}]
     assert EvidenceStore(root / "evidence").verify_all() == {}
+
+
+def _provider_bound_values(
+    tmp_path, *, attempt_id="attempt-provider-bound", ledger_path=None, inline_charge=True
+):
+    route_sha = "b" * 64
+    mechanism = {
+        "schema": PROVIDER_BOUND_MECHANISM_SCHEMA,
+        "route_sha256": route_sha,
+        "provider": "fixture-provider",
+        "serializer": SERIALIZER,
+        "input_bound": {
+            "kind": "provider_context_upper_bound",
+            "max_input_tokens_per_request": 100,
+            "max_requests_per_segment": 3,
+            "includes_hidden_provider_framing": True,
+            "evidence_sha256": "4" * 64,
+        },
+        "output_parameter": {
+            "name": "max_tokens",
+            "max_tokens_per_request": 100,
+            "includes_reasoning": True,
+            "includes_tool_calls": True,
+            "includes_final_output": True,
+            "evidence_sha256": "5" * 64,
+        },
+        "usage": {
+            "input_tokens_path": ["prompt_tokens"],
+            "output_tokens_path": ["completion_tokens"],
+            "output_includes_reasoning": True,
+            "reported_cost_path": ["cost"] if inline_charge else None,
+            "reported_cost_kind": "account_charge" if inline_charge else None,
+            "reported_cost_scope": "request" if inline_charge else None,
+        },
+        "cache_billing": CACHE_BILLING,
+        "max_tool_result_utf8_bytes": 4096,
+        "pricing_evidence_sha256": "6" * 64,
+        "backend_identity_evidence_sha256": "7" * 64,
+    }
+    route = {
+        "route_id": "fixture",
+        "route_sha256": route_sha,
+        "request_budget_mechanism_sha256": digest(mechanism),
+        "pricing_evidence_sha256": "6" * 64,
+        "billing": {
+            "kind": "metered",
+            "input_micro_usd_per_million_tokens": 1_000_000,
+            "output_micro_usd_per_million_tokens": 1_000_000,
+            "max_total_input_tokens": 300,
+            "max_total_output_tokens": 300,
+            "max_tool_rounds": 2,
+            "tool_round_micro_usd": 3,
+        },
+    }
+    config = {
+        "adapter": "chat-http", "provider": "fixture-provider", "max_output_tokens": 100,
+        "max_tool_calls": 2,
+    }
+    policy = {
+        "mode": "sequential_shared_cap", "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 1_000,
+    }
+    spec = {"schema": PROVIDER_BOUND_ROUTE_SPEC_SCHEMA, "mechanism": mechanism}
+    controller = RequestBudgetController(
+        {"fixture": spec},
+        shared_ledger_path=ledger_path or tmp_path / "shared" / "spending.sqlite3",
+    )
+    controller.prepare(
+        {"routes": [route], "suites": [{"limits": {"max_tool_calls": 2, "max_output_tokens": 100}}],
+         "spending_policy": policy},
+        {"cells": []},
+    )
+    root = tmp_path / "run"
+    root.mkdir()
+    controller.bind(root)
+    budget = controller.for_attempt(
+        route, config, attempt_id,
+        {"credit_available_micro_usd": None, "account_sha256": "c" * 64},
+        reservation_id="reserve-provider-bound",
+        reservation_binding={"candidate_attempt_id": attempt_id},
+    )
+    return route, config, controller, budget
+
+
+def test_provider_bound_mechanism_labels_upper_bound_and_settles_authoritative_charge(tmp_path):
+    _route, _config, controller, budget = _provider_bound_values(tmp_path)
+    raw, commitment = budget.commit_request(
+        {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
+    )
+    assert len(raw) < commitment["input_tokens"]
+    assert commitment["input_bound_kind"] == "provider_context_upper_bound"
+    budget.observe({"prompt_tokens": 12, "completion_tokens": 5, "cost": "0.000010"}, tool_calls=0)
+    receipt = budget.finalize("completed")
+    assert receipt["result"]["schema"] == "ukrainian-llm-eval.request-budget-receipt.v2"
+    assert receipt["result"]["input_tokens_committed"] == 100
+    ledger = controller._shared_ledger
+    assert ledger.get("reserve-provider-bound")["settled_micro_usd"] == 10
+    assert ledger.snapshot()["remaining_new_spend_micro_usd"] == 990
+
+
+def test_provider_bound_timeout_keeps_full_shared_reservation(tmp_path):
+    _route, _config, _controller, budget = _provider_bound_values(tmp_path)
+    budget.commit_request(
+        {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
+    )
+    receipt = budget.finalize("failed")
+    assert receipt["result"]["shared_settlement_sha256"] is None
+    ledger = SharedSpendingLedger(
+        tmp_path / "shared" / "spending.sqlite3",
+        ledger_id="issue5-public-evaluator", cap_micro_usd=1_000,
+    )
+    assert ledger.get("reserve-provider-bound")["state"] == "unresolved"
+    assert ledger.snapshot()["unresolved_new_spend_micro_usd"] == 606
+
+
+def test_valid_usage_without_inline_charge_keeps_full_reservation_across_roots(tmp_path):
+    _route, _config, _controller, budget = _provider_bound_values(tmp_path, inline_charge=False)
+    budget.commit_request(
+        {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
+    )
+    budget.observe({"prompt_tokens": 12, "completion_tokens": 5}, tool_calls=0)
+    receipt = budget.finalize("completed")
+    assert receipt["result"]["shared_settlement_sha256"] is None
+    restarted = SharedSpendingLedger(
+        tmp_path / "shared" / "spending.sqlite3",
+        ledger_id="issue5-public-evaluator", cap_micro_usd=1_000,
+    )
+    assert restarted.get("reserve-provider-bound")["state"] == "unresolved"
+    assert restarted.snapshot()["unresolved_new_spend_micro_usd"] == 606
+
+
+def test_configured_authoritative_charge_path_cannot_disappear(tmp_path):
+    _route, _config, _controller, budget = _provider_bound_values(tmp_path)
+    budget.commit_request(
+        {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
+    )
+    with pytest.raises(RequestBudgetError, match="provider-reported cost"):
+        budget.observe({"prompt_tokens": 12, "completion_tokens": 5}, tool_calls=0)
+
+
+def test_shared_ledger_cannot_be_scoped_under_execution_root(tmp_path):
+    with pytest.raises(ExamError, match="outside the execution root"):
+        _provider_bound_values(tmp_path, ledger_path=tmp_path / "run" / "spending.sqlite3")

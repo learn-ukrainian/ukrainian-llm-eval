@@ -310,3 +310,65 @@ def test_reused_session_stops_before_second_cell_score(monkeypatch, tmp_path):
                                         request_budget_controller=fixture_budgets)) == [
         {"status": "stopped", "reason": "missing_or_reused_session"}]
     assert len(calls) == 2 and not list(root.glob("cell-*.json"))
+
+
+def test_sequential_cap_stop_preserves_full_remaining_denominator_without_retry(monkeypatch, tmp_path):
+    packets, plans, original, _old_plan, configs = inputs(metered=True)
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        original["protocol_sha256"], original["suites"], original["routes"],
+        scorer_sha256=original["scorer_sha256"], tool_policy_sha256=original["tool_policy_sha256"],
+        new_spend_cap_micro_usd=11, spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+
+    class SequentialFixture(FixtureBudgets):
+        uses_sequential_shared_cap = True
+
+        def __init__(self):
+            self.allocations = 0
+
+        def remaining_ceiling_micro_usd(self):
+            return 11 if self.allocations == 0 else 0
+
+        def validate_execution_root(self, _root):
+            return None
+
+        def for_attempt(self, route, config, attempt_id, admission_receipt, **kwargs):
+            from ukrainian_llm_eval.spending_ledger import SpendingCapExceeded
+
+            if self.allocations:
+                raise SpendingCapExceeded("synthetic shared cap")
+            self.allocations += 1
+            return super().for_attempt(route, config, attempt_id, admission_receipt)
+
+    controller = SequentialFixture()
+    root = tmp_path / "research"
+    outcome = list(scheduling.run_research(
+        packets, plans, manifest, plan, configs, root,
+        admission_probe=admit, request_budget_controller=controller,
+    ))
+    assert outcome == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1
+    stop = json.loads((root / "budget-stop.json").read_text())
+    assert stop["reason"] == "not_executed_budget"
+    assert len(stop["remaining"]) == 11
+    assert stop["remaining_denominator"] == 11
+    assert all(item["status"] == "not_executed_budget" for item in stop["remaining"])
+    assert not (root / "result-manifest.json").exists()
+
+    assert list(scheduling.run_research(
+        packets, plans, manifest, plan, configs, root,
+        admission_probe=admit, request_budget_controller=controller, resume=True,
+    )) == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1

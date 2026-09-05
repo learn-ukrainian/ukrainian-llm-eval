@@ -58,13 +58,17 @@ Admission binds the complete request-budget mechanism SHA-256 into its
 composite identity. Its receipt also retains the account identity and observed
 existing-credit balance needed by the request controller. Admission remains a
 separate check: its prompt-size observation does not replace exact counting of
-the serialized request and cumulative tool history. See [request-level budget
-control](request-budget.md).
+the serialized request and cumulative tool history under v1, or the explicitly
+labeled documented provider-context upper bound under v2. See [request-level
+budget control](request-budget.md).
 
 Operator authorization is separate from entitlement. Its strict record binds
 the route and the permission and ceiling for incremental new-money charges;
 the plan must pin its canonical hash. Supplying that exact route-bound record
-is the explicit authorization to execute the route. `allow_paid: false` with a
+is the explicit authorization to execute the route. Under v1, authorization
+must cover the full route schedule. Under `sequential_shared_cap`, it must
+permit paid use and cover the route's largest immutable segment; the shared
+ledger independently enforces the experiment-wide total. `allow_paid: false` with a
 zero new-spend ceiling is therefore the expected record for an explicitly
 selected subscription or existing-credit route: it permits use of that route
 while forbidding new metered charges. It is not a route-disable switch.
