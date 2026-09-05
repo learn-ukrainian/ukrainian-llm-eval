@@ -84,6 +84,9 @@ resume, the schedule lock permits an incomplete budget to be finalized as
 interrupted; its credit commitment remains charged. A budget created before a
 crash but lacking its candidate receipt makes that candidate permanently
 ineligible for retry.
+On resume, this orphan commitment stops the entire experiment with a durable
+`admission_failed` result. Remaining routes and cells do not run from that
+execution root; the commitment and incomplete experiment remain evidence.
 
 ## Runtime map
 

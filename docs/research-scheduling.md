@@ -33,7 +33,8 @@ membership against source bytes. Perform source-aware preparation first.
 and profile hashes, route/configuration identities, common per-suite limits,
 the complete private key's canonical hash, scorer identity and pricing/entitlement evidence. Limits explicitly apply to
 each segment. The generic constructor permits deliberate repeat counts; the
-public experiment requires three. Unsupported conditions need an evidence hash
+public experiment requires three. Primary `score-research` rejects other repeat
+counts explicitly rather than returning an empty summary. Unsupported conditions need an evidence hash
 explaining their absence and remain visible in the experiment definition.
 
 `build_execution_plan` constructs every ordered cell and reservation. Conditions

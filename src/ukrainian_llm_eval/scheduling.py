@@ -186,6 +186,10 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                    if route["billing"]["kind"] in {"metered", "existing_credit"}}
     if paid_routes and request_budget_controller is None:
         raise ExamError("metered and existing-credit research requires request-level budgeting")
+    budgeted_routes = paid_routes | {route_id for route_id, route in routes.items()
+                                    if route["request_budget_mechanism_sha256"] is not None}
+    if budgeted_routes and request_budget_controller is None:
+        raise ExamError("frozen request-budget mechanism requires a request-budget controller")
     if request_budget_controller is not None:
         if not callable(getattr(request_budget_controller, "prepare", None)) or not callable(
             getattr(request_budget_controller, "bind", None)
@@ -306,8 +310,8 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                             request_budget = request_budget_controller.for_attempt(
                                 route, config, attempt_id, verified["result"]
                             )
-                        if route["billing"]["kind"] in {"metered", "existing_credit"} and request_budget is None:
-                            raise ExamError("paid candidate lacks a request-level budget")
+                        if route_id in budgeted_routes and request_budget is None:
+                            raise ExamError("candidate with required budgeting lacks a request-level budget")
                     except (ExamError, OSError, TimeoutError) as exc:
                         stop = {"execution_plan_sha256": plan["execution_plan_sha256"],
                                 "reason": "admission_failed", "error_class": type(exc).__name__,

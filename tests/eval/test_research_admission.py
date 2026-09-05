@@ -44,6 +44,8 @@ def controller_inputs(tmp_path):
 
 def test_each_candidate_has_fresh_real_process_admission_and_resume_makes_no_calls(monkeypatch, tmp_path):
     args, controller = controller_inputs(tmp_path)
+    assert controller.authorizations["fixture"]["allow_paid"] is False
+    assert controller.authorizations["fixture"]["max_new_spend_micro_usd"] == 0
     calls = []
     monkeypatch.setattr(execution, "run_exam", trial(calls))
     root = tmp_path / "execution"
@@ -69,3 +71,27 @@ def test_changed_operator_authorization_prevents_all_execution(monkeypatch, tmp_
     with pytest.raises(ExamError, match="authorization drift"):
         list(scheduling.run_research(*args, root, admission_probe=controller))
     assert calls == [] and not root.exists()
+
+
+def test_whole_schedule_rejects_new_spend_when_allow_paid_is_false(tmp_path):
+    _packets, _segments, manifest, _plan, _configs = inputs(metered=True)
+    route = manifest["routes"][0]
+    script, lock = _fixture(tmp_path, "print('{}')\n")
+    spec = _command_spec(script, lock)
+    route["admission_command_sha256"] = command_identity_sha256(spec)
+    authorization = {
+        "schema": "ukrainian-llm-eval.operator-authorization.v1",
+        "route_sha256": route["route_sha256"],
+        "allow_paid": False,
+        "max_new_spend_micro_usd": 0,
+    }
+    route["operator_authorization_sha256"] = digest(authorization)
+    manifest = build_experiment_manifest(
+        manifest["protocol_sha256"], manifest["suites"], [route],
+        scorer_sha256=manifest["scorer_sha256"],
+        tool_policy_sha256=manifest["tool_policy_sha256"],
+    )
+    controller = CommandAdmissionController({"fixture": spec}, {"fixture": authorization})
+
+    with pytest.raises(ExamError, match="unauthorized new spend"):
+        controller.prepare(manifest, build_execution_plan(manifest))

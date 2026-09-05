@@ -82,7 +82,7 @@ def _record(value, expected_hash, fields, observations, label):
 def validate_admission_result(result, request, route, config, *, reserved_micro_usd,
                               remaining_ceiling_micro_usd, operator_authorization,
                               max_age_seconds, now=None):
-    """Validate fresh claims, cost arithmetic and separately bound authorization."""
+    """Validate fresh claims, cost arithmetic and route-bound new-spend authorization."""
     clock = now or datetime.now(UTC)
     _integer(max_age_seconds)
     if max_age_seconds == 0 or clock.tzinfo is None:
@@ -156,9 +156,15 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
         raise ExamError("admission operator authorization route mismatch")
     if digest(authorization) != route["operator_authorization_sha256"]:
         raise ExamError("admission operator authorization drift")
-    if type(authorization["allow_paid"]) is not bool or (incremental and not authorization["allow_paid"]):
-        raise ExamError("admission paid execution not authorized")
-    if incremental > _integer(authorization["max_new_spend_micro_usd"]):
+    if type(authorization["allow_paid"]) is not bool:
+        raise ExamError("invalid operator authorization")
+    # Supplying the exact hash-bound record authorizes this route. These two
+    # fields separately govern incremental new-money charges; zero-incremental
+    # subscription and existing-credit routes therefore use false/zero.
+    max_new_spend = _integer(authorization["max_new_spend_micro_usd"])
+    if incremental and not authorization["allow_paid"]:
+        raise ExamError("admission new spend not authorized")
+    if incremental > max_new_spend:
         raise ExamError("admission exceeds operator authorization")
     requirements = request["requirements"]
     if capability["model"] != config["model"] or capability["effort"] != config["effort"]:
@@ -294,7 +300,10 @@ class CommandAdmissionController:
                 raise ExamError("invalid operator authorization")
             total = sum(segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
                         for segment in cell["segments"])
-            if total > _integer(auth["max_new_spend_micro_usd"]) or (total and not auth["allow_paid"]):
+            max_new_spend = _integer(auth["max_new_spend_micro_usd"])
+            if total and not auth["allow_paid"]:
+                raise ExamError("frozen route schedule has unauthorized new spend")
+            if total > max_new_spend:
                 raise ExamError("frozen route schedule exceeds operator authorization")
 
     def __call__(self, route, config, condition, *, request, execution_binding, reserved_micro_usd,

@@ -51,7 +51,8 @@ integer micro-USD and compares the observed quote against that arithmetic,
 the frozen reservation and remaining ceiling. Existing credit must cover the
 quoted provider charge while incremental spend remains zero. Unknown pricing,
 unknown fit, unhealthy routes, insufficient credit, changed identity or limits,
-expired entitlement and unauthorized paid cost all fail closed.
+expired entitlement and unauthorized incremental new-money cost all fail
+closed.
 
 Admission binds the complete request-budget mechanism SHA-256 into its
 composite identity. Its receipt also retains the account identity and observed
@@ -61,10 +62,18 @@ the serialized request and cumulative tool history. See [request-level budget
 control](request-budget.md).
 
 Operator authorization is separate from entitlement. Its strict record binds
-the route, whether paid execution is allowed and a new-spend ceiling; the plan
-must pin its canonical hash. An account subscription or balance is not itself
-permission to spend. Integration must enforce the authorized totals across the
-entire frozen schedule as well as each segment.
+the route and the permission and ceiling for incremental new-money charges;
+the plan must pin its canonical hash. Supplying that exact route-bound record
+is the explicit authorization to execute the route. `allow_paid: false` with a
+zero new-spend ceiling is therefore the expected record for an explicitly
+selected subscription or existing-credit route: it permits use of that route
+while forbidding new metered charges. It is not a route-disable switch.
+
+An account subscription or balance alone is not permission to use it: without
+the matching route-bound record, admission fails. Existing-credit consumption
+is separately limited by the frozen route bounds, fresh balance verification
+and retained request-budget commitments. Integration enforces the authorized
+new-spend total across the entire frozen schedule and each segment.
 
 `invoke_validated_admission` retains the safe request and command result in a
 private append-only evidence store. Accepted claims and their full response

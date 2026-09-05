@@ -54,6 +54,17 @@ def test_full_three_repeat_summary_and_paired_delta(monkeypatch, tmp_path):
                                          "mean": 0, "sample_sd": 0}]
 
 
+@pytest.mark.parametrize("repeats", [1, 2, 4])
+def test_non_primary_repeat_count_has_explicit_error(tmp_path, repeats):
+    packets, plans, original, _, configs = inputs()
+    manifest = build_experiment_manifest(
+        original["protocol_sha256"], original["suites"], original["routes"], repeats=repeats,
+        scorer_sha256=original["scorer_sha256"], tool_policy_sha256=original["tool_policy_sha256"])
+    with pytest.raises(ExamError, match="requires exactly three repeats"):
+        score_sealed_experiment(packets, plans, {}, manifest, build_execution_plan(manifest),
+                                configs, tmp_path / "absent", scorer_bindings={})
+
+
 def test_failed_cell_keeps_explicit_no_score_and_no_partial_mean(monkeypatch, tmp_path):
     args, bindings, _ = sealed(monkeypatch, tmp_path, failed=True)
     report = score_sealed_experiment(*args, scorer_bindings=bindings)

@@ -41,6 +41,36 @@ def inputs(*, metered=False):
     return {"ulp": packet}, {"ulp": segmentation}, manifest, plan, {"fixture": config}
 
 
+@pytest.mark.parametrize("missing_controller", [True, False])
+def test_subscription_frozen_budget_cannot_start_without_budget(monkeypatch, tmp_path, missing_controller):
+    packets, plans, manifest, _, configs = inputs()
+    manifest["routes"][0]["request_budget_mechanism_sha256"] = "7" * 64
+    manifest = build_experiment_manifest(
+        manifest["protocol_sha256"], manifest["suites"], manifest["routes"],
+        scorer_sha256=manifest["scorer_sha256"], tool_policy_sha256=manifest["tool_policy_sha256"])
+    plan = build_execution_plan(manifest)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+    root = tmp_path / "research"
+
+    class MissingBudget(FixtureBudgets):
+        def for_attempt(self, *_args):
+            return None
+
+    run = scheduling.run_research(packets, plans, manifest, plan, configs, root,
+                                  admission_probe=admit,
+                                  request_budget_controller=None if missing_controller else MissingBudget())
+    if missing_controller:
+        with pytest.raises(ExamError, match="frozen request-budget mechanism"):
+            list(run)
+        assert not root.exists()
+    else:
+        assert list(run) == [{"status": "stopped", "reason": "admission_failed"}]
+        assert EvidenceStore(root / "admission-evidence").verify_all()
+        assert not EvidenceStore(root / "evidence").verify_all()
+    assert calls == []
+
+
 def admit(route, _config, _condition, *, request, execution_binding, reserved_micro_usd,
           remaining_ceiling_micro_usd, evidence_dir):
     # Synthetic controller fixture; never an eligible live provider probe.

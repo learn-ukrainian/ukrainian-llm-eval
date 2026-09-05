@@ -46,7 +46,10 @@ An admission command is a trusted local integration, not a sandbox for
 untrusted code. Its declared interpreter/script/dependencies are checked by
 the admission command contract and the command identity must match the route
 hash frozen in the manifest. The authorization file separately states whether
-paid execution is allowed and its maximum new-spend amount. Matching hashes
+incremental new spending is allowed and its maximum amount. The exact route-bound
+record authorizes route execution; `allow_paid: false` permits an explicitly
+selected subscription or existing-credit route while forbidding new charges.
+Matching hashes
 alone do not prove provider health, entitlement, pricing, or model/effort
 support; every segment still requires a fresh nonce-bound admission result.
 

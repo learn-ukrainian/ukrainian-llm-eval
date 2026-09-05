@@ -65,6 +65,18 @@ def test_admits_fresh_explicit_claims_and_separate_authorization(kind):
     assert "reserved_micro_usd" not in repr(request) and "responses" not in repr(request)
 
 
+@pytest.mark.parametrize("kind", ["verified_subscription", "existing_credit"])
+def test_exact_route_record_authorizes_use_without_authorizing_new_spend(kind):
+    result, request, route, config, kwargs = inputs(kind)
+    authorization = kwargs["operator_authorization"]
+    assert authorization["allow_paid"] is False
+    assert authorization["max_new_spend_micro_usd"] == 0
+
+    receipt = validate_admission_result(result, request, route, config, **kwargs)
+    assert receipt["operator_authorization_sha256"] == route["operator_authorization_sha256"]
+    assert receipt["incremental_segment_cost_micro_usd"] == 0
+
+
 @pytest.mark.parametrize("change", ["nonce", "stale", "future", "extra", "unhealthy", "unknown_fit",
                                     "underquoted", "overquoted", "unauthorized", "expired", "changed_state"])
 def test_admission_rejects_unknown_stale_or_unsafe_claims(change):
