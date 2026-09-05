@@ -1,0 +1,183 @@
+import json
+
+import pytest
+
+from ukrainian_llm_eval import execution, scheduling
+from ukrainian_llm_eval.benchmark_manifest import build_execution_plan, build_experiment_manifest
+from ukrainian_llm_eval.core import ExamError, digest
+from ukrainian_llm_eval.evidence import EvidenceStore
+from ukrainian_llm_eval.segmentation import derive_segment_plan
+
+
+def inputs(*, metered=False):
+    body = {"schema": "zno-nmt.questions.v1", "items": [
+        {"id": f"q{i:04d}", "kind": "single", "question": f"Виберіть {i}",
+         "options": [{"id": "A", "text": "так"}, {"id": "B", "text": "ні"}], "rows": []}
+        for i in (1, 2)]}
+    packet = {**body, "packet_sha256": digest(body)}
+    config = {"schema": "zno-nmt.config.v1", "adapter": "claude", "model": "fixture", "effort": None,
+              "timeout_seconds": 10, "max_output_tokens": 100, "max_tool_calls": 2,
+              "repeats": 3, "tools": [], "corpus_id": None}
+    segmentation = derive_segment_plan(packet, suite_id="ulp", protocol_sha256="a" * 64,
+                                       denominator={"items": 2, "points": 2})
+    suite = {"suite_id": "ulp", "source_sha256": "b" * 64, "profile_sha256": "c" * 64,
+             "segment_plan": segmentation, "limits": {"timeout_seconds": 10, "max_output_tokens": 100,
+                                                       "max_tool_calls": 2}}
+    route = {"route_id": "fixture", "route_sha256": execution.route_fingerprint(config, None),
+             "config_sha256": digest(config), "conditions": ["closed-book", "sources"],
+             "unsupported_condition_evidence": {}, "capability_evidence_sha256": "d" * 64,
+             "pricing_evidence_sha256": "e" * 64, "entitlement_evidence_sha256": None if metered else "f" * 64,
+             "billing": {"kind": "metered" if metered else "verified_subscription", "units": "tokens",
+                         "input_micro_usd_per_million_tokens": 1000 if metered else 0,
+                         "output_micro_usd_per_million_tokens": 1000 if metered else 0,
+                         "max_total_input_tokens": 10000, "max_total_output_tokens": 300,
+                         "max_tool_rounds": 2, "tool_round_micro_usd": 0}}
+    manifest = build_experiment_manifest("a" * 64, [suite], [route], scorer_sha256="9" * 64,
+                                         tool_policy_sha256=scheduling.research_implementation_sha256())
+    plan = build_execution_plan(manifest)
+    return {"ulp": packet}, {"ulp": segmentation}, manifest, plan, {"fixture": config}
+
+
+def admit(route, _config, _condition):
+    return {field: route[field] for field in ("pricing_evidence_sha256", "entitlement_evidence_sha256",
+                                            "capability_evidence_sha256")}
+
+
+def trial(calls, *, interrupt_at=None, failed_at=None, cost=None):
+    def execute(packet, config, condition, *, evidence, **kwargs):
+        calls.append((packet, condition))
+        evidence("prompt", {"packet": packet})
+        if len(calls) == interrupt_at:
+            raise KeyboardInterrupt
+        return {"schema": "zno-nmt.run.v1", "packet_sha256": packet["packet_sha256"],
+                "status": "failed" if len(calls) == failed_at else "ok",
+                "responses": {item["id"]: "A" for item in packet["items"]},
+                "identity": {"model": config["model"], "effective_effort": "unknown",
+                             "session_id": f"session-{len(calls)}"},
+                "metrics": {"tool_calls": 0, "cost_usd": cost}}
+    return execute
+
+
+def test_complete_schedule_preserves_full_cells_and_resume_never_repeats(monkeypatch, tmp_path):
+    args = inputs()
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+    root = tmp_path / "research"
+    progress = list(scheduling.run_research(*args, root, admission_probe=admit))
+    assert len(progress) == 6 and all(item["status"] == "ok" for item in progress)
+    assert len(calls) == 12 and all(len(packet["items"]) == 1 for packet, _ in calls)
+    assert [condition for _, condition in calls] == ["closed-book"] * 2 + ["sources"] * 4 + ["closed-book"] * 4 + ["sources"] * 2
+    before = {p.name: p.read_bytes() for p in root.glob("*.json")}
+    assert list(scheduling.run_research(*args, root, admission_probe=admit, resume=True)) == progress
+    assert len(calls) == 12
+    assert {p.name: p.read_bytes() for p in root.glob("*.json")} == before
+    report = json.loads((root / "result-manifest.json").read_text())
+    assert report["cells_complete"] == report["cells_required"] == 6
+    for cell in args[3]["cells"]:
+        assert json.loads((root / (cell["cell_id"] + ".json")).read_text())["responses"] == {"q0001": "A", "q0002": "A"}
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_failure_stops_cell_and_preserves_attempt_without_retry(monkeypatch, tmp_path, interrupted):
+    args = inputs(metered=True)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls, interrupt_at=1 if interrupted else None,
+                                                    failed_at=None if interrupted else 1))
+    root = tmp_path / "research"
+    if interrupted:
+        with pytest.raises(KeyboardInterrupt):
+            list(scheduling.run_research(*args, root, admission_probe=admit))
+        first = EvidenceStore(root / "evidence").verify_all()
+        assert len(first) == 1 and next(iter(first.values()))["complete"] is False
+        outcomes = list(scheduling.run_research(*args, root, admission_probe=admit, resume=True))
+    else:
+        outcomes = list(scheduling.run_research(*args, root, admission_probe=admit))
+    assert len(calls) == 11 and outcomes[0]["status"] == "failed"
+    assert all(item["status"] == "ok" for item in outcomes[1:])
+    first_cell = args[3]["cells"][0]
+    assert first_cell["segments"][1]["attempt_id"] not in EvidenceStore(root / "evidence").verify_all()
+    result = json.loads((root / (first_cell["cell_id"] + ".json")).read_text())
+    assert result["responses"] is None
+    assert result["reserved_micro_usd_started"] == first_cell["segments"][0]["reserved_micro_usd"]
+    list(scheduling.run_research(*args, root, admission_probe=admit, resume=True))
+    assert len(calls) == 11
+
+
+def test_admission_drift_stops_before_allocating_or_calling(monkeypatch, tmp_path):
+    args = inputs()
+    monkeypatch.setattr(execution, "run_exam", lambda *a, **kw: pytest.fail("provider called"))
+    root = tmp_path / "research"
+    assert list(scheduling.run_research(*args, root, admission_probe=lambda *a: {})) == [
+        {"status": "stopped", "reason": "admission_failed"}]
+    assert EvidenceStore(root / "evidence").verify_all() == {}
+    assert next(scheduling.run_research(*args, root, admission_probe=admit, resume=True))["status"] == "stopped"
+
+
+def test_cost_overrun_stops_entire_experiment_with_original_evidence(monkeypatch, tmp_path):
+    args = inputs(metered=True)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls, cost=11))
+    root = tmp_path / "research"
+    assert list(scheduling.run_research(*args, root, admission_probe=admit)) == [
+        {"status": "stopped", "reason": "cost_reservation_overrun"}]
+    assert len(calls) == 1
+    receipt = next(iter(EvidenceStore(root / "evidence").verify_all().values()))
+    assert receipt["result"]["metrics"]["cost_usd"] == 11
+    assert not (root / "result-manifest.json").exists()
+
+
+def test_endpoint_drift_rejected_before_creating_directory(tmp_path):
+    args = inputs()
+    with pytest.raises(ExamError, match="endpoint drift"):
+        list(scheduling.run_research(*args, tmp_path / "research", admission_probe=admit,
+                                    sources_urls={"fixture": "https://different.invalid/mcp"}))
+    assert not (tmp_path / "research").exists()
+
+
+def test_concurrent_executor_cannot_claim_second_reservation(monkeypatch, tmp_path):
+    args = inputs()
+    calls = []
+    root = tmp_path / "research"
+    ordinary = trial(calls)
+
+    def nested(*values, **kwargs):
+        with pytest.raises(ExamError, match="already running"):
+            list(scheduling.run_research(*args, root, admission_probe=admit, resume=True))
+        return ordinary(*values, **kwargs)
+
+    monkeypatch.setattr(execution, "run_exam", nested)
+    list(scheduling.run_research(*args, root, admission_probe=admit))
+    assert len(calls) == 12
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ({"identity": {"model": "other", "session_id": "one"}}, "model_identity_drift"),
+    ({"metrics": {"tool_calls": 3}}, "tool_budget_overrun"),
+    ({"metrics": {"input_tokens": 10001}}, "token_reservation_overrun"),
+])
+def test_observed_drift_stops_with_evidence(monkeypatch, tmp_path, change, reason):
+    args = inputs(metered=True)
+    calls = []
+    ordinary = trial(calls)
+    monkeypatch.setattr(execution, "run_exam", lambda *a, **kw: {**ordinary(*a, **kw), **change})
+    root = tmp_path / "research"
+    assert list(scheduling.run_research(*args, root, admission_probe=admit)) == [{"status": "stopped", "reason": reason}]
+    assert len(calls) == 1
+    assert len(EvidenceStore(root / "evidence").verify_all()) == 1
+
+
+def test_reused_session_stops_before_second_cell_score(monkeypatch, tmp_path):
+    args = inputs()
+    calls = []
+    ordinary = trial(calls)
+
+    def reused(*a, **kw):
+        result = ordinary(*a, **kw)
+        result["identity"]["session_id"] = "reused"
+        return result
+
+    monkeypatch.setattr(execution, "run_exam", reused)
+    root = tmp_path / "research"
+    assert list(scheduling.run_research(*args, root, admission_probe=admit)) == [
+        {"status": "stopped", "reason": "missing_or_reused_session"}]
+    assert len(calls) == 2 and not list(root.glob("cell-*.json"))
