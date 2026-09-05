@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 
+from .benchmark_manifest import verify_benchmark
 from .core import (
     ExamError,
+    _duplicate_rejecting_pairs,
+    _reject_json_constant,
     compare_runs,
     digest,
     prepare_exam,
@@ -19,9 +23,13 @@ from .core import (
 )
 from .evidence import EvidenceStore
 from .execution import execute_attempt
+from .gec import prepare_gec, validate_gec_packet
+from .gec_scoring import score_gec_attempt
 from .importers import import_zno
 from .runner import preflight, validate_config
 from .scheduling import run_pair
+from .typography import apply_typography
+from .ulp import import_ulp, ulp_sidecar
 
 
 def parser() -> argparse.ArgumentParser:
@@ -36,6 +44,30 @@ def parser() -> argparse.ArgumentParser:
     imp.add_argument("--test-id", required=True)
     imp.add_argument("--metadata", type=Path, required=True)
     imp.add_argument("--output", type=Path, required=True)
+    ulp = commands.add_parser("import-ulp", help="Import ULP JSONL with separate source/category receipt")
+    ulp.add_argument("--input", type=Path, required=True)
+    ulp.add_argument("--metadata", type=Path, required=True)
+    ulp.add_argument("--output", type=Path, required=True)
+    ulp.add_argument("--sidecar", type=Path, required=True)
+    ulp.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
+    verifier = commands.add_parser("verify-benchmark", help="Reconstruct artifacts from a pinned source and supplied profile")
+    for name in ("profiles", "source", "questions", "key", "output"):
+        verifier.add_argument("--" + name, type=Path, required=True)
+    verifier.add_argument("--suite", required=True)
+    verifier.add_argument("--exam", type=Path)
+    verifier.add_argument("--overlay", type=Path)
+    verifier.add_argument("--profile-sha256", help="Require this canonical profile digest")
+    typography = commands.add_parser("apply-typography", help="Apply a source-bound, independently verified emphasis/headings overlay")
+    for name in ("exam", "overlay", "output", "receipt"):
+        typography.add_argument("--" + name, type=Path, required=True)
+    gec = commands.add_parser("prepare-gec", help="Separate full UA-GEC M2 into source-only packet and private references")
+    gec.add_argument("--input", type=Path, required=True)
+    gec.add_argument("--provenance", type=Path, required=True)
+    gec.add_argument("--questions", type=Path, required=True)
+    gec.add_argument("--key", type=Path, required=True)
+    gec.add_argument("--expected-sentences", type=int)
+    gec.add_argument("--expected-documents", type=int)
+    gec.add_argument("--source-sha256", help="Reject input bytes that do not match this SHA-256")
     prep = commands.add_parser("prepare", help="Separate a normalized exam into question-only packet and key")
     prep.add_argument("--exam", type=Path, required=True)
     prep.add_argument("--questions", type=Path, required=True)
@@ -67,6 +99,12 @@ def parser() -> argparse.ArgumentParser:
         else:
             scorer.add_argument("--control", type=Path, required=True)
             scorer.add_argument("--treatment", type=Path, required=True)
+    gec_score = commands.add_parser("score-gec", help="Score a preserved GEC attempt offline with an immutable scorer image")
+    for name in ("questions", "key", "run-evidence-dir", "evidence-dir", "output"):
+        gec_score.add_argument("--" + name, type=Path, required=True)
+    gec_score.add_argument("--attempt-id", required=True)
+    gec_score.add_argument("--scorer-image", required=True)
+    gec_score.add_argument("--timeout", type=int, default=600)
     evidence_status = commands.add_parser("evidence-status", help="Inspect every private attempt without executing providers")
     evidence_status.add_argument("--evidence-dir", type=Path, required=True)
     evidence_status.add_argument("--output", type=Path, required=True)
@@ -83,6 +121,7 @@ PUBLIC_NUMERIC_FIELDS = frozenset({
     "control_points", "treatment_points", "elapsed_seconds", "cost_usd", "input_tokens", "output_tokens",
     "tool_calls", "point_delta", "delta_points", "total", "complete", "failed_items",
     "items", "points", "control", "treatment", "delta", "total_tokens",
+    "denominator", "sentences", "missing_sentences", "tp", "fp", "fn", "precision", "recall", "f0_5",
 })
 
 
@@ -106,6 +145,61 @@ def execute(args: argparse.Namespace) -> int:
         corrupt = sum(item.get("status") == "corrupt" for item in report.values())
         print(json.dumps({"attempts": len(report), "complete": complete, "corrupt": corrupt}))
         return 0 if complete == len(report) else 2
+    elif args.command == "verify-benchmark":
+        if args.output.exists():
+            raise ExamError("refusing to replace a benchmark manifest")
+        profiles = read_json(args.profiles)
+        if not isinstance(profiles, dict) or profiles.get("schema") != "ukrainian-llm-eval.benchmark-sources.v1":
+            raise ExamError("unsupported source profile collection")
+        suites = profiles.get("suites")
+        if not isinstance(suites, list) or any(not isinstance(item, dict) for item in suites):
+            raise ExamError("invalid source profile collection")
+        selected = [item for item in suites if item.get("id") == args.suite]
+        if len(selected) != 1:
+            raise ExamError("suite must select exactly one source profile")
+        if args.profile_sha256 is not None and digest(selected[0]) != args.profile_sha256:
+            raise ExamError("source profile digest mismatch")
+        report = verify_benchmark(selected[0], args.source.read_bytes(), read_json(args.questions),
+                                  read_json(args.key), exam=read_json(args.exam) if args.exam else None,
+                                  overlay=read_json(args.overlay) if args.overlay else None)
+        write_private_json(args.output, report)
+        print(json.dumps({"verification": report["verification"], "profile_sha256": report["profile_sha256"],
+                          "packet_sha256": report["packet_sha256"]}))
+    elif args.command == "apply-typography":
+        if args.output.resolve() == args.receipt.resolve() or args.output.exists() or args.receipt.exists():
+            raise ExamError("typography output and receipt must be distinct new files")
+        exam, receipt = apply_typography(read_json(args.exam), read_json(args.overlay))
+        write_private_json(args.output, exam)
+        write_private_json(args.receipt, receipt)
+        print(json.dumps({"change_count": receipt["change_count"], "result_packet_sha256": receipt["result_packet_sha256"]}))
+    elif args.command == "prepare-gec":
+        if args.questions.resolve() == args.key.resolve() or args.questions.exists() or args.key.exists():
+            raise ExamError("question and key destinations must be distinct new files")
+        raw = args.input.read_bytes()
+        if args.source_sha256 is not None and hashlib.sha256(raw).hexdigest() != args.source_sha256:
+            raise ExamError("UA-GEC source hash mismatch")
+        packet, key = prepare_gec(raw.decode("utf-8"), read_json(args.provenance),
+                                  expected_sentences=args.expected_sentences, expected_documents=args.expected_documents)
+        write_private_json(args.questions, packet)
+        write_private_json(args.key, key)
+        print(json.dumps({"prepared_sentences": len(packet["items"]), "packet_sha256": packet["packet_sha256"]}))
+    elif args.command == "import-ulp":
+        if args.output.resolve() == args.sidecar.resolve() or args.output.exists() or args.sidecar.exists():
+            raise ExamError("exam and sidecar must be distinct new files")
+        raw = args.input.read_bytes()
+        source_hash = hashlib.sha256(raw).hexdigest()
+        if args.source_sha256 is not None and args.source_sha256 != source_hash:
+            raise ExamError("ULP source hash mismatch")
+        rows = [json.loads(line, object_pairs_hook=_duplicate_rejecting_pairs,
+                           parse_constant=_reject_json_constant)
+                for line in raw.decode("utf-8").splitlines() if line.strip()]
+        exam = import_ulp(rows, read_json(args.metadata))
+        packet, _key = prepare_exam(exam)
+        sidecar = {**ulp_sidecar(rows), "source_sha256": source_hash,
+                   "packet_sha256": packet["packet_sha256"], "exam_sha256": digest(exam)}
+        write_private_json(args.output, exam)
+        write_private_json(args.sidecar, sidecar)
+        print(json.dumps({"imported_items": len(rows), "source_sha256": source_hash}))
     elif args.command == "import-zno":
         exam = import_zno(read_json(args.input), args.test_id, read_json(args.metadata))
         write_private_json(args.output, exam)
@@ -126,7 +220,10 @@ def execute(args: argparse.Namespace) -> int:
             print(json.dumps(result, ensure_ascii=False))
             return 0
         packet = read_json(args.questions)
-        validate_packet(packet)
+        if packet.get("schema") == "ua-gec.questions.v1":
+            validate_gec_packet(packet)
+        else:
+            validate_packet(packet)
         plan = {"schema": "zno-nmt.plan.v1", "packet_sha256": packet["packet_sha256"],
                 "config": config, "config_sha256": digest(config)}
         if args.command == "run":
@@ -146,6 +243,17 @@ def execute(args: argparse.Namespace) -> int:
             failed = progress.pop("failed")
             print(json.dumps(progress), flush=True)
         return 2 if failed else 0
+    elif args.command == "score-gec":
+        if args.output.exists() or args.output.with_suffix(".evidence.json").exists():
+            raise ExamError("refusing to replace scoring output or receipt")
+        report, receipt = score_gec_attempt(
+            read_json(args.questions), read_json(args.key), args.run_evidence_dir,
+            args.attempt_id, args.scorer_image, args.evidence_dir, timeout=args.timeout,
+        )
+        write_private_json(args.output.with_suffix(".evidence.json"), receipt)
+        write_private_json(args.output, report)
+        print(json.dumps({"status": report["status"], **public_aggregate(report)}))
+        return 0 if report["status"] == "ok" else 2
     elif args.command in {"score", "compare"}:
         packet, key = read_json(args.questions), read_json(args.key)
         if args.command == "score":

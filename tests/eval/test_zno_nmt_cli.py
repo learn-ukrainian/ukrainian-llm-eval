@@ -105,3 +105,77 @@ def test_evidence_status_reports_intact_attempt_alongside_corruption(tmp_path):
     assert report["damaged"]["status"] == "corrupt"
     assert log.read_bytes() == original
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_ulp_cli_binds_source_and_keeps_category_outside_packet(tmp_path):
+    import hashlib
+
+    raw = tmp_path / "rows.jsonl"
+    raw.write_text(json.dumps({"question": "Оберіть слово.", "choices": ["один", "два", "три"],
+                               "answer": 0, "answer_letter": "А", "debug_id": "source-private-id",
+                               "category": "grammar"}, ensure_ascii=False) + "\n")
+    meta = tmp_path / "metadata.json"
+    meta.write_text(json.dumps(metadata()))
+    exam, sidecar = tmp_path / "exam.json", tmp_path / "sidecar.json"
+    args = ("import-ulp", "--input", raw, "--metadata", meta, "--output", exam, "--sidecar", sidecar)
+    assert run_cli(*args, "--source-sha256", "wrong").returncode == 2
+    assert not exam.exists() and not sidecar.exists()
+    source_hash = hashlib.sha256(raw.read_bytes()).hexdigest()
+    result = run_cli(*args, "--source-sha256", source_hash)
+    assert result.returncode == 0, result.stdout + result.stderr
+    packet, key = tmp_path / "packet.json", tmp_path / "key.json"
+    assert run_cli("prepare", "--exam", exam, "--questions", packet, "--key", key).returncode == 0
+    receipt = json.loads(sidecar.read_text())
+    assert receipt["source_sha256"] == source_hash
+    assert receipt["packet_sha256"] == json.loads(packet.read_text())["packet_sha256"]
+    assert "source-private-id" not in packet.read_text()
+    assert "grammar" not in packet.read_text()
+    assert "correct" not in packet.read_text()
+    assert run_cli(*args).returncode == 2
+
+
+def test_gec_cli_keeps_both_references_private(tmp_path):
+    import hashlib
+
+    source = tmp_path / "input.m2"
+    source.write_text("S Я люблю мову .\n"
+                      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||0\n"
+                      "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||1\n\n")
+    provenance = tmp_path / "provenance.json"
+    provenance.write_text(json.dumps({"source_url": "https://example.org/synthetic",
+                                      "source_revision": "fixture", "license": "MIT", "exposure": "synthetic"}))
+    packet, key = tmp_path / "packet.json", tmp_path / "key.json"
+    args = ("prepare-gec", "--input", source, "--provenance", provenance,
+            "--questions", packet, "--key", key)
+    assert run_cli(*args, "--source-sha256", "wrong").returncode == 2
+    assert not packet.exists() and not key.exists()
+    result = run_cli(*args, "--source-sha256", hashlib.sha256(source.read_bytes()).hexdigest())
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["prepared_sentences"] == 1
+    assert "annotations" not in packet.read_text()
+    refs = json.loads(key.read_text())["items"][0]["annotations"]
+    assert {ref["annotator_id"] for ref in refs} == {"0", "1"}
+    assert packet.stat().st_mode & 0o777 == key.stat().st_mode & 0o777 == 0o600
+    assert run_cli(*args).returncode == 2
+
+
+def test_typography_cli_restores_emphasis_without_revealing_key(tmp_path):
+    from ukrainian_llm_eval.core import digest
+
+    original = import_zno(source(), "1", metadata())
+    exam, overlay = tmp_path / "exam.json", tmp_path / "overlay.json"
+    exam.write_text(json.dumps(original))
+    overlay.write_text(json.dumps({"schema": "ukrainian-llm-eval.typography.v1",
+                                   "source_exam_sha256": digest(original),
+                                   "official_source": {"url": "https://example.org/paper.pdf", "sha256": "a" * 64},
+                                   "changes": [{"item_id": "1", "field": "question", "original_text": "Choose",
+                                                "replacement_text": "*Choose*"}]}))
+    output, receipt = tmp_path / "restored.json", tmp_path / "receipt.json"
+    args = ("apply-typography", "--exam", exam, "--overlay", overlay, "--output", output, "--receipt", receipt)
+    result = run_cli(*args)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert json.loads(output.read_text())["items"][0]["question"] == "*Choose* X."
+    assert json.loads(receipt.read_text())["change_count"] == 1
+    assert "Choose" not in receipt.read_text() and "correct" not in receipt.read_text()
+    assert output.stat().st_mode & 0o777 == receipt.stat().st_mode & 0o777 == 0o600
+    assert run_cli(*args).returncode == 2

@@ -50,10 +50,28 @@ jobs:
         with:
           languages: python
       - uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+  gec-scorer:
+    name: GEC scorer build and parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Build pinned scorer and verify provisioned resources
+        run: docker build --platform linux/amd64 -t ukrainian-llm-eval-scorer:ci scorer
+      - name: Check official parity and expected outcomes offline
+        run: |
+          python -m venv .venv
+          .venv/bin/python scorer/check_parity.py --image ukrainian-llm-eval-scorer:ci --output .runtime/scorer-parity.json
+          .venv/bin/python -m json.tool .runtime/scorer-parity.json
   gate:
     name: CI Gate
     if: always()
-    needs: [test, codeql]
+    needs: [test, codeql, gec-scorer]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -61,6 +79,8 @@ jobs:
         env:
           TEST_RESULT: ${{ needs.test.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
+          SCORER_RESULT: ${{ needs.gec-scorer.result }}
         run: |
           test "$TEST_RESULT" = success
           test "$CODEQL_RESULT" = success
+          test "$SCORER_RESULT" = success

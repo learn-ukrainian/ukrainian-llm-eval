@@ -1,0 +1,4 @@
+include CONTRIBUTING.md SECURITY.md
+recursive-include docs *.md
+recursive-include benchmarks *.json
+recursive-include scorer *.py *.json *.lock *.m2 *.txt Dockerfile README.md

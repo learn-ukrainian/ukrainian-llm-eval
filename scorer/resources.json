@@ -1,0 +1,27 @@
+{
+  "schema": "ukrainian-llm-eval.scorer-resources.v1",
+  "files": {
+    "stanza/resources.json": "1b85c771fbeacf0508df6a731a0e818be7a99ca0a9174735a2569fcf7a4dc0ce",
+    "stanza/uk/mwt/iu.pt": "5dd60f112b752dd7f1a969776ac00b6fc843bc3a8cc7a03bd36ca72d89fe2204",
+    "stanza/uk/tokenize/iu.pt": "c36e9e365a9811e55b871ca23f17516c3d24e473dbcbd98cfe69d41305f66086",
+    "spacy-en/__init__.py": "5a28fff54f905667b346acadbaf5091274f6c5f2d6c4222c39470f0745798c29",
+    "spacy-en/en_core_web_sm-2.3.1/accuracy.json": "aaad0be5cd4b26eebf3511ce5edc752846d6988873d80f6822d3b409b81480d1",
+    "spacy-en/en_core_web_sm-2.3.1/meta.json": "12ca7544ce191b2a040ab9be2e6e2015b620a728f7c51b53b0ebf70178c1f8ef",
+    "spacy-en/en_core_web_sm-2.3.1/ner/cfg": "263fd328cb02845b4e167158f858619f3b8750104b72e39214f2305d4bb0eb7b",
+    "spacy-en/en_core_web_sm-2.3.1/ner/model": "46ba57cd8569e0728f6d16549e62a136c96259da54440a048d3daa3f1af88597",
+    "spacy-en/en_core_web_sm-2.3.1/ner/moves": "d39e8f1b2ee06a034581f9448dafc526ac2b2fb49366c69e8d69ef9b32269f32",
+    "spacy-en/en_core_web_sm-2.3.1/parser/cfg": "949fd7852250c0d10258791842f52079ffc18286e938670333451cd835f84abb",
+    "spacy-en/en_core_web_sm-2.3.1/parser/model": "df5a3e6af132b49c64cbfcac70faaa626c418f4d5625f1f427a2295923f80d0b",
+    "spacy-en/en_core_web_sm-2.3.1/parser/moves": "939b37fc5ef449887e2c1bff1a39ef29b247618e270b9a78afacf4cc59278cdb",
+    "spacy-en/en_core_web_sm-2.3.1/tagger/cfg": "d6018b359d3199f1ec4f165f9e670227a39c5ed4e0f970e430252377d0d2ddc5",
+    "spacy-en/en_core_web_sm-2.3.1/tagger/model": "8afe3e1193ee3c7a7e5064e925c1111f34ff0a1abe6047ee2e1ff3c9a377281a",
+    "spacy-en/en_core_web_sm-2.3.1/tagger/tag_map": "e21f11d9e6e0e1f3a448b1b28ce360503b3912dd6141d6c7129064e53562a399",
+    "spacy-en/en_core_web_sm-2.3.1/tokenizer": "ebcf3b0eee16d2c02818f8e16fa0e66d28dcc5f543925818ead10686872f4e71",
+    "spacy-en/en_core_web_sm-2.3.1/vocab/key2row": "76be8b528d0075f7aae98d6fa57a6d3c83ae480a8469e668d7b0af968995ac71",
+    "spacy-en/en_core_web_sm-2.3.1/vocab/lookups.bin": "f06e7d1cff4e7902dd2c7a2b8b8799c06870a68651b5386fd7e28ffc41f36aa3",
+    "spacy-en/en_core_web_sm-2.3.1/vocab/lookups_extra.bin": "479d77559672b791f58e372a4e000da8efb92f443b6964d82684bbe2d324d28b",
+    "spacy-en/en_core_web_sm-2.3.1/vocab/strings.json": "c66766bc5d0760ced59c2ef57def91096f926831bd152d18b31d7c8e69f010a1",
+    "spacy-en/en_core_web_sm-2.3.1/vocab/vectors": "14772b683e726436d5948ad3fff2b43d036ef2ebbe3458aafed6004e05a40706",
+    "spacy-en/meta.json": "12ca7544ce191b2a040ab9be2e6e2015b620a728f7c51b53b0ebf70178c1f8ef"
+  }
+}
