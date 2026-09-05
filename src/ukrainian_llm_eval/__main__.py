@@ -22,7 +22,8 @@ from .core import (
 )
 from .evidence import EvidenceStore
 from .execution import execute_attempt
-from .gec import prepare_gec
+from .gec import prepare_gec, validate_gec_packet
+from .gec_scoring import score_gec_attempt
 from .importers import import_zno
 from .runner import preflight, validate_config
 from .scheduling import run_pair
@@ -84,6 +85,12 @@ def parser() -> argparse.ArgumentParser:
         else:
             scorer.add_argument("--control", type=Path, required=True)
             scorer.add_argument("--treatment", type=Path, required=True)
+    gec_score = commands.add_parser("score-gec", help="Score a preserved GEC attempt offline with an immutable scorer image")
+    for name in ("questions", "key", "run-evidence-dir", "evidence-dir", "output"):
+        gec_score.add_argument("--" + name, type=Path, required=True)
+    gec_score.add_argument("--attempt-id", required=True)
+    gec_score.add_argument("--scorer-image", required=True)
+    gec_score.add_argument("--timeout", type=int, default=600)
     evidence_status = commands.add_parser("evidence-status", help="Inspect every private attempt without executing providers")
     evidence_status.add_argument("--evidence-dir", type=Path, required=True)
     evidence_status.add_argument("--output", type=Path, required=True)
@@ -100,6 +107,7 @@ PUBLIC_NUMERIC_FIELDS = frozenset({
     "control_points", "treatment_points", "elapsed_seconds", "cost_usd", "input_tokens", "output_tokens",
     "tool_calls", "point_delta", "delta_points", "total", "complete", "failed_items",
     "items", "points", "control", "treatment", "delta", "total_tokens",
+    "denominator", "sentences", "missing_sentences", "tp", "fp", "fn", "precision", "recall", "f0_5",
 })
 
 
@@ -170,7 +178,10 @@ def execute(args: argparse.Namespace) -> int:
             print(json.dumps(result, ensure_ascii=False))
             return 0
         packet = read_json(args.questions)
-        validate_packet(packet)
+        if packet.get("schema") == "ua-gec.questions.v1":
+            validate_gec_packet(packet)
+        else:
+            validate_packet(packet)
         plan = {"schema": "zno-nmt.plan.v1", "packet_sha256": packet["packet_sha256"],
                 "config": config, "config_sha256": digest(config)}
         if args.command == "run":
@@ -190,6 +201,17 @@ def execute(args: argparse.Namespace) -> int:
             failed = progress.pop("failed")
             print(json.dumps(progress), flush=True)
         return 2 if failed else 0
+    elif args.command == "score-gec":
+        if args.output.exists() or args.output.with_suffix(".evidence.json").exists():
+            raise ExamError("refusing to replace scoring output or receipt")
+        report, receipt = score_gec_attempt(
+            read_json(args.questions), read_json(args.key), args.run_evidence_dir,
+            args.attempt_id, args.scorer_image, args.evidence_dir, timeout=args.timeout,
+        )
+        write_private_json(args.output.with_suffix(".evidence.json"), receipt)
+        write_private_json(args.output, report)
+        print(json.dumps({"status": report["status"], **public_aggregate(report)}))
+        return 0 if report["status"] == "ok" else 2
     elif args.command in {"score", "compare"}:
         packet, key = read_json(args.questions), read_json(args.key)
         if args.command == "score":

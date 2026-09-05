@@ -25,6 +25,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .gec import GEC_PACKET_SCHEMA
 from .mcp_proxy import REFERENCE_TOOLS
 
 
@@ -248,7 +249,7 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
 def build_prompt(
     packet: Mapping[str, Any], condition: str, *, max_tool_calls: int | None = None
 ) -> str:
-    """Create the shared, gold-free exam prompt used by each fresh trial."""
+    """Create the shared, gold-free prompt used by each fresh trial."""
     if condition == "closed-book":
         policy = "No tools are available. Answer from your own knowledge."
     elif condition == "sources":
@@ -262,19 +263,50 @@ def build_prompt(
         )
     else:
         raise AdapterError("condition is invalid")
-    return (
-        "You are taking a Ukrainian exam. Answer every opaque item id exactly once. "
-        "Do not explain your reasoning. Return only JSON matching the response schema: "
-        "{\"responses\":{\"id\": string | object | null}}. "
-        + policy
-        + "\n\nQUESTION PACKET (contains no answers or scoring key):\n"
-        + canonical(packet)
-    )
+    if packet.get("schema") == GEC_PACKET_SCHEMA:
+        task = (
+            "You are performing Ukrainian grammatical-error correction. For every opaque item id, return exactly one "
+            "corrected Ukrainian sentence while preserving the original meaning. If no correction is needed, return "
+            "the original sentence unchanged. Do not explain or annotate edits. "
+            "Return only JSON matching the response schema: {\"responses\":{\"id\": string | null}}. "
+        )
+        packet_label = "SENTENCE PACKET:"
+    else:
+        task = (
+            "You are taking a Ukrainian exam. Answer every opaque item id exactly once. "
+            "Do not explain your reasoning. Return only JSON matching the response schema: "
+            "{\"responses\":{\"id\": string | object | null}}. "
+        )
+        packet_label = "QUESTION PACKET (contains no answers or scoring key):"
+    return task + policy + "\n\n" + packet_label + "\n" + canonical(packet)
 
 
 def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
     items = [item for item in packet.get("items", []) if isinstance(item, Mapping) and "id" in item]
     ids = [str(item["id"]) for item in items]
+    if packet.get("schema") == GEC_PACKET_SCHEMA:
+        answers = {
+            item_id: {
+                "anyOf": [
+                    {"type": "string", "minLength": 1, "pattern": "^[^\\r\\n\\u0085\\u2028\\u2029]+$"},
+                    {"type": "null"},
+                ]
+            }
+            for item_id in ids
+        }
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["responses"],
+            "properties": {
+                "responses": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ids,
+                    "properties": answers,
+                }
+            },
+        }
     answers: dict[str, dict[str, Any]] = {}
     for item in items:
         item_id = str(item["id"])
@@ -473,11 +505,21 @@ def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
     if set(responses) != set(expected):
         raise AdapterError("provider response IDs mismatch")
     normalized: dict[str, Any] = {}
+    is_gec = packet.get("schema") == GEC_PACKET_SCHEMA
     for item_id in expected:
         answer = responses[item_id]
-        if answer is not None and not isinstance(answer, (str, Mapping)):
-            raise AdapterError("provider response value is invalid")
-        normalized[item_id] = dict(answer) if isinstance(answer, Mapping) else answer
+        if is_gec:
+            if answer is not None and (
+                not isinstance(answer, str)
+                or not answer.strip()
+                or answer.splitlines() != [answer]
+            ):
+                raise AdapterError("provider GEC response value is invalid")
+            normalized[item_id] = answer
+        else:
+            if answer is not None and not isinstance(answer, (str, Mapping)):
+                raise AdapterError("provider response value is invalid")
+            normalized[item_id] = dict(answer) if isinstance(answer, Mapping) else answer
     return normalized
 
 
@@ -562,6 +604,8 @@ def _parse_stream_json(
         try:
             payload = _strict_json_loads(result_text or "")
         except AdapterError as exc:
+            if packet.get("schema") == GEC_PACKET_SCHEMA:
+                raise
             raise AdapterError("CLI response is not JSON") from exc
     return _extract_responses(payload, packet), next(iter(observed_models), "unknown"), len(observed_tools), usage
 
@@ -729,7 +773,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
         raise AdapterError("Sources MCP does not expose configured tools")
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     max_bytes = min(2_000_000, max(65_536, checked["max_output_tokens"] * 64))
-    request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, "max_tokens": checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": "zno_nmt_responses", "strict": True, "schema": response_schema(packet)}}}
+    response_name = "ua_gec_responses" if packet.get("schema") == GEC_PACKET_SCHEMA else "zno_nmt_responses"
+    request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, "max_tokens": checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
     if checked["effort"] is not None:
         request_base["reasoning_effort"] = checked["effort"]
     if condition == "sources":
@@ -777,6 +822,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             try:
                 responses = _extract_responses(_strict_json_loads(content), packet)
             except AdapterError as exc:
+                if packet.get("schema") == GEC_PACKET_SCHEMA:
+                    raise
                 raise AdapterError("HTTP completion is not JSON") from exc
             break
         if condition != "sources" or not isinstance(calls, list):

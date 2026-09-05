@@ -85,8 +85,14 @@
         "m2_blocks": 2862,
         "document_heading_blocks": 166,
         "content_blocks": 2696,
-        "note": "All content source lines match the tokenized source files in document order. Sentence-boundary realignment accounts for the net eight-sentence difference."
-      }
+        "note": "All content source lines match the tokenized source files in document order. Sentence-boundary realignment accounts for the net eight-sentence difference.",
+        "annotator_sentence_counts": {
+          "0": 2696,
+          "1": 2696
+        }
+      },
+      "source_path": "data/gec-only/test/gec-only.test.m2",
+      "source_sha256": "bcac703d891986c2f325f9ec1e03e3f59aed4a513b7cf1a2e7e3dbc4e04983b9"
     }
   ]
 }

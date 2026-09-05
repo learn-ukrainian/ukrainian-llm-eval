@@ -13,8 +13,12 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from . import adapters
+from . import adapters, gec
 from .core import ExamError, digest, validate_packet
+
+GEC_RUN_SCHEMA = "ua-gec.run.v1"
+GEC_COMPARISON_SCHEMA = "ua-gec.comparison.v1"
+MCQ_RUN_SCHEMA = "zno-nmt.run.v1"
 
 
 def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -34,6 +38,9 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
 
 
 def _validated_packet(packet: Mapping[str, Any]) -> Mapping[str, Any]:
+    if isinstance(packet, Mapping) and packet.get("schema") == gec.GEC_PACKET_SCHEMA:
+        gec.validate_gec_packet(packet)
+        return packet
     try:
         candidate = validate_packet(packet)
     except ExamError:
@@ -41,6 +48,10 @@ def _validated_packet(packet: Mapping[str, Any]) -> Mapping[str, Any]:
     except ValueError as exc:
         raise ExamError(str(exc)) from exc
     return candidate if isinstance(candidate, Mapping) else packet
+
+
+def _run_schema(packet: Mapping[str, Any]) -> str:
+    return GEC_RUN_SCHEMA if packet.get("schema") == gec.GEC_PACKET_SCHEMA else MCQ_RUN_SCHEMA
 
 
 def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
@@ -74,7 +85,19 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
         "route": route,
     }
-    return {"schema": "zno-nmt.comparison.v1", "constants_sha256": digest(constants)}
+    if packet.get("schema") == gec.GEC_PACKET_SCHEMA:
+        gec_source = Path(gec.__file__).read_bytes()
+        adapter_hash = hashlib.sha256(adapter_source).hexdigest()
+        constants.update(
+            {
+                "response_implementation_sha256": adapter_hash,
+                "gec_validator_implementation_sha256": hashlib.sha256(gec_source).hexdigest(),
+            }
+        )
+        comparison_schema = GEC_COMPARISON_SCHEMA
+    else:
+        comparison_schema = "zno-nmt.comparison.v1"
+    return {"schema": comparison_schema, "constants_sha256": digest(constants)}
 
 
 def _empty_metrics() -> dict[str, Any]:
@@ -90,7 +113,7 @@ def _empty_metrics() -> dict[str, Any]:
 
 def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, exc: BaseException) -> dict[str, Any]:
     return {
-        "schema": "zno-nmt.run.v1",
+        "schema": _run_schema(packet),
         "packet_sha256": packet["packet_sha256"],
         "condition": condition,
         "status": "failed",
@@ -169,7 +192,7 @@ def run_exam(
     identity["preflight_tool_schema_sha256"] = capability["tool_schema_sha256"]
     identity["preflight_mcp_server_identity_sha256"] = capability["mcp_server_identity_sha256"]
     return {
-        "schema": "zno-nmt.run.v1",
+        "schema": _run_schema(checked_packet),
         "packet_sha256": checked_packet["packet_sha256"],
         "condition": condition,
         "status": "ok",

@@ -111,3 +111,36 @@ generator's document headings, and binds the private references to the packet.
 Both destinations must be new files. The candidate packet contains only opaque
 IDs and source sentences. Preparation alone does not execute or score corrections;
 see `scorer/README.md` for the isolated scorer runtime.
+
+## Run and score GEC
+
+The `run` and `pair` commands accept the prepared GEC question packet using the
+same provider configuration and evidence controls as exam questions. Reference
+keys are accepted only by offline preparation/scoring commands. Each run must
+return every sentence ID; no partial subset is presented as a full-corpus score.
+Use `run --condition closed-book` for a route with no controlled MCP support.
+
+```bash
+ukrainian-llm-eval run --questions runtime/gec-questions.json \
+  --config runtime/config.json --condition closed-book \
+  --evidence-dir runtime/gec-runs --output runtime/gec-run.json
+ukrainian-llm-eval score-gec --questions runtime/gec-questions.json \
+  --key runtime/gec-key.json --run-evidence-dir runtime/gec-runs \
+  --attempt-id ATTEMPT_ID --scorer-image sha256:IMAGE_DIGEST \
+  --evidence-dir runtime/gec-scoring --output runtime/gec-score.json
+```
+
+Read the attempt ID from the run's `.evidence.json` receipt. Replace the image
+placeholder with the immutable local image ID recorded during scorer provisioning;
+mutable tags are rejected. Docker runs with networking disabled, read-only input
+mounts and no image pulls. Scoring timeout defaults to 600 seconds; `--timeout`
+sets an explicit alternative. A timed-out invocation retains partial output and
+attempts to remove its own uniquely named container.
+
+The scoring evidence binds the verified execution receipt, candidate packet,
+private reference key, serialized inputs, wrapper implementation and scorer image.
+Raw scorer output is retained before parsing. Missing answers or failed candidate
+runs produce a failed scoring receipt with no F0.5; answers are not repaired or
+silently excluded. Scorer failures also remain recorded. Keep all scoring evidence
+private because it includes references. `export` emits only allowlisted numeric
+aggregates and cannot replace the private provenance record.
