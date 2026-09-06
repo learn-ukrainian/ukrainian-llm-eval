@@ -106,7 +106,14 @@ def test_cli_sequential_plan_preserves_matrix_over_shared_cap(tmp_path):
     frozen = json.loads(schedule.read_text())
     assert frozen["schema"] == "ukrainian-llm-eval.execution-plan.v2"
     assert frozen["reservation_total_micro_usd"] > 11
-    assert frozen["cells"] == plan["cells"]
+    # Only reservations gain the sequential experiment namespace; the full
+    # candidate matrix and its denominators remain unchanged.
+    comparable_cells = json.loads(json.dumps(frozen["cells"]))
+    for current, legacy in zip(comparable_cells, plan["cells"], strict=True):
+        for current_segment, legacy_segment in zip(current["segments"], legacy["segments"], strict=True):
+            assert current_segment["reservation_id"] != legacy_segment["reservation_id"]
+            current_segment["reservation_id"] = legacy_segment["reservation_id"]
+    assert comparable_cells == plan["cells"]
     assert json.loads(output.read_text())["spending_policy"] == spec["spending_policy"]
 
 
