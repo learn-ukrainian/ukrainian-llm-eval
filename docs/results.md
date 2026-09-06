@@ -125,7 +125,11 @@ The installed adapter passed 10 local fixture controls covering reasoning off/on
 
 The canaries used source head `017ccaf` from [draft budget fix PR #29](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/29), which permits authoritative account-charge routes to share the existing policy with conservative usage-bound routes. Its full suite passed 484 tests and all CI checks. Independent review remains pending under the operator's no-subagents instruction. Private live-summary SHA-256: `9bbd413028ea70beb850fa1e9f404373bb118618585eae0851ee415b4306a21b`; raw evidence is not publicly downloadable.
 
-Owner: evaluator release lead. Next action: diagnose the missed tool calls against the frozen request and provider behavior before any further live attempt. Preserve both failed canaries and keep the all-model, both-mode exam gate closed.
+Two separately frozen diagnostics changed only `http_response_format` from `json_schema` to the existing `json_object` option, one per reasoning mode. Both again advertised 13 tools, made zero calls and returned B instead of A. All four diagnostic evidence stores verified; charges settled at 226/275 micro-USD, adding $0.000501 (Gemma total including diagnostics: $0.001115). No original result was replaced. Diagnostic-summary SHA-256: `2f9598a789bba866b235db41d4ab60dff56878b82a008aab9171e713768ea116`.
+
+Removing the strict schema alone did not restore tool use in those two observations. Both formats still constrain output to JSON, so this does not isolate unconstrained generation or prove a model defect. [Venice's structured-response documentation](https://docs.venice.ai/guides/features/structured-responses) states an incompatibility with parallel function calls; that restriction alone does not explain the observed zero-call responses. Its [function-calling examples](https://docs.venice.ai/guides/features/function-calling) omit `response_format`. The installed evaluator currently exposes only `json_schema` and `json_object` for this adapter.
+
+Owner: evaluator release lead. Next action: prepare a bounded unconstrained-response diagnostic with explicit configuration and budget/evidence binding before any further live attempt. Preserve all failed observations and keep the all-model, both-mode exam gate closed.
 
 ## What Sources changes
 
