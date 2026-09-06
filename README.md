@@ -2,7 +2,7 @@
 
 Reproducible evaluation of **Ukrainian language** models and agents, with optional reference tools.
 
-This project is under development toward its first release. It does not yet publish a complete model leaderboard. Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
+This project is under development toward its first release. It does not yet publish a complete model leaderboard. Track the [results TL;DR, leaderboards and training-data lessons](docs/results.md). Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
 
 The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, and closed-book Codex execution, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
