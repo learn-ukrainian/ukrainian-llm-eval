@@ -6,9 +6,9 @@ directory containing exactly ``auth.json`` plus a locally captured control
 receipt.  Each attempt copies only that authentication file into a fresh
 ``CODEX_HOME``; it never points Codex at the caller's normal home.
 
-Only the closed-book condition is implemented.  Sources is deliberately
-unsupported until a separate adapter has empirical isolation evidence for the
-MCP surface.  A control receipt is mandatory because feature flags describe a
+The legacy policy is closed-book only. The explicit reference-only policy
+supports paired conditions through a restricted catalog and reference controller.
+A control receipt is mandatory because feature flags describe a
 request, while a mock capture is needed to establish what visible handlers
 actually do.  Visible inert descriptors are acceptable; unknown or usable
 handlers are not.
@@ -63,7 +63,7 @@ _DISABLED_FEATURES = (
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
         "schema", "adapter", "model", "effort", "timeout_seconds", "max_output_tokens",
-        "max_tool_calls", "repeats", "tools", "corpus_id", "provider", "codex_bin",
+        "max_tool_calls", "repeats", "tools", "corpus_id", "provider", "codex_bin", "codex_tool_policy",
     }
 )
 _SAFE_CHILD_ENV = frozenset({"PATH", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"})
@@ -164,7 +164,17 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise _fail("configuration effort is unsupported")
     for field in ("timeout_seconds", "max_output_tokens", "max_tool_calls", "repeats"):
         _positive(checked.get(field), f"configuration {field}")
-    if checked.get("tools") != []:
+    policy = checked.get("codex_tool_policy")
+    if policy is not None and policy != "reference-only":
+        raise _fail("native Codex tool policy is unsupported")
+    if policy == "reference-only":
+        from .mcp_proxy import REFERENCE_TOOLS
+
+        tools = checked.get("tools")
+        if (not isinstance(tools, list) or not tools or any(not isinstance(tool, str) for tool in tools)
+                or len(set(tools)) != len(tools) or not set(tools) <= REFERENCE_TOOLS):
+            raise _fail("native Codex reference policy requires a unique reference tool allowlist")
+    elif checked.get("tools") != []:
         raise _fail("native Codex supports closed-book only; tools must be empty")
     corpus_id = checked.get("corpus_id")
     if corpus_id is not None:
@@ -175,13 +185,13 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **checked,
         "effort": effort,
-        "tools": [],
+        "tools": list(checked["tools"]),
         "corpus_id": corpus_id,
         "provider": CODEX_PROVIDER,
     }
 
 
-def _owner_directory(value: str | os.PathLike[str] | Path | None) -> Path:
+def _owner_directory(value: str | os.PathLike[str] | Path | None, *, control_file: str = CODEX_CONTROL_FILE) -> Path:
     if value is None:
         raise _fail("native Codex provisioning is unresolved; private_env_path is required")
     raw = os.fspath(value) if isinstance(value, (str, os.PathLike, Path)) else None
@@ -197,7 +207,7 @@ def _owner_directory(value: str | os.PathLike[str] | Path | None) -> Path:
     except OSError as exc:
         raise _fail("private_env_path is unavailable") from exc
     try:
-        if {entry.name for entry in path.iterdir()} != {CODEX_AUTH_FILE, CODEX_CONTROL_FILE}:
+        if {entry.name for entry in path.iterdir()} != {CODEX_AUTH_FILE, control_file}:
             raise _fail("private_env_path must contain only sanitized Codex provisioning")
     except OSError as exc:
         raise _fail("private_env_path is unavailable") from exc
@@ -256,9 +266,10 @@ def _sanitized_chatgpt_auth(root: Path) -> bytes:
 
 def validate_options(config: Mapping[str, Any], *, private_env_path: str | os.PathLike[str] | Path | None) -> NativeCodexOptions:
     checked = validate_config(config)
-    root = _owner_directory(private_env_path)
+    control_file = "reference-control.json" if checked.get("codex_tool_policy") == "reference-only" else CODEX_CONTROL_FILE
+    root = _owner_directory(private_env_path, control_file=control_file)
     _sanitized_chatgpt_auth(root)
-    _private_file(root, CODEX_CONTROL_FILE, "native Codex control receipt")
+    _private_file(root, control_file, "native Codex control receipt")
     return NativeCodexOptions(config=checked, private_env_path=root, binary=checked["codex_bin"])
 
 
@@ -510,6 +521,10 @@ def _validate_condition(condition: str, sources_url: str | None) -> None:
 def preflight_codex(config: Mapping[str, Any], condition: str, sources_url: str | None = None, *, private_env_path: str | os.PathLike[str] | Path | None = None) -> dict[str, Any]:
     """Verify only installed surface and private, mock-captured handler evidence."""
 
+    if config.get("codex_tool_policy") == "reference-only":
+        from .codex_reference import preflight
+
+        return preflight(config, condition, sources_url, private_env_path=private_env_path)
     _validate_condition(condition, sources_url)
     options = validate_options(config, private_env_path=private_env_path)
     probe = _probe_cli(options.binary, options.config["timeout_seconds"])
@@ -811,6 +826,11 @@ def _parse_events(stdout: str, packet: Mapping[str, Any]) -> _ParsedCodexEvents:
 def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, private_env_path: str | os.PathLike[str] | Path | None = None) -> dict[str, Any]:
     """Run one fresh Codex session, preserving unredacted CLI events via callback."""
 
+    if config.get("codex_tool_policy") == "reference-only":
+        from .codex_reference import run
+
+        return run(packet, config, condition, sources_url=sources_url, prompt=prompt,
+                   evidence=evidence, private_env_path=private_env_path)
     _validate_condition(condition, sources_url)
     if not isinstance(prompt, str) or not prompt:
         raise _fail("Codex prompt must be a nonempty string")

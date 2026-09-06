@@ -9,17 +9,114 @@ Windows is unsupported. The installed npm launcher forms and the invocation
 cleanup both rely on POSIX executable and process-group behavior; Windows npm
 shims and process groups have no implementation in this adapter.
 
-It currently supports **only `closed-book`**. `sources` is explicitly
-unsupported: the existing Codex control captures do not establish an isolated
-MCP route, so callers must not label a Sources run as closed-book.
+The explicit `"codex_tool_policy": "reference-only"` configuration supports
+both `closed-book` and controlled `sources` with the same restricted model
+catalog. The legacy configuration remains closed-book only. Both require
+current, hash-bound local control evidence; neither implies live admission.
 
 The public `preflight` and `run` commands select this adapter with
 `"adapter": "codex"` and read the absolute provisioning directory only from
 `UKRAINIAN_LLM_EVAL_CODEX_PROVISIONING_DIR`. The directory is never part of a
-serialised route, run identity, or public result. A `sources` request fails
-before any native invocation. This wiring exposes the adapter for local
-validation; it does not turn the recorded local mock control evidence into an
-admission or provider-readiness claim.
+serialised route, run identity, or public result. Legacy `sources` requests fail
+before any native invocation. Local mock controls establish execution boundaries;
+live subscription readiness and scored-study admission remain separate gates.
+
+## Reference-only paired policy
+
+Use this policy for the GPT-6 Astra paired evaluation. Native model metadata can
+select tools independently of feature-disable flags. The adapter reads the
+installed binary's **bundled, offline catalog**, selects the exact requested
+model, and changes only five tool fields: `tool_mode`, `multi_agent_version`,
+`apply_patch_tool_type`, `experimental_supported_tools` and
+`supports_search_tool`. Model aliases, instructions, supported efforts, context
+limits and all other fields stay unchanged. The original entry, restricted
+entry and restriction policy are hashed into the evidence. Code Mode and its
+host remain disabled; asynchronous input, delegation, patching and tool search
+are absent from the verified surface.
+
+Closed-book advertises no tools. Sources advertises the configured reference
+tools plus three native resource helpers. The controller **rejects all resource
+methods without forwarding them**. It also rejects unlisted tools and call-cap
+overflow. Permitted calls consume the controller's budget before network I/O,
+including calls that fail. The model cannot reset that counter. Tool schemas,
+including descriptions and annotations, are pinned in the control receipt and
+checked before inference and again when the required MCP server initializes.
+Missing tools, changed schemas and changed server identity fail closed.
+
+Example private runtime configuration:
+
+```json
+{
+  "schema": "zno-nmt.config.v1",
+  "adapter": "codex",
+  "model": "gpt-6-astra",
+  "effort": "low",
+  "codex_tool_policy": "reference-only",
+  "tools": ["verify_word", "verify_stress"],
+  "corpus_id": "live-sources",
+  "timeout_seconds": 120,
+  "max_output_tokens": 4096,
+  "max_tool_calls": 20,
+  "repeats": 3
+}
+```
+
+After installing the package in the environment that will run the evaluator,
+set `SOURCES_URL` through the operator's private endpoint workflow, then run:
+
+```sh
+.venv/bin/python -m ukrainian_llm_eval.codex_reference_controls \
+  --config .runtime/codex-reference-config.json \
+  --sources-url-env SOURCES_URL \
+  --output .runtime/codex-reference-controls-001
+```
+
+This reads live tool/server metadata, then runs nine credential-free local
+cases against synthetic Responses and MCP fixtures: empty closed-book surface,
+permitted reference call, denied resource listing/templates/read, call-cap
+overflow, an unlisted tool, schema drift and a missing tool. The last two must
+fail before any model request reaches the fixture. Unknown tool surfaces stop
+tool injection. No provider inference or scored exam is used. Capture controls
+separately for each exact model/effort/tool-list/cap configuration. The capture
+command supports caps up to 100 to keep deterministic probes bounded.
+
+A passing capture produces `reference-control.json`. Keep its immutable capture
+files at their recorded locations, and provision exactly these owner-only files:
+
+```text
+private-codex-reference/
+  auth.json
+  reference-control.json
+```
+
+Use the same sanitized subscription-auth shape described below. Set
+`UKRAINIAN_LLM_EVAL_CODEX_PROVISIONING_DIR` to this directory. Use the same JSON
+configuration in both conditions; omit the Sources URL entirely for closed-book.
+The existing public preflight/run commands dispatch the new policy. Never copy
+a legacy receipt into this provisioning directory or relabel a failed capture.
+Implementation, native binary, catalog entry, bridge entrypoint, model, effort,
+allowlist, cap and artifact drift invalidate the receipt.
+
+Native MCP events must reconcile with the controller's append-only journal.
+Wrong or malformed answers retain their session, usage and tool-call evidence
+as candidate failures. Interrupted controller evidence is retained before an
+execution failure is returned. `tool_calls` counts completed native reference
+attempts, including cap-denied calls; controller records separately identify
+which attempts were forwarded. Resource denials remain in controller evidence.
+
+The server identity hash here binds MCP `serverInfo`, **not a frozen corpus
+snapshot**. Live corpus changes and contamination remain limitations. Backend
+model identity, accepted/effective effort and a hard output-token bound remain
+unknown when the native protocol does not attest them. A synthetic control
+receipt does not waive the all-model, both-condition readiness gate before any
+scored study. No scored results are established by these controls.
+
+## Legacy closed-book policy
+
+The remainder documents the original policy, used when `codex_tool_policy` is
+omitted. Its historical descriptor captures must be regenerated against the
+installed runtime; a newer catalog can cause them to fail. Use the paired policy
+above for reference access.
 
 The runtime-only `private_env_path` is an absolute, owner-only provisioning
 directory with exactly the files the adapter needs:
