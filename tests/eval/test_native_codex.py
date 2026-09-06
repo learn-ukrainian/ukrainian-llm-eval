@@ -6,6 +6,7 @@ read a real auth home, or make network requests.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import signal
@@ -384,6 +385,28 @@ def test_process_rejects_invalid_utf8_with_bounded_raw_evidence(tmp_path: Path) 
     assert invalid["invalid_utf8_streams"] == ["stdout"]
     assert invalid["stdout_raw_base64"] == "/w=="
     assert "stdout" not in invalid
+
+
+def test_process_reports_multibyte_boundary_truncation_as_output_overflow(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(native_codex, "_MAX_OUTPUT_BYTES", 4)
+    evidence: list[tuple[str, Any]] = []
+    with pytest.raises(native_codex.CodexAdapterError, match="output exceeds limit"):
+        native_codex._run_process(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'abc\\xc3\\xa9'); sys.stdout.flush()"],
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="",
+            timeout=5,
+            evidence=lambda kind, payload: evidence.append((kind, payload)),
+        )
+    events = dict(evidence)
+    overflow = events["cli_output_overflow"]
+    assert "cli_invalid_utf8" not in events
+    assert overflow["stdout_truncated"] is True
+    assert overflow["invalid_utf8_streams"] == ["stdout"]
+    assert base64.b64decode(overflow["stdout_raw_base64"]) == b"abc\xc3"
 
 
 def test_process_preserves_valid_unicode_stdout(tmp_path: Path) -> None:

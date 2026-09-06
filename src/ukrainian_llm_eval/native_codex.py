@@ -691,9 +691,6 @@ def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: 
     )
     if invalid_streams:
         capture["invalid_utf8_streams"] = invalid_streams
-        if evidence is not None:
-            evidence("cli_invalid_utf8", capture)
-        raise _fail("Codex CLI emitted invalid UTF-8")
     if not reaped:
         if evidence is not None:
             evidence("cli_io_incomplete", capture)
@@ -710,6 +707,10 @@ def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: 
         if evidence is not None:
             evidence("cli_stream_error", capture)
         raise _fail("Codex CLI stream read failed")
+    if invalid_streams:
+        if evidence is not None:
+            evidence("cli_invalid_utf8", capture)
+        raise _fail("Codex CLI emitted invalid UTF-8")
     return subprocess.CompletedProcess(argv, process.returncode, stdout=capture["stdout"], stderr=capture["stderr"])
 
 
