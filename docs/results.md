@@ -104,6 +104,8 @@ Owner: evaluator release lead, tracking [provider readiness #5](https://github.c
 
 Two no-prompt AGY startup probes selected workspace profiles using the documented directory and flat-file layouts. One declared an empty tool list; the other allowed only `finish`. Both startup inventories still listed 57 tools, including file, shell, web and delegation tools. The profile-list command returned no entries, so correct profile discovery/application is also unproven. These startup observations fail the evaluator's restricted-surface check; no Gemini inference was attempted. The separate Gemini CLI is being investigated as a native subscription alternative, with no paid API substitution.
 
+A locally installed Gemini CLI probe used a dummy API key and loopback fixture. Its initial request targeted Gemini 3.5 Flash/high despite the Gemini 3.8 Flash startup label; the documented dynamic-model configuration corrected the request to Gemini 3.8 Flash/low with the configured output cap and no function declarations. A planted `GEMINI.md` instruction still entered the request because the configured context filename supplements the defaults. Isolation therefore remains unproven; no live Gemini inference or admission followed. Failed and corrected captures are retained privately.
+
 ## What Sources changes
 
 For each completed paired comparison, record:
