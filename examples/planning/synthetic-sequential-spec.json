@@ -1,0 +1,79 @@
+{
+  "protocol_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "suites": [
+    {
+      "suite_id": "ulp",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "profile_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "key_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "segment_plan": {
+        "schema": "ukrainian-llm-eval.segment-plan.v1",
+        "protocol_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "suite_id": "ulp",
+        "source_packet_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "source_sha256": null,
+        "denominator": {
+          "items": 2,
+          "points": 2
+        },
+        "unit": "ulp-question",
+        "segments": [
+          {
+            "segment_id": "synthetic-segment-a",
+            "item_ids": ["synthetic-item-a"],
+            "packet_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "segment_id": "synthetic-segment-b",
+            "item_ids": ["synthetic-item-b"],
+            "packet_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "segment_plan_sha256": "ad827affcce4045695338dff379ed9befa9f22e70a10a445f4ad8299bf30edbc"
+      },
+      "limits": {
+        "timeout_seconds": 10,
+        "max_output_tokens": 16,
+        "max_tool_calls": 1
+      }
+    }
+  ],
+  "routes": [
+    {
+      "route_id": "synthetic-route",
+      "route_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "config_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "conditions": ["closed-book", "sources"],
+      "unsupported_condition_evidence": {},
+      "capability_evidence_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "pricing_evidence_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entitlement_evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "billing": {
+        "kind": "metered",
+        "units": "tokens",
+        "input_micro_usd_per_million_tokens": 1000000,
+        "output_micro_usd_per_million_tokens": 1000000,
+        "max_total_input_tokens": 64,
+        "max_total_output_tokens": 32,
+        "max_tool_rounds": 1,
+        "tool_round_micro_usd": 3
+      },
+      "admission_command_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "operator_authorization_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "request_budget_mechanism_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "scorer_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "tool_policy_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "repeats": 1,
+  "new_spend_cap_micro_usd": 100,
+  "spending_policy": {
+    "schema": "ukrainian-llm-eval.spending-policy.v1",
+    "mode": "sequential_shared_cap",
+    "ledger_id": "synthetic-planning-demo",
+    "authorized_cap_micro_usd": 100,
+    "reservation_scope": "whole_segment_before_first_request",
+    "settlement": "authoritative_final_account_charge_only",
+    "cap_stop": "not_executed_budget"
+  }
+}
