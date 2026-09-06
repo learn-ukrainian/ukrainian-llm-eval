@@ -145,6 +145,13 @@ prevents resume from bypassing that decision. Raw results remain preserved.
 Reported provider usage is evidence, not a replacement for conservative
 pre-request bounds; a post-call overrun check cannot undo an incurred charge.
 
+The whole-packet `pair` diagnostic applies the same missing-or-reused session
+check to successful results and validated candidate-response failures. It
+validates preserved receipts before new execution, retains the original receipt
+when the check fails, and writes a plan-bound `stop.json` so resume cannot skip
+the violation. Interrupted and generic failures continue under the existing
+resume policy.
+
 If the next immutable segment does not fit, execution stops without retry,
 reordering, truncation, or substitution. Immutable `budget-stop.json` records
 every remaining scheduled segment as `not_executed_budget` with its denominator.

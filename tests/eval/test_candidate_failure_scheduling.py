@@ -55,6 +55,59 @@ def test_pair_preserves_task_failures_and_executes_all_independent_repeats(monke
     assert len(calls) == 6
 
 
+def test_pair_candidate_failure_reuse_stops_and_preserves_original_evidence(monkeypatch, tmp_path):
+    packets, _, _, _, configs = _inputs()
+    calls = []
+    monkeypatch.setattr(scheduling, "preflight", lambda *args: {})
+
+    def execute(packet, config, condition, **kwargs):
+        calls.append(condition)
+        return _failed(packet, config, "same-session")
+
+    monkeypatch.setattr(execution, "run_exam", execute)
+    root = tmp_path / "pair"
+    progress = list(scheduling.run_pair(packets["ulp"], configs["fixture"], root))
+
+    assert len(calls) == 2
+    assert progress[-1] == {"status": "stopped", "reason": "missing_or_reused_session", "failed": True}
+    receipts = EvidenceStore(root / "evidence").verify_all()
+    assert len(receipts) == 2
+    assert all(receipt["result"]["failure_reason"] == "candidate_response_error"
+               for receipt in receipts.values())
+    assert json.loads((root / "stop.json").read_text())["reason"] == "missing_or_reused_session"
+
+    assert list(scheduling.run_pair(packets["ulp"], configs["fixture"], root, resume=True)) == progress[-1:]
+    assert len(calls) == 2
+
+
+def test_pair_resume_checks_preserved_session_before_running_later_slots(monkeypatch, tmp_path):
+    packets, _, _, _, configs = _inputs()
+    config = {**configs["fixture"], "repeats": 2}
+    calls = []
+    monkeypatch.setattr(scheduling, "preflight", lambda *args: {})
+
+    def execute(packet, config, condition, **kwargs):
+        calls.append(condition)
+        return _failed(packet, config, "shared-session")
+
+    monkeypatch.setattr(execution, "run_exam", execute)
+    root = tmp_path / "pair"
+    run = scheduling.run_pair(packets["ulp"], config, root)
+    first = next(run)
+    run.close()
+    assert first["status"] == "failed"
+    assert calls == ["closed-book"]
+
+    progress = list(scheduling.run_pair(packets["ulp"], config, root, resume=True))
+    assert calls == ["closed-book", "sources"]
+    assert progress[0]["resumed"] is True and progress[0]["status"] == "failed"
+    assert progress[-1] == {"status": "stopped", "reason": "missing_or_reused_session", "failed": True}
+    assert len(EvidenceStore(root / "evidence").verify_all()) == 2
+
+    assert list(scheduling.run_pair(packets["ulp"], config, root, resume=True)) == [progress[-1]]
+    assert calls == ["closed-book", "sources"]
+
+
 @pytest.mark.parametrize("reuse", [False, True])
 def test_research_task_failure_retains_cell_policy_and_checks_session_reuse(monkeypatch, tmp_path, reuse):
     args = _inputs()

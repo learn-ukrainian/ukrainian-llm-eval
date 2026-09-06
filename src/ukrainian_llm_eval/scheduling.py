@@ -105,6 +105,30 @@ def _lock(root):
         os.close(fd)
 
 
+def _pair_metadata(packet, config, condition, sources_url):
+    return {"denominator": len(packet["items"]), "packet_sha256": packet["packet_sha256"],
+            "config_sha256": digest(config), "condition": condition,
+            "route_sha256": route_fingerprint(config, sources_url)}
+
+
+def _pair_session(result, expected_response_ids):
+    """Return the candidate-failure classification and observed session id."""
+    candidate_failed = is_candidate_response_failure(
+        result, expected_response_ids=expected_response_ids
+    )
+    if result.get("status") != "ok" and not candidate_failed:
+        return candidate_failed, None
+    identity = result.get("identity", {})
+    return candidate_failed, identity.get("session_id") if isinstance(identity, dict) else None
+
+
+def _pair_stop(root, plan, slot, receipt):
+    stop = {"plan_sha256": digest(plan), "reason": "missing_or_reused_session",
+            "attempt_id": slot, "receipt_sha256": digest(receipt)}
+    _immutable_json(root / "stop.json", stop)
+    return {"status": "stopped", "reason": stop["reason"], "failed": True}
+
+
 def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
     schedule = [
         {"repeat": repeat, "condition": condition}
@@ -128,6 +152,47 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
         slots = {f"r{trial['repeat']:03d}-{trial['condition']}" for trial in schedule}
         if set(existing) - slots:
             raise ExamError("evidence contains an attempt outside the frozen schedule")
+        stop_path = root / "stop.json"
+        if stop_path.exists():
+            stop = read_json(stop_path)
+            if not isinstance(stop, dict) or set(stop) != {"plan_sha256", "reason", "attempt_id", "receipt_sha256"}:
+                raise ExamError("invalid paired stop record")
+            if any(not isinstance(stop[field], str) for field in stop):
+                raise ExamError("invalid paired stop record")
+            if stop["reason"] != "missing_or_reused_session":
+                raise ExamError("invalid paired stop reason")
+            if stop["plan_sha256"] != digest(plan):
+                raise ExamError("stop record does not match frozen schedule")
+            if stop["attempt_id"] not in slots:
+                raise ExamError("stop record references an attempt outside the frozen schedule")
+            receipt = existing.get(stop["attempt_id"])
+            if receipt is None or not receipt["complete"]:
+                raise ExamError("stop record receipt is missing or incomplete")
+            if digest(receipt) != stop["receipt_sha256"]:
+                raise ExamError("stop record receipt binding mismatch")
+            yield {"status": "stopped", "reason": stop["reason"], "failed": True}
+            return
+        expected_response_ids = [item["id"] for item in packet["items"]]
+        seen_sessions = set()
+        # Validate every preserved eligible result before preflight or any new
+        # provider execution. Generic and interrupted failures deliberately do
+        # not participate in the fresh-session policy.
+        for trial in schedule:
+            slot = f"r{trial['repeat']:03d}-{trial['condition']}"
+            receipt = existing.get(slot)
+            if receipt is None:
+                continue
+            expected = _pair_metadata(packet, config, trial["condition"], sources_url)
+            if receipt["metadata"] != expected:
+                raise ExamError("attempt does not match frozen schedule")
+            if not receipt["complete"]:
+                continue
+            candidate_failed, session_id = _pair_session(receipt["result"], expected_response_ids)
+            if receipt["result"]["status"] == "ok" or candidate_failed:
+                if not isinstance(session_id, str) or not session_id or session_id in seen_sessions:
+                    yield _pair_stop(root, plan, slot, receipt)
+                    return
+                seen_sessions.add(session_id)
         # Check both conditions before any new provider execution.
         if slots - set(existing):
             for condition in ("closed-book", "sources"):
@@ -137,9 +202,7 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
             slot = f"r{trial['repeat']:03d}-{trial['condition']}"
             receipt = existing.get(slot)
             if receipt is not None:
-                expected = {"denominator": len(packet["items"]), "packet_sha256": packet["packet_sha256"],
-                            "config_sha256": digest(config), "condition": trial["condition"],
-                            "route_sha256": route_fingerprint(config, sources_url)}
+                expected = _pair_metadata(packet, config, trial["condition"], sources_url)
                 if receipt["metadata"] != expected:
                     raise ExamError("attempt does not match frozen schedule")
                 if not receipt["complete"]:
@@ -162,10 +225,15 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
                         raise ExamError("existing result differs from preserved evidence")
                 else:
                     write_private_json(path, payload)
+            candidate_failed, session_id = _pair_session(result, expected_response_ids)
+            if slot not in existing and (result["status"] == "ok" or candidate_failed):
+                if not isinstance(session_id, str) or not session_id or session_id in seen_sessions:
+                    yield _pair_stop(root, plan, slot, receipt)
+                    return
+                seen_sessions.add(session_id)
             failed |= result["status"] != "ok"
             yield {**trial, "status": result["status"], "resumed": slot in existing, "failed": failed}
-            if (result["status"] != "ok" and slot not in existing
-                    and not is_candidate_response_failure(result, expected_response_ids=[item["id"] for item in packet["items"]])):
+            if result["status"] != "ok" and slot not in existing and not candidate_failed:
                 return
 
 
