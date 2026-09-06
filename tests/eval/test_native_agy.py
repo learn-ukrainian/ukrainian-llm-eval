@@ -11,6 +11,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -201,10 +202,24 @@ def test_native_runner_copies_only_credentials_and_one_prompt(monkeypatch, tmp_p
     assert result["identity"]["g1_credit_fallback"] is False
 
 
-def test_hook_changes_comparison(monkeypatch):
+def test_effort_changes_comparison():
     from ukrainian_llm_eval import runner
     before = runner._comparison(packet(), config())
     changed = copy.deepcopy(config())
     changed["effort"] = "high"
     changed["model"] = "gemini-3.8-flash-high"
     assert runner._comparison(packet(), changed) != before
+
+
+def test_expired_reference_setup_never_launches_candidate(monkeypatch, tmp_path):
+    root = provision(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(native, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(native, "_binary", lambda _config: ("fixture", "a" * 64))
+    def tools(*_args):
+        clock[0] = 16.0
+        return [{"name": "verify_word"}], None
+    monkeypatch.setattr(adapters, "_mcp_list_tools", tools)
+    monkeypatch.setattr(adapters, "_run_claude_process", lambda *_args, **_kwargs: pytest.fail("candidate must not launch"))
+    with pytest.raises(adapters.AdapterError, match="timeout before"):
+        native.run_agy(packet(), config(), "sources", sources_url="http://localhost:1/mcp", prompt="packet", private_env_path=root)

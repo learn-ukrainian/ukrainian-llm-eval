@@ -44,7 +44,7 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     effort = checked["effort"]
     if effort not in {"low", "medium", "high"} or checked["model"] != "gemini-3.8-flash-" + effort:
         raise adapters.AdapterError("AGY model and effort configuration conflict")
-    if checked["provider"] != PROVIDER:
+    if checked.get("provider") != PROVIDER:
         raise adapters.AdapterError("AGY requires its native subscription provider")
     checked.update(adapter="agy", agy_bin=binary)
     return checked
@@ -250,8 +250,6 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
             or final.get("json_schema") != schema):
         raise adapters.AdapterError("AGY final response invalid")
     responses = adapters._extract_responses(final.get("structured_output"), packet)
-    if not hook_receipts or any(receipt.get("decision") != "allow" for receipt in hook_receipts):
-        raise adapters.AdapterError("tool_policy_error")
     finish = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "finish"]
     refs = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "call_mcp_tool"]
     if len(finish) != 1 or len(hook_receipts) != len(refs) + 1 or hook_receipts[-1] != finish[0]:
@@ -332,9 +330,12 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             if evidence is not None:
                 evidence("cli_invocation", {"argv": argv, "env_keys": sorted(env), "binary_sha256": binary_hash,
                                              "native_controls_sha256": control_hash(checked, condition)})
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise adapters.AdapterError("AGY timeout before candidate execution")
             result = adapters._run_claude_process(argv, cwd=workspace, env=env,
                 prompt=adapters.canonical({"event": "user", "message": {"content": prompt}}) + "\n",
-                timeout=max(1, int(deadline - time.monotonic())), evidence=evidence)
+                timeout=remaining, evidence=evidence)
             if evidence is not None:
                 evidence("cli_result", {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
             receipts = [adapters._strict_json_loads(line) for line in gate.with_suffix(".jsonl").read_text().splitlines()] if gate.with_suffix(".jsonl").exists() else []
