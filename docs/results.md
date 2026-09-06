@@ -7,6 +7,7 @@ Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
 - Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local synthetic isolation controls; independent review and live subscription readiness remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
+- Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
@@ -21,9 +22,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 | GPT-6 Astra — low | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
 | GPT-6 Astra — medium | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
 | GPT-6 Astra — high | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
-| Claude Fable 5.1 — low | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
-| Claude Fable 5.1 — medium | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
-| Claude Fable 5.1 — high | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
+| Claude Fable 5.1 — low | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
+| Claude Fable 5.1 — medium | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
+| Claude Fable 5.1 — high | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Gemini 3.8 Flash — low | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — medium | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — high | Pending | Pending | Native selector listed; isolation and live admission unverified |
@@ -77,7 +78,11 @@ The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2
 
 Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. Review delegation remains paused under the operator's no-subagents instruction. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
 
-## Native Claude request controls
+## Native Claude execution controls
+
+Six live synthetic canaries passed on 6 September 2026 through the first-party native subscription route: low/medium/high in both conditions. Every attempt reported effective model `claude-fable-5-1`; effective effort remained `unknown`. Closed-book cases returned the expected exact-token answer with zero reference calls. Sources cases returned the expected tool-result count with one reference call each. All six evidence receipts verified, and the private archive checksums matched. Summary SHA-256: `be13529784de3f4cd17824a855aabcdc2d15f06a5301fce56a249e04a6073d80`.
+
+The driver stopped once because it tried to overwrite an immutable progress-summary file after saving a completed attempt. Recovery verified the saved results and resumed only unattempted cells; no completed model call was repeated. These are synthetic checks, not exam scores, and neither subscription expiry nor complete benchmark admission is asserted.
 
 Local captures on 6 September 2026 requested `claude-fable-5-1` at low/medium/high through the existing adapter, redirecting inference to a synthetic server with a dummy API key and separate configuration directory. All six effort/condition combinations sent the requested model string and matching effort field. Closed-book requests exposed only `StructuredOutput`; Sources requests added exactly the 13 reference tools. This proves request construction, not subscription eligibility or the provider's accepted model/effort.
 
@@ -96,6 +101,8 @@ On 6 September 2026, the installed AGY CLI catalog listed `gemini-3.8-flash-low`
 The documented [headless behavior](https://www.antigravity.google/docs/cli/headless/) permits a successful exit after a tool is denied and allows workspace file access by default. Its stream includes tool inventory and tool events, which must be inspected alongside the answer. The [permission rules](https://www.antigravity.google/docs/cli/permissions/) describe explicit denials and per-tool MCP permissions, but the installed CLI help does not expose a general session tool allowlist or settings-file override. Configuration isolation and enforcement still need installed behavior proof; documentation alone does not establish either. The [SDK quickstart](https://www.antigravity.google/docs/sdk/overview/) uses a Gemini API key or Vertex credentials, so it has not been accepted as a substitute for the selected subscription route.
 
 Owner: evaluator release lead, tracking [provider readiness #5](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/5). Next action: establish an isolated native configuration, then test ambient file, web, command and delegation denial plus the controlled Sources allowlist and call cap before live admission. If the native interface cannot demonstrate those controls, retain the route as unavailable rather than silently substituting paid access.
+
+Two no-prompt AGY startup probes selected workspace profiles using the documented directory and flat-file layouts. One declared an empty tool list; the other allowed only `finish`. Both startup inventories still listed 57 tools, including file, shell, web and delegation tools. The profile-list command returned no entries, so correct profile discovery/application is also unproven. These startup observations fail the evaluator's restricted-surface check; no Gemini inference was attempted. The separate Gemini CLI is being investigated as a native subscription alternative, with no paid API substitution.
 
 ## What Sources changes
 
