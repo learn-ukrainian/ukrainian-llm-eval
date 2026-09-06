@@ -58,6 +58,127 @@ bounds a single metered segment. A legacy v1 `max_new_spend_micro_usd` remains
 the total reservation ceiling and rejects a sequential schedule whose total
 exceeds it.
 
+## Credential-free planning example
+
+The runnable fixture in
+[`examples/planning/synthetic-sequential-spec.json`](../examples/planning/synthetic-sequential-spec.json)
+is one small ULP planning example: one synthetic suite, two placeholder
+segments, both conditions, and one repeat. It uses a sequential shared-cap
+policy so the complete four-segment reservation matrix is retained even though
+its conservative total is above the synthetic cap. The companion
+[`synthetic-sequential-spec-alt-scorer.json`](../examples/planning/synthetic-sequential-spec-alt-scorer.json)
+changes only the synthetic scorer digest; it demonstrates a distinct manifest
+namespace with the same cap.
+
+`plan-research --specification` accepts exactly these top-level keys:
+
+* Required: `protocol_sha256`, `suites`, `routes`, `scorer_sha256`,
+  `tool_policy_sha256`.
+* Optional: `repeats`, `new_spend_cap_micro_usd`, `spending_policy`.
+
+The specification is the constructor input. A completed `experiment.json` is
+not a specification: it contains derived fields such as
+`experiment_manifest_sha256`, `evidence_status`, and `execution_admission`,
+so passing that manifest back as `--specification` is rejected. Both
+`--manifest` and `--execution-plan` must name distinct files that do not exist
+yet; use fresh output paths for every planning invocation.
+
+Every digest, route, model/configuration identity, billing value, and policy in
+these two files is explicitly synthetic and non-admission. The example carries
+no grading key, private corpus, answer data, authentication material, or real
+provider identity. The required `key_sha256` nested field is only a patterned
+placeholder for the manifest shape; no key file exists and no execution is
+authorized. Planning itself makes no provider, MCP, admission, or request
+calls, and always reports `execution_admitted: false` on success.
+
+Run the three deterministic checks from a neutral temporary directory. Replace
+only `EXAMPLE_REPO` with the checkout containing this file and `PUBLIC_PY`
+with the Python interpreter in the virtual environment where you installed
+the evaluator, following the repository installation instructions. The
+commands use that installed package and copy only the example JSON files from
+`EXAMPLE_REPO`.
+
+```sh
+set -eu
+EXAMPLE_REPO=/absolute/path/to/ukrainian-llm-eval
+PUBLIC_PY=/absolute/path/to/eval-venv/bin/python
+RUN_DIR="$(mktemp -d /tmp/ukrainian-plan-example.XXXXXX)"
+cp "$EXAMPLE_REPO/examples/planning/synthetic-sequential-spec.json" "$RUN_DIR/spec.json"
+cp "$EXAMPLE_REPO/examples/planning/synthetic-sequential-spec-alt-scorer.json" "$RUN_DIR/spec-alt.json"
+cd "$RUN_DIR"
+
+# 1. First plan succeeds and writes two new artifacts.
+"$PUBLIC_PY" -m ukrainian_llm_eval plan-research \
+  --specification "$RUN_DIR/spec.json" \
+  --manifest "$RUN_DIR/manifest-a.json" \
+  --execution-plan "$RUN_DIR/execution-plan-a.json"
+
+# 2. The identical specification gets byte-identical plan and reservation IDs
+#    at fresh output paths.
+"$PUBLIC_PY" -m ukrainian_llm_eval plan-research \
+  --specification "$RUN_DIR/spec.json" \
+  --manifest "$RUN_DIR/manifest-b.json" \
+  --execution-plan "$RUN_DIR/execution-plan-b.json"
+cmp "$RUN_DIR/manifest-a.json" "$RUN_DIR/manifest-b.json"
+cmp "$RUN_DIR/execution-plan-a.json" "$RUN_DIR/execution-plan-b.json"
+
+# 3. A different manifest namespace keeps the same shared cap but changes its
+#    sequential reservation IDs.
+"$PUBLIC_PY" -m ukrainian_llm_eval plan-research \
+  --specification "$RUN_DIR/spec-alt.json" \
+  --manifest "$RUN_DIR/manifest-alt.json" \
+  --execution-plan "$RUN_DIR/execution-plan-alt.json"
+
+"$PUBLIC_PY" - "$RUN_DIR" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+
+def load(name):
+    return json.loads((root / name).read_text(encoding="utf-8"))
+
+manifest_a = load("manifest-a.json")
+manifest_b = load("manifest-b.json")
+manifest_alt = load("manifest-alt.json")
+plan_a = load("execution-plan-a.json")
+plan_b = load("execution-plan-b.json")
+plan_alt = load("execution-plan-alt.json")
+
+def reservation_ids(plan):
+    return [
+        segment["reservation_id"]
+        for cell in plan["cells"]
+        for segment in cell["segments"]
+    ]
+
+assert manifest_a == manifest_b
+assert plan_a == plan_b
+assert manifest_a["new_spend_cap_micro_usd"] == manifest_alt["new_spend_cap_micro_usd"] == 100
+assert manifest_a["spending_policy"]["authorized_cap_micro_usd"] == 100
+assert manifest_a["experiment_manifest_sha256"] != manifest_alt["experiment_manifest_sha256"]
+assert reservation_ids(plan_a) == reservation_ids(plan_b)
+assert reservation_ids(plan_a) != reservation_ids(plan_alt)
+assert plan_a["reservation_total_micro_usd"] == plan_alt["reservation_total_micro_usd"] == 396
+assert plan_a["reservation_total_micro_usd"] > manifest_a["new_spend_cap_micro_usd"]
+print(json.dumps({
+    "stable_plan_and_reservation_ids": True,
+    "different_manifest_namespace": True,
+    "same_cap_micro_usd": 100,
+    "reservations": len(reservation_ids(plan_a)),
+    "reservation_total_micro_usd": plan_a["reservation_total_micro_usd"],
+}, sort_keys=True))
+PY
+```
+
+The first command should print two cells, a `396` micro-USD conservative
+reservation total, and `execution_admitted: false`. The final assertion prints
+that the identical input is stable and the alternate manifest has distinct
+reservation IDs under the same cap. These checks establish planning identity
+and namespace behavior only; they do not establish admission, provider health,
+entitlement, or a scored research result.
+
 ```sh
 ukrainian-llm-eval prepare-segments --questions questions.json \
   --suite ulp --protocol-sha256 "$PROTOCOL_SHA256" \
