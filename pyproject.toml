@@ -30,6 +30,7 @@ dev = [
 [project.scripts]
 ukrainian-llm-eval = "ukrainian_llm_eval.__main__:main"
 ukrainian-llm-eval-mcp-proxy = "ukrainian_llm_eval.mcp_proxy:main"
+ukrainian-llm-eval-codex-reference = "ukrainian_llm_eval.codex_reference_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
