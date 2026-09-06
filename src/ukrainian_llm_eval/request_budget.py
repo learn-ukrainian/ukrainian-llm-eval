@@ -1162,18 +1162,20 @@ class RequestBudgetController:
         if has_provider_bound_paid:
             if not isinstance(policy, Mapping) or policy.get("mode") != "sequential_shared_cap":
                 raise ExamError("provider-bound paid request budgets require sequential shared spending policy")
-            expected_policy = (
+            allowed_policies = [
                 (
                     "ukrainian-llm-eval.spending-policy.v2",
                     "authoritative_account_charge_or_conservative_final_usage_upper_bound",
-                )
-                if has_usage_bound_paid
-                else (
+                ),
+            ]
+            if not has_usage_bound_paid:
+                # The broader policy also authorizes authoritative charges.
+                # Settlement evidence still follows each mechanism's version.
+                allowed_policies.append((
                     "ukrainian-llm-eval.spending-policy.v1",
                     "authoritative_final_account_charge_only",
-                )
-            )
-            if (policy.get("schema"), policy.get("settlement")) != expected_policy:
+                ))
+            if (policy.get("schema"), policy.get("settlement")) not in allowed_policies:
                 raise ExamError("request-budget mechanism and spending settlement policy differ")
             if self._shared_ledger_path is None:
                 raise ExamError("sequential shared spending policy requires a runtime ledger path")
