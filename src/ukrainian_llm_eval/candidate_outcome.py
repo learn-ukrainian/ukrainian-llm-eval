@@ -41,18 +41,35 @@ def is_candidate_response_failure(
     metrics = result.get("metrics")
     if not isinstance(responses, Mapping) or not isinstance(identity, Mapping) or not isinstance(metrics, Mapping):
         return False
-    required_identity = (
-        ("adapter", "kimi"),
-        ("harness", "kimi-cli"),
-        ("provider", "managed:kimi-code"),
-    )
+    adapter = identity.get("adapter")
+    if adapter == "kimi":
+        required_identity = (
+            ("adapter", "kimi"),
+            ("harness", "kimi-cli"),
+            ("provider", "managed:kimi-code"),
+        )
+        required_hashes = (
+            "binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256",
+        )
+    elif adapter == "codex":
+        required_identity = (
+            ("adapter", "codex"),
+            ("harness", "codex-cli"),
+            ("provider", "managed:codex-subscription"),
+        )
+        required_hashes = (
+            "entrypoint_sha256", "native_runtime_sha256", "control_receipt_sha256",
+            "settings_sha256", "request_shape_sha256", "response_schema_sha256",
+        )
+    else:
+        return False
     if any(identity.get(field) != expected for field, expected in required_identity):
         return False
     for field in ("model", "requested_model", "requested_model_alias", "cli_version"):
         value = identity.get(field)
         if not isinstance(value, str) or not value or value.strip() != value:
             return False
-    for field in ("binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256"):
+    for field in required_hashes:
         value = identity.get(field)
         if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
             return False
@@ -62,6 +79,13 @@ def is_candidate_response_failure(
     tool_calls = metrics.get("tool_calls")
     if isinstance(tool_calls, bool) or not isinstance(tool_calls, int) or tool_calls < 0:
         return False
+    if adapter == "codex":
+        if tool_calls != 0:
+            return False
+        for field in ("input_tokens", "output_tokens"):
+            value = metrics.get(field)
+            if type(value) is not int or value < 0:
+                return False
     if any(not isinstance(item_id, str) for item_id in responses):
         return False
     if any(value is not None for value in responses.values()):

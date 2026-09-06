@@ -125,6 +125,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         from .native_kimi import validate_config as validate_kimi_config
 
         return validate_kimi_config(config)
+    if adapter == "codex":
+        from .native_codex import validate_config as validate_codex_config
+
+        return validate_codex_config(config)
     base = {
         "schema",
         "adapter",
@@ -252,6 +256,13 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         return kimi_preflight(
             checked, condition, sources_url,
             private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_KIMI_PROVISIONING_DIR"),
+        )
+    if checked["adapter"] == "codex":
+        from .native_codex import preflight as codex_preflight
+
+        return codex_preflight(
+            checked, condition, sources_url,
+            private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_CODEX_PROVISIONING_DIR"),
         )
     _condition_policy(checked, condition, sources_url)
     capability: dict[str, Any] = {

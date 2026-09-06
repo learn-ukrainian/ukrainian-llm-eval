@@ -348,7 +348,7 @@ that as a distinct treatment, not the same benchmark condition.
 | --- | --- | --- | --- |
 | Native Claude CLI | Strict empty MCP and built-in tool set | Filtered stdio-to-HTTP Sources bridge | CLI output checked; unreported effective effort remains unknown |
 | Chat-completions HTTP | No tools supplied | Controller executes allowed MCP function calls | Exact returned model required; effective effort may remain unknown |
-| Other agent harnesses, including native Codex | Not claimed by this version | Requires an independently verified adapter | Do not relabel an imported answer file as a verified isolated run |
+| Native Codex CLI | Closed-book only, with a hash-bound local mock control receipt | Unsupported; the adapter rejects Sources before invocation | Requested route and fresh session are recorded; backend model and accepted/effective effort remain unknown |
 
 HTTP configuration uses `adapter: "chat-http"` and environment-variable names
 `endpoint_env` and `key_env`; populate their values privately. The adapter
