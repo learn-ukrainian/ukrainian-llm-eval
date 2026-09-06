@@ -6,7 +6,7 @@ Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report 
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. Native Codex currently fails the fresh tool-isolation control; its Sources connection works in a local fixture but is not isolated. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local synthetic isolation controls; independent review and live subscription readiness remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
@@ -18,9 +18,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 
 | Configuration | Closed-book | With Sources | Current status |
 | --- | --- | --- | --- |
-| GPT-6 Astra — low | Paused: isolation control failed | Paused: isolation incomplete | Native tool-surface controls require repair |
-| GPT-6 Astra — medium | Pending; paused for isolation repair | Pending; paused for isolation repair | Readiness not yet checked at this effort |
-| GPT-6 Astra — high | Pending; paused for isolation repair | Pending; paused for isolation repair | Readiness not yet checked at this effort |
+| GPT-6 Astra — low | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
+| GPT-6 Astra — medium | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
+| GPT-6 Astra — high | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
 | Claude Fable 5.1 — low | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — medium | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — high | Pending | Pending | Exact native selector/admission checks pending |
@@ -54,7 +54,15 @@ Denominator: **2,696 sentences in 166 documents**, using both reference annotato
 | --- | --- | --- | --- | --- | --- |
 | All planned configurations | Not ranked | Not ranked | Not measured | 0 completed primary repeats | None yet |
 
-## Current execution blocker — native Codex
+## Native Codex execution controls
+
+The subsequent restricted-catalog implementation at source head `2876012` in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) passes **27/27 local synthetic control cases**: nine cases at each requested low/medium/high effort, using all 13 permitted live Sources tool schemas. A clean wheel installation also passes all six public preflight combinations with synthetic credential files. No provider inference or live subscription validation occurred.
+
+The nine cases cover an empty closed-book surface, a permitted call, three denied resource operations, call-cap overflow, an unlisted tool, schema drift and a missing tool. Denied operations never reach the synthetic upstream; missing/changed schemas stop before the fixture receives a model request. The full test suite passed 488 tests, with lint also passing. These are implementation checks, not Ukrainian language scores.
+
+Final installed control-report SHA-256 identifiers: low `934110a88ed9f87dd2465e020904a0eadb00f14262303b0c5fe79638b745ae1d`; medium `c6bcf452947d227c75235705fd58293376f79ee4bc295c7a171bcf64f96a1bf6`; high `47ca86f9dbf50a70199f8ab9a9de4f15237674bc065f38b66ee557f09342b8ea`. Raw captures remain private, so these reports are not independently downloadable yet.
+
+The earlier baseline failure below is retained as historical engineering evidence; the new policy explicitly restricts catalog tool settings instead of relying on feature-disable flags alone.
 
 A local-only capture on 6 September 2026 used fresh empty homes, neutral working directories, a loopback Responses fixture and a synthetic MCP server. It supplied no credentials, made no provider inference call and used no scored exam material. Scope: GPT-6 Astra requested at low effort; medium/high readiness remains untested by this capture.
 
@@ -67,7 +75,7 @@ A local-only capture on 6 September 2026 used fresh empty homes, neutral working
 
 The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`. The successful synthetic-call capture SHA-256 is `b05725c7357a767f1c0e96638448c20e0a22def09d3695c9afad8912329e43ac`. These are local engineering observations; raw captures are retained privately and are not yet independently verifiable from a public evidence archive. They establish neither live subscription readiness nor language proficiency.
 
-Owner: evaluator release lead. Next action: resolve native tool isolation, retain controller-enforced Sources allowlist/call-cap evidence, and repeat both-mode synthetic admission for every selected configuration. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
+Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. Review delegation remains paused under the operator's no-subagents instruction. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
 
 ## What Sources changes
 
