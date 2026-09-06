@@ -212,3 +212,16 @@ schema `ukrainian-llm-eval.request-budget-route.v3`. Each has exactly its
 `mechanism`; the runtime controller receives the shared ledger path separately.
 Commands and evidence are supplied by the operator and are never discovered
 from benchmark, manifest or model output.
+
+Sequential plans namespace reservation IDs by the exact experiment manifest hash.
+Distinct manifests can therefore reuse suite and route labels while consuming the
+same authorized ledger cap. Replaying the same manifest keeps the same IDs and
+cannot obtain a second allocation. Legacy whole-plan IDs are unchanged. Retain
+historical plans and receipts with their producing revision; regenerate an
+unexecuted pre-release sequential plan before using the updated constructor.
+Do not create a fresh ledger to work around an identity conflict or exhausted cap.
+
+Every metered or existing-credit route in a sequential shared-cap plan must use
+a provider-bound v2 or v3 request-budget mechanism. Mixing a legacy v1 paid
+mechanism into that plan is rejected before admission; legacy whole-plan usage
+without a sequential policy remains supported.

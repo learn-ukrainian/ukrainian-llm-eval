@@ -1127,16 +1127,36 @@ class RequestBudgetController:
         self.route_specs = normalized
         self._routes = routes
         policy = manifest.get("spending_policy")
+        paid_route_ids = {
+            route_id
+            for route_id, route in routes.items()
+            if route["billing"]["kind"] in {"metered", "existing_credit"}
+        }
+        if policy is not None:
+            legacy_paid_route_ids = sorted(
+                route_id
+                for route_id in paid_route_ids
+                if (
+                    route_id not in normalized
+                    or normalized[route_id]["mechanism"]["schema"]
+                    not in {PROVIDER_BOUND_MECHANISM_SCHEMA, USAGE_BOUND_MECHANISM_SCHEMA}
+                )
+            )
+            if legacy_paid_route_ids:
+                raise ExamError(
+                    "sequential shared spending policy requires provider-bound request budgets "
+                    "for every paid route"
+                )
         has_provider_bound_paid = any(
             item["mechanism"]["schema"] in {
                 PROVIDER_BOUND_MECHANISM_SCHEMA, USAGE_BOUND_MECHANISM_SCHEMA,
             }
-            and routes[route_id]["billing"]["kind"] in {"metered", "existing_credit"}
+            and route_id in paid_route_ids
             for route_id, item in normalized.items()
         )
         has_usage_bound_paid = any(
             item["mechanism"]["schema"] == USAGE_BOUND_MECHANISM_SCHEMA
-            and routes[route_id]["billing"]["kind"] in {"metered", "existing_credit"}
+            and route_id in paid_route_ids
             for route_id, item in normalized.items()
         )
         if has_provider_bound_paid:

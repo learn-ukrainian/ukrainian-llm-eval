@@ -759,6 +759,7 @@ def _condition_order(route: dict[str, Any], repeat: int) -> list[str]:
 
 def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
     cells: list[dict[str, Any]] = []
+    sequential = manifest["schema"] == EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA
     for suite in manifest["suites"]:
         for route in manifest["routes"]:
             reservation = _reservation_micro_usd(route)
@@ -772,11 +773,14 @@ def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
                     segments = []
                     for segment in suite["segment_plan"]["segments"]:
                         segment_id = segment["segment_id"]
+                        reservation_identity = {"cell_id": cell_id, "segment_id": segment_id}
+                        if sequential:
+                            reservation_identity["experiment_manifest_sha256"] = manifest["experiment_manifest_sha256"]
                         segments.append({
                             "segment_id": segment_id,
                             "segment_packet_sha256": segment["packet_sha256"],
                             "attempt_id": "attempt-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
-                            "reservation_id": "reserve-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
+                            "reservation_id": "reserve-" + digest(reservation_identity)[:48],
                             "reserved_micro_usd": reservation,
                         })
                     cells.append({
@@ -792,7 +796,6 @@ def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
                         "segments": segments,
                     })
     total = sum(segment["reserved_micro_usd"] for cell in cells for segment in cell["segments"])
-    sequential = manifest["schema"] == EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA
     if not sequential and total > manifest["new_spend_cap_micro_usd"]:
         raise ExamError("conservative segment reservations exceed the experiment new-spend cap")
     body = {

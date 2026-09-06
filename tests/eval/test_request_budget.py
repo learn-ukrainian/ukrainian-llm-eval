@@ -549,6 +549,115 @@ def test_prepare_checks_metered_plan_reservation_without_equating_existing_credi
     )
 
 
+def _renamed_budget_route(route, mechanism, route_id, route_sha256):
+    renamed_mechanism = json.loads(json.dumps(mechanism))
+    renamed_mechanism["route_sha256"] = route_sha256
+    renamed_route = json.loads(json.dumps(route))
+    renamed_route["route_id"] = route_id
+    renamed_route["route_sha256"] = route_sha256
+    renamed_route["request_budget_mechanism_sha256"] = digest(renamed_mechanism)
+    return renamed_route, renamed_mechanism
+
+
+@pytest.mark.parametrize("legacy_kind", ["metered", "existing_credit"])
+@pytest.mark.parametrize("usage_bound", [False, True])
+def test_sequential_policy_rejects_mixed_legacy_paid_route_for_all_provider_bound_versions(
+    tmp_path, legacy_kind, usage_bound,
+):
+    legacy_root = tmp_path / f"legacy-{legacy_kind}-{usage_bound}"
+    legacy_root.mkdir()
+    legacy_route, _legacy_config, legacy_mechanism, legacy_controller, _legacy_budget = _values(
+        legacy_root,
+        kind=legacy_kind,
+        credit=1_000_000 if legacy_kind == "existing_credit" else None,
+    )
+    legacy_route, legacy_mechanism = _renamed_budget_route(
+        legacy_route, legacy_mechanism, "legacy", "d" * 64,
+    )
+    legacy_spec = {
+        "schema": ROUTE_SPEC_SCHEMA,
+        "mechanism": legacy_mechanism,
+        "counter_command": legacy_controller.route_specs["fixture"]["counter_command"],
+    }
+
+    provider_root = tmp_path / f"provider-{legacy_kind}-{usage_bound}"
+    provider_root.mkdir()
+    provider_route, _provider_config, provider_controller, _provider_budget = _provider_bound_values(
+        provider_root, usage_bound=usage_bound,
+    )
+    provider_route, provider_mechanism = _renamed_budget_route(
+        provider_route,
+        provider_controller.route_specs["fixture"]["mechanism"],
+        "provider",
+        "e" * 64,
+    )
+    provider_spec = {
+        "schema": USAGE_BOUND_ROUTE_SPEC_SCHEMA if usage_bound else PROVIDER_BOUND_ROUTE_SPEC_SCHEMA,
+        "mechanism": provider_mechanism,
+    }
+    controller = RequestBudgetController(
+        {"legacy": legacy_spec, "provider": provider_spec},
+        shared_ledger_path=tmp_path / f"mixed-{legacy_kind}-{usage_bound}.sqlite3",
+    )
+
+    with pytest.raises(ExamError, match="provider-bound request budgets for every paid route"):
+        controller.prepare(
+            {
+                "routes": [legacy_route, provider_route],
+                "suites": [{"limits": {"max_tool_calls": 2, "max_output_tokens": 100}}],
+                "spending_policy": provider_controller._spending_policy,
+            },
+            {"cells": []},
+        )
+
+
+@pytest.mark.parametrize("usage_bound", [False, True])
+def test_sequential_policy_allows_legacy_nonincremental_subscription_with_provider_bound_paid_route(
+    tmp_path, usage_bound,
+):
+    subscription_root = tmp_path / f"subscription-{usage_bound}"
+    subscription_root.mkdir()
+    subscription_route, _subscription_config, subscription_mechanism, subscription_controller, _budget = _values(
+        subscription_root, kind="verified_subscription",
+    )
+    subscription_route, subscription_mechanism = _renamed_budget_route(
+        subscription_route, subscription_mechanism, "subscription", "d" * 64,
+    )
+    subscription_spec = {
+        "schema": ROUTE_SPEC_SCHEMA,
+        "mechanism": subscription_mechanism,
+        "counter_command": subscription_controller.route_specs["fixture"]["counter_command"],
+    }
+
+    provider_root = tmp_path / f"provider-subscription-{usage_bound}"
+    provider_root.mkdir()
+    provider_route, _provider_config, provider_controller, _provider_budget = _provider_bound_values(
+        provider_root, usage_bound=usage_bound,
+    )
+    provider_route, provider_mechanism = _renamed_budget_route(
+        provider_route,
+        provider_controller.route_specs["fixture"]["mechanism"],
+        "provider",
+        "e" * 64,
+    )
+    provider_spec = {
+        "schema": USAGE_BOUND_ROUTE_SPEC_SCHEMA if usage_bound else PROVIDER_BOUND_ROUTE_SPEC_SCHEMA,
+        "mechanism": provider_mechanism,
+    }
+    controller = RequestBudgetController(
+        {"subscription": subscription_spec, "provider": provider_spec},
+        shared_ledger_path=tmp_path / f"mixed-subscription-{usage_bound}.sqlite3",
+    )
+    controller.prepare(
+        {
+            "routes": [subscription_route, provider_route],
+            "suites": [{"limits": {"max_tool_calls": 2, "max_output_tokens": 100}}],
+            "spending_policy": provider_controller._spending_policy,
+        },
+        {"cells": []},
+    )
+
+
 def test_usage_bound_settles_complete_ordered_final_usage_with_per_component_rounding(tmp_path):
     route, config, controller, budget = _provider_bound_values(tmp_path, usage_bound=True)
     first = {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
