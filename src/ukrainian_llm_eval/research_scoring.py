@@ -50,7 +50,7 @@ def score_sealed_experiment(packets, segment_plans, keys, manifest, execution_pl
     validate_execution_plan(manifest, execution_plan)
     if manifest["repeats"] != 3:
         raise ExamError("primary research scoring requires exactly three repeats")
-    if (execution_root / "stop.json").exists():
+    if (execution_root / "stop.json").exists() or (execution_root / "budget-stop.json").exists():
         raise ExamError("stopped experiment cannot emit a primary summary")
     result_manifest = read_json(execution_root / "result-manifest.json")
     if result_manifest.get("execution_plan_sha256") != execution_plan["execution_plan_sha256"] or result_manifest.get("scorer_sha256") != manifest["scorer_sha256"]:

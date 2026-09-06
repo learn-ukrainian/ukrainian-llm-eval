@@ -78,6 +78,10 @@ def parser() -> argparse.ArgumentParser:
         help="Route map to frozen request-budget mechanisms and trusted local counter commands; required by paid/credit routes",
     )
     research_run.add_argument(
+        "--shared-spending-ledger", type=Path,
+        help="Absolute SQLite path outside execution roots; reuse for all canaries and runs sharing the spending cap",
+    )
+    research_run.add_argument(
         "--sources-urls", "--sources-routes", dest="sources_urls", type=Path,
         help="Optional JSON route-to-URL map; values may be env:NAME references",
     )
@@ -342,7 +346,7 @@ def execute(args: argparse.Namespace) -> int:
             raise ExamError("research manifest and execution plan must be distinct new files")
         spec = read_json(args.specification)
         required = {"protocol_sha256", "suites", "routes", "scorer_sha256", "tool_policy_sha256"}
-        if not isinstance(spec, dict) or not required <= set(spec) or set(spec) - required - {"repeats", "new_spend_cap_micro_usd"}:
+        if not isinstance(spec, dict) or not required <= set(spec) or set(spec) - required - {"repeats", "new_spend_cap_micro_usd", "spending_policy"}:
             raise ExamError("invalid research specification fields")
         manifest = build_experiment_manifest(**spec)
         plan = build_execution_plan(manifest)
@@ -352,6 +356,8 @@ def execute(args: argparse.Namespace) -> int:
                           "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
                           "execution_plan_sha256": plan["execution_plan_sha256"], "execution_admitted": False}))
     elif args.command == "run-research":
+        if args.shared_spending_ledger is not None and not args.shared_spending_ledger.is_absolute():
+            raise ExamError("shared spending ledger path must be absolute")
         runtime = _research_runtime_inputs(args.inputs)
         manifest = read_json(args.manifest)
         plan = read_json(args.execution_plan)
@@ -387,7 +393,7 @@ def execute(args: argparse.Namespace) -> int:
             _research_sources_from_env(args.sources_url_env, manifest["routes"]),
         )
         controller = CommandAdmissionController(specs, authorizations)
-        budget_controller = RequestBudgetController(budget_specs)
+        budget_controller = RequestBudgetController(budget_specs, shared_ledger_path=args.shared_spending_ledger)
         failed = False
         for progress in run_research(
             runtime["packets"], runtime["segment_plans"], manifest, plan, runtime["configs"],

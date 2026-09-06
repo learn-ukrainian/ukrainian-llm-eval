@@ -73,6 +73,14 @@ def test_failed_cell_keeps_explicit_no_score_and_no_partial_mean(monkeypatch, tm
     assert report["paired_deltas"] == []
 
 
+@pytest.mark.parametrize("marker", ["stop.json", "budget-stop.json"])
+def test_stop_marker_prevents_summary_even_with_complete_results(monkeypatch, tmp_path, marker):
+    args, bindings, root = sealed(monkeypatch, tmp_path)
+    (root / marker).write_text("{}")
+    with pytest.raises(ExamError, match="stopped experiment"):
+        score_sealed_experiment(*args, scorer_bindings=bindings)
+
+
 def test_unsealed_admission_attempt_prevents_offline_scoring(monkeypatch, tmp_path):
     args, bindings, root = sealed(monkeypatch, tmp_path)
     EvidenceStore(root / "admission-evidence").start({"denominator": 0}).finalize({"status": "failed"})

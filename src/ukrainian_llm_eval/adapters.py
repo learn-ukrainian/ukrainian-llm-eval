@@ -121,6 +121,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise AdapterError("configuration must be an object")
     adapter = config.get("adapter")
+    if adapter == "kimi":
+        from .native_kimi import validate_config as validate_kimi_config
+
+        return validate_kimi_config(config)
     base = {
         "schema",
         "adapter",
@@ -136,7 +140,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     }
     by_adapter = {
         "claude": base | {"claude_bin"},
-        "chat-http": base | {"endpoint_env", "key_env"},
+        "chat-http": base | {"endpoint_env", "key_env", "http_response_format", "openrouter"},
+        "responses-http": base | {"endpoint_env", "key_env", "http_response_format"},
     }
     if adapter not in by_adapter:
         raise AdapterError("configuration adapter is unsupported")
@@ -176,6 +181,31 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         key_env = config.get("key_env")
         if key_env is not None and (not isinstance(key_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", key_env)):
             raise AdapterError("configuration key_env must be an environment variable name or null")
+        http_format = config.get("http_response_format", "json_schema")
+        if not isinstance(http_format, str) or http_format not in {"json_schema", "json_object"}:
+            raise AdapterError("configuration HTTP response format is unsupported")
+        if "openrouter" in config:
+            routing = config["openrouter"]
+            required_routing = {"provider_endpoint", "expected_provider_name", "reasoning_enabled"}
+            if not isinstance(routing, Mapping) or not required_routing.issubset(routing) or set(routing) - required_routing - {"max_price"}:
+                raise AdapterError("configuration OpenRouter controls are invalid")
+            for field in ("provider_endpoint", "expected_provider_name"):
+                value = routing[field]
+                if not isinstance(value, str) or not value.strip() or value != value.strip() or any(ord(c) < 32 for c in value):
+                    raise AdapterError("configuration OpenRouter provider identity is invalid")
+            if type(routing["reasoning_enabled"]) is not bool or (not routing["reasoning_enabled"] and effort is not None):
+                raise AdapterError("configuration OpenRouter reasoning controls conflict")
+            if "max_price" in routing:
+                prices = routing["max_price"]
+                if not isinstance(prices, Mapping) or set(prices) != {"prompt", "completion", "request"}:
+                    raise AdapterError("configuration OpenRouter price ceilings are incomplete")
+                for value in prices.values():
+                    if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,9})?", value):
+                        raise AdapterError("configuration OpenRouter price ceiling must be a nonnegative decimal string")
+    if adapter == "responses-http":
+        from .responses_http import _runtime_config
+
+        _runtime_config(config)
     return dict(config)
 
 
@@ -216,6 +246,13 @@ def _claude_capabilities(config: Mapping[str, Any], *, needs_sources: bool = Fal
 def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None = None) -> dict[str, Any]:
     """Check only capability and boundaries, returning no endpoint/key values."""
     checked = validate_config(config)
+    if checked["adapter"] == "kimi":
+        from .native_kimi import preflight as kimi_preflight
+
+        return kimi_preflight(
+            checked, condition, sources_url,
+            private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_KIMI_PROVISIONING_DIR"),
+        )
     _condition_policy(checked, condition, sources_url)
     capability: dict[str, Any] = {
         "schema": "zno-nmt.capability.v1",
@@ -234,7 +271,7 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         endpoint = os.environ.get(str(checked["endpoint_env"]), "")
         if not endpoint:
             raise AdapterError("HTTP endpoint is unavailable")
-        capability.update(capability="chat-http-controller-mediated", cli_version=None)
+        capability.update(capability=checked["adapter"] + "-controller-mediated", cli_version=None)
     if condition == "sources":
         tools, identity = _mcp_list_tools(str(sources_url), int(checked["timeout_seconds"]))
         expected = set(checked["tools"])
@@ -526,6 +563,31 @@ def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _claude_context_model_mapping(stdout: str) -> dict[str, str]:
+    """Resolve a context selector only when native terminal metadata attests it."""
+    events = [_strict_json_loads(line) for line in stdout.splitlines()]
+    initial = {event.get("model") for event in events if isinstance(event, Mapping)
+               and event.get("type") == "system" and event.get("subtype") == "init"
+               and isinstance(event.get("model"), str)}
+    decorated = {model for model in initial if model.endswith("[1m]")}
+    if not decorated:
+        return {}
+    if len(initial) != 1:
+        raise AdapterError("CLI model drift")
+    selector = next(iter(decorated))
+    terminal = [event for event in events if isinstance(event, Mapping) and event.get("type") == "result"]
+    if len(terminal) != 1 or terminal[0].get("is_error") is True:
+        raise AdapterError("CLI model drift")
+    usage = terminal[0].get("modelUsage")
+    if not isinstance(usage, Mapping) or set(usage) != {selector}:
+        raise AdapterError("CLI model drift")
+    record = usage[selector]
+    if (not isinstance(record, Mapping) or record.get("canonicalModel") != selector[:-4]
+            or record.get("contextWindow") != 1_000_000):
+        raise AdapterError("CLI model drift")
+    return {selector: record["canonicalModel"]}
+
+
 def _parse_stream_json(
     stdout: str, packet: Mapping[str, Any], tools: set[str], max_tools: int
 ) -> tuple[dict[str, Any], str, int, dict[str, int | float | None]]:
@@ -597,6 +659,8 @@ def _parse_stream_json(
         raise AdapterError(_TOOL_LIMIT_ERROR)
     if not init_seen:
         raise AdapterError("CLI init evidence missing")
+    model_mapping = _claude_context_model_mapping(stdout)
+    observed_models = {model_mapping.get(model, model) for model in observed_models}
     if len(observed_models) > 1:
         raise AdapterError("CLI model drift")
     if result_text is None and structured_output is None:
@@ -611,6 +675,26 @@ def _parse_stream_json(
                 raise
             raise AdapterError("CLI response is not JSON") from exc
     return _extract_responses(payload, packet), next(iter(observed_models), "unknown"), len(observed_tools), usage
+
+
+def _claude_session_identity(stdout: str) -> str:
+    """Use native session evidence so a repeated session cannot look fresh."""
+    sessions: set[str] = set()
+    terminal_session = None
+    for line in stdout.splitlines():
+        event = _strict_json_loads(line)
+        if not isinstance(event, Mapping):
+            raise AdapterError("CLI session evidence is malformed")
+        session = event.get("session_id")
+        if session is not None:
+            if not isinstance(session, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session) is None:
+                raise AdapterError("CLI session identity is malformed")
+            sessions.add(session)
+        if event.get("type") == "result":
+            terminal_session = session
+    if len(sessions) != 1 or terminal_session not in sessions:
+        raise AdapterError("CLI session identity is missing or inconsistent")
+    return terminal_session
 
 
 def _nonnegative_int(value: Any) -> int | None:
@@ -649,7 +733,6 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
         raise AdapterError("wrong adapter")
     _condition_policy(checked, condition, sources_url)
     binary, cli_version = _claude_capabilities(checked, needs_sources=condition == "sources")
-    session_id = str(uuid.uuid4())
     schema = response_schema(packet)
     with tempfile.TemporaryDirectory(prefix="zno-nmt-claude-") as temp:
         root = Path(temp)
@@ -707,11 +790,14 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
             raise AdapterError("CLI invocation failed")
         observed_tools = {_tool_ref(tool) for tool in checked["tools"]} if condition == "sources" else set()
         responses, effective_model, tool_calls, usage = _parse_stream_json(completed.stdout, packet, observed_tools, checked["max_tool_calls"])
-    if effective_model != "unknown" and effective_model != checked["model"]:
+    model_mapping = _claude_context_model_mapping(completed.stdout)
+    expected_model = model_mapping.get(checked["model"], checked["model"])
+    if effective_model != "unknown" and effective_model != expected_model:
         raise AdapterError("CLI model drift")
+    session_id = _claude_session_identity(completed.stdout)
     return {
         "responses": responses,
-        "identity": {"adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "max_output_tokens_configured": checked["max_output_tokens"], "max_output_tokens_effective": "unknown"},
+        "identity": {"model_context_mapping": model_mapping, "adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "max_output_tokens_configured": checked["max_output_tokens"], "max_output_tokens_effective": "unknown"},
         "metrics": {"elapsed_seconds": elapsed, "input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"], "cost_usd": usage["cost_usd"], "tool_calls": tool_calls},
     }
 
@@ -780,7 +866,17 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     response_name = "ua_gec_responses" if packet.get("schema") == GEC_PACKET_SCHEMA else "zno_nmt_responses"
     output_parameter = request_budget.output_parameter_name if request_budget is not None else "max_tokens"
     request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, output_parameter: checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
-    if checked["effort"] is not None:
+    if checked.get("http_response_format") == "json_object":
+        request_base["response_format"] = {"type": "json_object"}
+    routing = checked.get("openrouter")
+    if routing is not None:
+        request_base["provider"] = {"only": [routing["provider_endpoint"]], "allow_fallbacks": False, "require_parameters": True}
+        if "max_price" in routing:
+            request_base["provider"]["max_price"] = dict(routing["max_price"])
+        request_base["reasoning"] = {"enabled": routing["reasoning_enabled"]}
+        if checked["effort"] is not None:
+            request_base["reasoning"]["effort"] = checked["effort"]
+    elif checked["effort"] is not None:
         request_base["reasoning_effort"] = checked["effort"]
     if condition == "sources":
         request_base["tools"] = [{"type": "function", "function": {"name": _tool_ref(name), "description": "Approved Sources reference tool", "parameters": tool["inputSchema"]}} for name, tool in available.items() if name in checked["tools"]]
@@ -813,6 +909,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             evidence("completion_response", body)
         if body.get("model") != checked["model"]:
             raise AdapterError("HTTP model drift")
+        if routing is not None and body.get("provider") != routing["expected_provider_name"]:
+            raise AdapterError("HTTP provider identity drift")
         choices = body.get("choices")
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], Mapping):
             raise AdapterError("HTTP completion choices invalid")
@@ -898,8 +996,13 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
                 raise AdapterError("HTTP tool call id invalid")
             messages.append({"role": "tool", "tool_call_id": call_id, "content": serialized_result})
     assert response is not None
-    return {
+    trial = {
         "responses": responses,
         "identity": {"adapter": "chat-http", "harness": "chat-http", "model": checked["model"], "provider": checked.get("provider") or "chat-http", "session_id": str(uuid.uuid4()), "requested_model": checked["model"], "effective_model": checked["model"], "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": None, "tool_schema_sha256": digest(mcp_tools), "mcp_server_identity_sha256": identity, "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "retrieval_receipt_sha256": digest(retrieval_digests) if retrieval_digests else None},
         "metrics": {"elapsed_seconds": time.monotonic() - started, "input_tokens": usage_totals["input_tokens"] if usage_known["input_tokens"] else None, "output_tokens": usage_totals["output_tokens"] if usage_known["output_tokens"] else None, "total_tokens": usage_totals["total_tokens"] if usage_known["total_tokens"] else None, "cost_usd": float(reported_cost) if reported_cost_known else None, "tool_calls": tool_calls},
     }
+    if routing is not None:
+        trial["identity"].update(provider_endpoint_requested=routing["provider_endpoint"],
+                                 effective_provider=response["provider"],
+                                 reasoning_enabled_requested=routing["reasoning_enabled"])
+    return trial

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters, gec
+from .candidate_outcome import is_candidate_response_failure
 from .core import ExamError, digest, validate_packet
 from .request_budget import RequestBudgetError
 
@@ -61,7 +62,7 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
     runner_source = Path(__file__).read_bytes()
     proxy_source = Path(adapters.__file__).with_name("mcp_proxy.py").read_bytes()
     route: dict[str, Any] = {"provider": config.get("provider"), "adapter": config["adapter"]}
-    if config["adapter"] == "chat-http":
+    if config["adapter"] in {"chat-http", "responses-http"}:
         endpoint_env = config["endpoint_env"]
         route["endpoint_env_sha256"] = digest(endpoint_env)
         endpoint = os.environ.get(endpoint_env)
@@ -86,6 +87,14 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
         "route": route,
     }
+    if config["adapter"] == "kimi":
+        constants["native_adapter_implementation_sha256"] = hashlib.sha256(
+            Path(adapters.__file__).with_name("native_kimi.py").read_bytes()
+        ).hexdigest()
+    elif config["adapter"] == "responses-http":
+        constants["http_adapter_implementation_sha256"] = hashlib.sha256(
+            Path(adapters.__file__).with_name("responses_http.py").read_bytes()
+        ).hexdigest()
     if packet.get("schema") == gec.GEC_PACKET_SCHEMA:
         gec_source = Path(gec.__file__).read_bytes()
         adapter_hash = hashlib.sha256(adapter_source).hexdigest()
@@ -178,9 +187,28 @@ def run_exam(
                 prompt=prompt,
                 **evidence_options,
             )
+        elif checked_config["adapter"] == "kimi":
+            from .native_kimi import run_kimi
+
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the native CLI adapter")
+            trial = run_kimi(
+                checked_packet, checked_config, condition, sources_url=sources_url, prompt=prompt,
+                private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_KIMI_PROVISIONING_DIR"),
+                **evidence_options,
+            )
+            for field in ("binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256"):
+                if trial["identity"].get(field) != capability.get(field):
+                    raise ExamError("native Kimi configuration changed after preflight")
         else:
             budget_options = {"request_budget": request_budget} if request_budget is not None else {}
-            trial = adapters.run_chat_http(
+            if checked_config["adapter"] == "responses-http":
+                from .responses_http import run_responses_http
+
+                run_http = run_responses_http
+            else:
+                run_http = adapters.run_chat_http
+            trial = run_http(
                 checked_packet,
                 checked_config,
                 condition,
@@ -189,6 +217,30 @@ def run_exam(
                 **budget_options,
                 **evidence_options,
             )
+        if trial.get("status") == "failed":
+            expected_ids = [str(item["id"]) for item in checked_packet["items"]]
+            if not is_candidate_response_failure(trial, expected_response_ids=expected_ids):
+                raise ExamError("candidate response failure evidence is invalid")
+            identity = dict(trial["identity"])
+            if request_budget is not None:
+                budget_receipt = request_budget.finalize("failed")
+                identity["request_budget_receipt_sha256"] = digest(budget_receipt)
+            identity["preflight_tool_schema_sha256"] = capability["tool_schema_sha256"]
+            identity["preflight_mcp_server_identity_sha256"] = capability["mcp_server_identity_sha256"]
+            failure = {
+                "schema": _run_schema(checked_packet),
+                "packet_sha256": checked_packet["packet_sha256"],
+                "condition": condition,
+                "status": "failed",
+                "responses": dict(trial["responses"]),
+                "identity": identity,
+                "comparison": _comparison(checked_packet, checked_config),
+                "metrics": dict(trial["metrics"]),
+                "failure_reason": trial["failure_reason"],
+            }
+            if evidence is not None:
+                evidence("trial_failure", failure)
+            return failure
     except (adapters.AdapterError, ExamError, RequestBudgetError, OSError, TimeoutError) as exc:
         budget_receipt = None
         if request_budget is not None:

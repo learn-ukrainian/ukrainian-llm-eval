@@ -6,7 +6,14 @@ from ukrainian_llm_eval import execution, scheduling
 from ukrainian_llm_eval.benchmark_manifest import build_execution_plan, build_experiment_manifest
 from ukrainian_llm_eval.core import ExamError, digest
 from ukrainian_llm_eval.evidence import EvidenceStore
-from ukrainian_llm_eval.request_budget import request_budget_attempt_id
+from ukrainian_llm_eval.request_budget import (
+    CACHE_BILLING,
+    PROVIDER_BOUND_MECHANISM_SCHEMA,
+    PROVIDER_BOUND_ROUTE_SPEC_SCHEMA,
+    SERIALIZER,
+    RequestBudgetController,
+    request_budget_attempt_id,
+)
 from ukrainian_llm_eval.segmentation import derive_segment_plan
 
 
@@ -310,3 +317,335 @@ def test_reused_session_stops_before_second_cell_score(monkeypatch, tmp_path):
                                         request_budget_controller=fixture_budgets)) == [
         {"status": "stopped", "reason": "missing_or_reused_session"}]
     assert len(calls) == 2 and not list(root.glob("cell-*.json"))
+
+
+def test_sequential_cap_stop_preserves_full_remaining_denominator_without_retry(monkeypatch, tmp_path):
+    packets, plans, original, _old_plan, configs = inputs(metered=True)
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        original["protocol_sha256"], original["suites"], original["routes"],
+        scorer_sha256=original["scorer_sha256"], tool_policy_sha256=original["tool_policy_sha256"],
+        new_spend_cap_micro_usd=11, spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+
+    class SequentialFixture(FixtureBudgets):
+        uses_sequential_shared_cap = True
+
+        def __init__(self):
+            self.allocations = 0
+
+        def remaining_ceiling_micro_usd(self):
+            return 11 if self.allocations == 0 else 0
+
+        def validate_execution_root(self, _root):
+            return None
+
+        def for_attempt(self, route, config, attempt_id, admission_receipt, **kwargs):
+            from ukrainian_llm_eval.spending_ledger import SpendingCapExceeded
+
+            if self.allocations:
+                raise SpendingCapExceeded("synthetic shared cap")
+            self.allocations += 1
+            return super().for_attempt(route, config, attempt_id, admission_receipt)
+
+    controller = SequentialFixture()
+    root = tmp_path / "research"
+    outcome = list(scheduling.run_research(
+        packets, plans, manifest, plan, configs, root,
+        admission_probe=admit, request_budget_controller=controller,
+    ))
+    assert outcome == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1
+    stop = json.loads((root / "budget-stop.json").read_text())
+    assert stop["reason"] == "not_executed_budget"
+    assert len(stop["remaining"]) == 11
+    assert stop["remaining_denominator"] == 11
+    assert all(item["status"] == "not_executed_budget" for item in stop["remaining"])
+    assert not (root / "result-manifest.json").exists()
+
+    assert list(scheduling.run_research(
+        packets, plans, manifest, plan, configs, root,
+        admission_probe=admit, request_budget_controller=controller, resume=True,
+    )) == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1
+
+
+def test_real_shared_ledger_cap_race_preserves_admission_receipt_and_is_resume_safe(monkeypatch, tmp_path):
+    """A ledger change after admission cannot start a request or lose the receipt."""
+
+    packets, plans, original, _old_plan, _configs = inputs(metered=True)
+    config = {
+        **_configs["fixture"],
+        "adapter": "chat-http",
+        "provider": "fixture-provider",
+        "endpoint_env": "FIXTURE_ENDPOINT",
+        "key_env": None,
+        "http_response_format": "json_schema",
+    }
+    route = {**original["routes"][0]}
+    route["route_sha256"] = execution.route_fingerprint(config, None)
+    route["config_sha256"] = digest(config)
+    mechanism = {
+        "schema": PROVIDER_BOUND_MECHANISM_SCHEMA,
+        "route_sha256": route["route_sha256"],
+        "provider": "fixture-provider",
+        "serializer": SERIALIZER,
+        "input_bound": {
+            "kind": "provider_context_upper_bound",
+            "max_input_tokens_per_request": 3333,
+            "max_requests_per_segment": 3,
+            "includes_hidden_provider_framing": True,
+            "evidence_sha256": "4" * 64,
+        },
+        "output_parameter": {
+            "name": "max_tokens",
+            "max_tokens_per_request": 100,
+            "includes_reasoning": True,
+            "includes_tool_calls": True,
+            "includes_final_output": True,
+            "evidence_sha256": "5" * 64,
+        },
+        "usage": {
+            "input_tokens_path": ["prompt_tokens"],
+            "output_tokens_path": ["completion_tokens"],
+            "output_includes_reasoning": True,
+            "reported_cost_path": ["cost"],
+            "reported_cost_kind": "account_charge",
+            "reported_cost_scope": "request",
+        },
+        "cache_billing": CACHE_BILLING,
+        "max_tool_result_utf8_bytes": 4096,
+        "pricing_evidence_sha256": "6" * 64,
+        "backend_identity_evidence_sha256": "7" * 64,
+    }
+    route["pricing_evidence_sha256"] = mechanism["pricing_evidence_sha256"]
+    route["request_budget_mechanism_sha256"] = digest(mechanism)
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "race-ledger",
+        "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        original["protocol_sha256"], original["suites"], [route],
+        scorer_sha256=original["scorer_sha256"], tool_policy_sha256=original["tool_policy_sha256"],
+        new_spend_cap_micro_usd=11, spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    assert {segment["reserved_micro_usd"] for cell in plan["cells"] for segment in cell["segments"]} == {11}
+    controller = RequestBudgetController(
+        {"fixture": {"schema": PROVIDER_BOUND_ROUTE_SPEC_SCHEMA, "mechanism": mechanism}},
+        shared_ledger_path=tmp_path / "shared" / "spending.sqlite3",
+    )
+    admission_calls = []
+
+    def admit_then_consume(*args, **kwargs):
+        receipt, evidence = admit(*args, **kwargs)
+        admission_calls.append(evidence["attempt_id"])
+        controller._shared_ledger.reserve(
+            "concurrent-reservation",
+            {"candidate_attempt_id": "concurrent"},
+            maximum_micro_usd=11,
+            funding_kind="metered",
+            account_sha256="4" * 64,
+            credit_available_micro_usd=None,
+        )
+        return receipt, evidence
+
+    admit_then_consume.prepare = lambda _manifest, _plan: None
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+    root = tmp_path / "research"
+    outcome = list(scheduling.run_research(
+        packets, plans, manifest, plan, {"fixture": config}, root,
+        admission_probe=admit_then_consume, request_budget_controller=controller,
+    ))
+    assert outcome == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert calls == []
+    assert len(admission_calls) == 1
+    approvals = EvidenceStore(root / "admission-evidence").verify_all()
+    assert set(approvals) == set(admission_calls)
+    assert next(iter(approvals.values()))["terminal_status"] == "completed"
+    assert EvidenceStore(root / "request-budget-evidence").verify_all() == {}
+    assert controller._shared_ledger.get("concurrent-reservation")["state"] == "unresolved"
+    assert list(scheduling.run_research(
+        packets, plans, manifest, plan, {"fixture": config}, root,
+        admission_probe=admit_then_consume, request_budget_controller=controller, resume=True,
+    )) == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(admission_calls) == 1
+
+
+def test_real_shared_ledger_existing_credit_exhaustion_retains_admission_and_resumes_stopped(monkeypatch, tmp_path):
+    """Existing credit has no new-spend reservation, so the ledger remains the atomic authority."""
+
+    packets, plans, original, _old_plan, _configs = inputs(metered=True)
+    config = {
+        **_configs["fixture"],
+        "adapter": "chat-http",
+        "provider": "fixture-provider",
+        "endpoint_env": "FIXTURE_ENDPOINT",
+        "key_env": None,
+        "http_response_format": "json_schema",
+    }
+    route = {
+        **original["routes"][0],
+        "route_sha256": execution.route_fingerprint(config, None),
+        "config_sha256": digest(config),
+        "billing": {**original["routes"][0]["billing"], "kind": "existing_credit"},
+    }
+    mechanism = {
+        "schema": PROVIDER_BOUND_MECHANISM_SCHEMA,
+        "route_sha256": route["route_sha256"],
+        "provider": "fixture-provider",
+        "serializer": SERIALIZER,
+        "input_bound": {
+            "kind": "provider_context_upper_bound",
+            "max_input_tokens_per_request": 3333,
+            "max_requests_per_segment": 3,
+            "includes_hidden_provider_framing": True,
+            "evidence_sha256": "4" * 64,
+        },
+        "output_parameter": {
+            "name": "max_tokens",
+            "max_tokens_per_request": 100,
+            "includes_reasoning": True,
+            "includes_tool_calls": True,
+            "includes_final_output": True,
+            "evidence_sha256": "5" * 64,
+        },
+        "usage": {
+            "input_tokens_path": ["prompt_tokens"],
+            "output_tokens_path": ["completion_tokens"],
+            "output_includes_reasoning": True,
+            "reported_cost_path": ["cost"],
+            "reported_cost_kind": "account_charge",
+            "reported_cost_scope": "request",
+        },
+        "cache_billing": CACHE_BILLING,
+        "max_tool_result_utf8_bytes": 4096,
+        "pricing_evidence_sha256": "6" * 64,
+        "backend_identity_evidence_sha256": "7" * 64,
+    }
+    route["pricing_evidence_sha256"] = mechanism["pricing_evidence_sha256"]
+    route["request_budget_mechanism_sha256"] = digest(mechanism)
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "existing-credit-ledger",
+        "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        original["protocol_sha256"], original["suites"], [route],
+        scorer_sha256=original["scorer_sha256"], tool_policy_sha256=original["tool_policy_sha256"],
+        new_spend_cap_micro_usd=11, spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    assert {segment["reserved_micro_usd"] for cell in plan["cells"] for segment in cell["segments"]} == {0}
+    controller = RequestBudgetController(
+        {"fixture": {"schema": PROVIDER_BOUND_ROUTE_SPEC_SCHEMA, "mechanism": mechanism}},
+        shared_ledger_path=tmp_path / "shared" / "spending.sqlite3",
+    )
+    admission_calls = []
+
+    def admit_existing_credit(route, _config, _condition, *, request, execution_binding, reserved_micro_usd,
+                              remaining_ceiling_micro_usd, evidence_dir):
+        assert reserved_micro_usd == 0
+        assert remaining_ceiling_micro_usd == 11
+        receipt = {
+            "schema": "ukrainian-llm-eval.admission-receipt.v1",
+            "request_sha256": request["request_sha256"],
+            "result_sha256": "a" * 64,
+            "composite_sha256": request["composite_sha256"],
+            "operator_authorization_sha256": route["operator_authorization_sha256"],
+            "incremental_segment_cost_micro_usd": 0,
+            "credit_available_micro_usd": 11,
+            "account_sha256": "4" * 64,
+            **{
+                name + "_state_sha256": route[name + "_evidence_sha256"]
+                for name in ("pricing", "entitlement", "capability")
+            },
+        }
+        attempt = EvidenceStore(evidence_dir).start({
+            "denominator": 0,
+            "request_sha256": request["request_sha256"],
+            "route_sha256": route["route_sha256"],
+            "command_sha256": route["admission_command_sha256"],
+            "composite_sha256": request["composite_sha256"],
+            "execution_binding": execution_binding,
+        })
+        evidence = attempt.finalize(receipt)
+        admission_calls.append(evidence["attempt_id"])
+        return receipt, evidence
+
+    admit_existing_credit.prepare = lambda _manifest, _plan: None
+    calls = []
+
+    def charged_trial(packet, config, condition, *, evidence, **kwargs):
+        calls.append((packet, condition))
+        evidence("prompt", {"packet": packet})
+        budget = kwargs["request_budget"]
+        budget.commit_request({
+            "model": config["model"],
+            "messages": [{"role": "user", "content": "fixture"}],
+            "max_tokens": config["max_output_tokens"],
+        })
+        budget.observe({"prompt_tokens": 1, "completion_tokens": 1, "cost": "0.000011"}, tool_calls=0)
+        budget_receipt = budget.finalize("completed")
+        return {
+            "schema": "zno-nmt.run.v1",
+            "packet_sha256": packet["packet_sha256"],
+            "status": "ok",
+            "responses": {item["id"]: "A" for item in packet["items"]},
+            "identity": {
+                "model": config["model"],
+                "effective_effort": "unknown",
+                "session_id": f"session-{len(calls)}",
+                "request_budget_receipt_sha256": digest(budget_receipt),
+            },
+            "metrics": {"tool_calls": 0, "cost_usd": None},
+        }
+
+    monkeypatch.setattr(execution, "run_exam", charged_trial)
+    root = tmp_path / "research"
+    outcome = list(scheduling.run_research(
+        packets, plans, manifest, plan, {"fixture": config}, root,
+        admission_probe=admit_existing_credit, request_budget_controller=controller,
+    ))
+    assert outcome == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1
+    approvals = EvidenceStore(root / "admission-evidence").verify_all()
+    assert set(approvals) == set(admission_calls)
+    assert len(approvals) == 2
+    assert all(item["terminal_status"] == "completed" for item in approvals.values())
+    assert len(EvidenceStore(root / "request-budget-evidence").verify_all()) == 1
+    assert controller._shared_ledger.snapshot()["reservation_count"] == 1
+    first_reservation = controller._shared_ledger.get(plan["cells"][0]["segments"][0]["reservation_id"])
+    assert first_reservation["state"] == "settled"
+    assert first_reservation["settled_micro_usd"] == 11
+    stop = json.loads((root / "budget-stop.json").read_text())
+    assert stop["next_attempt_id"] == plan["cells"][0]["segments"][1]["attempt_id"]
+    assert stop["remaining_denominator"] == 11
+    assert not (root / "result-manifest.json").exists()
+    assert list(scheduling.run_research(
+        packets, plans, manifest, plan, {"fixture": config}, root,
+        admission_probe=admit_existing_credit, request_budget_controller=controller, resume=True,
+    )) == [{"status": "stopped", "reason": "budget_exhausted"}]
+    assert len(calls) == 1
+    assert len(admission_calls) == 2

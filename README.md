@@ -4,7 +4,7 @@ Reproducible evaluation of **Ukrainian language** models and agents, with option
 
 This project is under development toward its first release. It does not yet publish a complete model leaderboard. Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
 
-The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude execution and compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
+The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude and Kimi execution, and compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
 ## Development installation
 
@@ -20,6 +20,12 @@ python3 -m venv .venv
 ```
 
 Provider runs require your own authorized CLI subscription or endpoint credentials. Running tests does not invoke paid models. Do not commit credentials, grading keys, raw provider logs or retrievals.
+
+The [Kimi runbook](docs/native-kimi.md) explains private subscription provisioning
+and execution with or without Sources MCP. Kimi results identify the requested
+subscription route; its CLI does not attest the underlying backend model.
+The [Responses API runbook](docs/responses-http.md) covers DeepSeek's stateless
+HTTP route, including complete tool history and reasoning-inclusive output caps.
 
 ## Evaluation boundaries
 

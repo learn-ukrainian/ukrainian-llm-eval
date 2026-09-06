@@ -58,16 +58,42 @@ Admission binds the complete request-budget mechanism SHA-256 into its
 composite identity. Its receipt also retains the account identity and observed
 existing-credit balance needed by the request controller. Admission remains a
 separate check: its prompt-size observation does not replace exact counting of
-the serialized request and cumulative tool history. See [request-level budget
-control](request-budget.md).
+the serialized request and cumulative tool history under v1, or the explicitly
+labeled documented provider-context upper bound under v2. See [request-level
+budget control](request-budget.md).
 
 Operator authorization is separate from entitlement. Its strict record binds
 the route and the permission and ceiling for incremental new-money charges;
 the plan must pin its canonical hash. Supplying that exact route-bound record
-is the explicit authorization to execute the route. `allow_paid: false` with a
-zero new-spend ceiling is therefore the expected record for an explicitly
-selected subscription or existing-credit route: it permits use of that route
-while forbidding new metered charges. It is not a route-disable switch.
+is the explicit authorization to execute the route. The legacy v1 record has
+one `max_new_spend_micro_usd` field and always means the total reservation for
+the route, including when the plan happens to use a sequential ledger. A v1
+record is never reinterpreted as a per-segment grant.
+
+To authorize per-segment reservations under `sequential_shared_cap`, use the
+distinct v2 record. A v1 grant remains valid if the full route reservation fits
+its total ceiling. The v2 record binds the exact
+`digest(plan.spending_policy)` and names its separate
+`max_segment_new_spend_micro_usd` limit. The policy digest covers the shared
+ledger's experiment-wide cap; the v2 field covers each immutable metered
+segment. Both `allow_paid` and `route_sha256` remain hash-bound. For example,
+the legacy whole-route form is:
+
+```json
+{"schema":"ukrainian-llm-eval.operator-authorization.v1","route_sha256":"<route>","allow_paid":true,"max_new_spend_micro_usd":5000000}
+```
+
+For a sequential policy with a 5,000,000 micro-USD shared cap and a 250,000
+micro-USD segment ceiling, create a separate v2 record:
+
+```json
+{"schema":"ukrainian-llm-eval.operator-authorization.v2","route_sha256":"<route>","allow_paid":true,"max_segment_new_spend_micro_usd":250000,"spending_policy_sha256":"<digest-of-exact-plan-spending-policy>"}
+```
+
+`allow_paid: false` with a zero new-spend ceiling is therefore the expected
+record for an explicitly selected subscription or existing-credit route: it
+permits use of that route while forbidding new metered charges. It is not a
+route-disable switch.
 
 An account subscription or balance alone is not permission to use it: without
 the matching route-bound record, admission fails. Existing-credit consumption

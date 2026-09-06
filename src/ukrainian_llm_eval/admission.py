@@ -15,6 +15,8 @@ from .core import ExamError, _duplicate_rejecting_pairs, _reject_json_constant, 
 
 REQUEST_SCHEMA = "ukrainian-llm-eval.admission-request.v1"
 RESULT_SCHEMA = "ukrainian-llm-eval.admission-result.v1"
+LEGACY_OPERATOR_AUTHORIZATION_SCHEMA = "ukrainian-llm-eval.operator-authorization.v1"
+SEQUENTIAL_OPERATOR_AUTHORIZATION_SCHEMA = "ukrainian-llm-eval.operator-authorization.v2"
 
 
 def _exact(value, fields, label):
@@ -45,6 +47,41 @@ def _time(value):
     if parsed.tzinfo is None:
         raise ExamError("admission timestamp requires timezone")
     return parsed.astimezone(UTC)
+
+
+def _operator_authorization(authorization, route):
+    """Validate one hash-bound authorization without changing v1's total-cap meaning."""
+
+    if not isinstance(authorization, dict):
+        raise ExamError("invalid operator authorization")
+    schema = authorization.get("schema")
+    if not isinstance(schema, str):
+        raise ExamError("unsupported operator authorization schema")
+    fields = {
+        LEGACY_OPERATOR_AUTHORIZATION_SCHEMA: {
+            "schema", "route_sha256", "allow_paid", "max_new_spend_micro_usd",
+        },
+        SEQUENTIAL_OPERATOR_AUTHORIZATION_SCHEMA: {
+            "schema", "route_sha256", "allow_paid", "max_segment_new_spend_micro_usd",
+            "spending_policy_sha256",
+        },
+    }.get(schema)
+    if fields is None:
+        raise ExamError("unsupported operator authorization schema")
+    _exact(authorization, fields, "operator authorization")
+    if authorization["route_sha256"] != route["route_sha256"]:
+        raise ExamError("admission operator authorization route mismatch")
+    if type(authorization["allow_paid"]) is not bool:
+        raise ExamError("invalid operator authorization")
+    ceiling_field = (
+        "max_new_spend_micro_usd"
+        if schema == LEGACY_OPERATOR_AUTHORIZATION_SCHEMA
+        else "max_segment_new_spend_micro_usd"
+    )
+    _integer(authorization[ceiling_field])
+    if schema == SEQUENTIAL_OPERATOR_AUTHORIZATION_SCHEMA:
+        _sha(authorization["spending_policy_sha256"])
+    return schema, ceiling_field
 
 
 def build_admission_request(route, config, condition, *, input_utf8_bytes, tool_policy_sha256,
@@ -151,17 +188,14 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
             raise ExamError("admission subscription must not imply credit balance")
     if incremental > _integer(reserved_micro_usd) or incremental > _integer(remaining_ceiling_micro_usd):
         raise ExamError("admission exceeds frozen reservation or ceiling")
-    authorization = _exact(operator_authorization, {"schema", "route_sha256", "allow_paid", "max_new_spend_micro_usd"}, "operator authorization")
-    if authorization["schema"] != "ukrainian-llm-eval.operator-authorization.v1" or authorization["route_sha256"] != route["route_sha256"]:
-        raise ExamError("admission operator authorization route mismatch")
+    authorization = operator_authorization
+    _schema, ceiling_field = _operator_authorization(authorization, route)
     if digest(authorization) != route["operator_authorization_sha256"]:
         raise ExamError("admission operator authorization drift")
-    if type(authorization["allow_paid"]) is not bool:
-        raise ExamError("invalid operator authorization")
     # Supplying the exact hash-bound record authorizes this route. These two
     # fields separately govern incremental new-money charges; zero-incremental
     # subscription and existing-credit routes therefore use false/zero.
-    max_new_spend = _integer(authorization["max_new_spend_micro_usd"])
+    max_new_spend = _integer(authorization[ceiling_field])
     if incremental and not authorization["allow_paid"]:
         raise ExamError("admission new spend not authorized")
     if incremental > max_new_spend:
@@ -293,17 +327,31 @@ class CommandAdmissionController:
             if command_identity_sha256(self.specs[route_id]) != route["admission_command_sha256"]:
                 raise ExamError("admission command drift")
             auth = self.authorizations[route_id]
-            _exact(auth, {"schema", "route_sha256", "allow_paid", "max_new_spend_micro_usd"}, "operator authorization")
-            if digest(auth) != route["operator_authorization_sha256"] or auth["route_sha256"] != route["route_sha256"]:
+            schema, ceiling_field = _operator_authorization(auth, route)
+            if digest(auth) != route["operator_authorization_sha256"]:
                 raise ExamError("operator authorization drift")
-            if auth["schema"] != "ukrainian-llm-eval.operator-authorization.v1" or type(auth["allow_paid"]) is not bool:
-                raise ExamError("invalid operator authorization")
             total = sum(segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
                         for segment in cell["segments"])
-            max_new_spend = _integer(auth["max_new_spend_micro_usd"])
+            largest = max(
+                (segment["reserved_micro_usd"] for cell in plan["cells"] if cell["route_id"] == route_id
+                 for segment in cell["segments"]),
+                default=0,
+            )
+            max_new_spend = _integer(auth[ceiling_field])
             if total and not auth["allow_paid"]:
                 raise ExamError("frozen route schedule has unauthorized new spend")
-            if total > max_new_spend:
+            sequential = plan.get("spending_policy", {}).get("mode") == "sequential_shared_cap"
+            if schema == LEGACY_OPERATOR_AUTHORIZATION_SCHEMA:
+                # v1 always means one cap for the complete route schedule.  A
+                # sequential plan cannot silently reinterpret that hash-bound cap.
+                authorized_amount = total
+            else:
+                if not sequential:
+                    raise ExamError("sequential operator authorization requires shared spending policy")
+                if auth["spending_policy_sha256"] != digest(plan["spending_policy"]):
+                    raise ExamError("sequential operator authorization spending policy drift")
+                authorized_amount = largest
+            if authorized_amount > max_new_spend:
                 raise ExamError("frozen route schedule exceeds operator authorization")
 
     def __call__(self, route, config, condition, *, request, execution_binding, reserved_micro_usd,

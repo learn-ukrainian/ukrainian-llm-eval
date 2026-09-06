@@ -87,6 +87,46 @@ def test_cli_offline_research_scoring_uses_relative_custodian_paths(monkeypatch,
     assert output.read_bytes() == before
 
 
+def test_cli_sequential_plan_preserves_matrix_over_shared_cap(tmp_path):
+    _, _, manifest, plan, _ = inputs(metered=True)
+    spec = {name: manifest[name] for name in ("protocol_sha256", "suites", "routes", "scorer_sha256",
+                                             "tool_policy_sha256", "repeats")}
+    spec["new_spend_cap_micro_usd"] = 11
+    spec["spending_policy"] = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1", "mode": "sequential_shared_cap",
+        "ledger_id": "cli-shared-cap", "authorized_cap_micro_usd": 11,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only", "cap_stop": "not_executed_budget",
+    }
+    source = write(tmp_path / "spec.json", spec)
+    output, schedule = tmp_path / "manifest.json", tmp_path / "plan.json"
+    result = invoke("plan-research", "--specification", source, "--manifest", output,
+                    "--execution-plan", schedule, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    frozen = json.loads(schedule.read_text())
+    assert frozen["schema"] == "ukrainian-llm-eval.execution-plan.v2"
+    assert frozen["reservation_total_micro_usd"] > 11
+    # Only reservations gain the sequential experiment namespace; the full
+    # candidate matrix and its denominators remain unchanged.
+    comparable_cells = json.loads(json.dumps(frozen["cells"]))
+    for current, legacy in zip(comparable_cells, plan["cells"], strict=True):
+        for current_segment, legacy_segment in zip(current["segments"], legacy["segments"], strict=True):
+            assert current_segment["reservation_id"] != legacy_segment["reservation_id"]
+            current_segment["reservation_id"] = legacy_segment["reservation_id"]
+    assert comparable_cells == plan["cells"]
+    assert json.loads(output.read_text())["spending_policy"] == spec["spending_policy"]
+
+
+def test_cli_rejects_relative_shared_ledger_before_loading_inputs(tmp_path):
+    result = invoke("run-research", "--inputs", "absent.json", "--manifest", "absent.json",
+                    "--execution-plan", "absent.json", "--execution-root", "run",
+                    "--admission-specs", "absent.json", "--operator-authorizations", "absent.json",
+                    "--shared-spending-ledger", "budget.sqlite", cwd=tmp_path)
+    assert result.returncode == 2
+    assert json.loads(result.stdout) == {"status": "failed", "error_class": "ExamError"}
+    assert not (tmp_path / "run").exists()
+
+
 def test_cli_research_runtime_map_resolves_relative_files_and_rejects_keys(tmp_path):
     packets, plans, _manifest, _plan, configs = inputs()
     write(tmp_path / "packet.json", packets["ulp"])

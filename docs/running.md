@@ -23,6 +23,11 @@ model's access through a trusted harness, **not an operating-system sandbox
 against a malicious CLI binary, provider or operator**. Keep the grader/key
 custodian separate from any untrusted execution host.
 
+Claude trials record the native CLI's terminal session ID and reject missing or
+inconsistent session evidence. This lets the research scheduler detect reused
+sessions. Requested effort remains distinct from effective effort when the CLI
+does not attest the latter.
+
 Published past papers may have appeared in model training. The term
 `public-exposure-possible` records that uncertainty; hiding the key cannot
 prove the questions were unseen. Private questions require independent authoring
@@ -211,6 +216,14 @@ An unsupported effort setting must not silently become a different setting.
 Requested effort and proven effective effort are different facts; absent
 runtime evidence stays unknown.
 
+For native Claude, a `[1m]` context selector remains the requested model
+string. The effective model may be its canonical base name only when the
+initial stream announces that exact selector and terminal `modelUsage`
+contains exactly that selector, its matching `canonicalModel`, and a
+1,000,000-token context window. Missing or contradictory metadata still fails
+identity validation; the adapter does not infer this mapping by stripping
+the suffix alone.
+
 Freeze budgets before the scored experiment. Reasoning can consume the native
 output budget even when the requested final JSON is short: the complete demo
 paper exceeded a 4,096-token budget in live verification. Preserve such failures;
@@ -343,6 +356,45 @@ implements a narrow chat-completions protocol, not every provider API. Local
 model endpoints can use it; model-specific effort support still needs a
 route-specific canary. Use only your own authorized subscriptions or credentials. Configuring an endpoint does not establish entitlement or authorize extra spending.
 
+For endpoints that support JSON-object mode but not JSON Schema, set
+`http_response_format: "json_object"`. The evaluator still validates the
+returned answer IDs and structure locally; this setting changes the provider
+request format, not the scoring contract. The default remains `json_schema`.
+
+An OpenRouter route can freeze these explicit controls:
+
+```json
+"openrouter": {
+  "provider_endpoint": "<provider-endpoint-slug>",
+  "expected_provider_name": "<provider-name-returned-in-responses>",
+  "reasoning_enabled": false
+}
+```
+
+The adapter sends a single-provider `only` list, disables fallback, requires
+parameter support, and rejects missing or different response provider names
+on every completion round. With reasoning disabled, `effort` must be null.
+With reasoning enabled, a configured effort is sent in `reasoning.effort`.
+Both settings and the observed provider name remain in the evidence.
+
+Resolve the endpoint slug and expected response name from current provider
+evidence before freezing the route. OpenRouter base slugs may cover multiple
+endpoint variants; do not mistake a provider name for independent attestation
+of a particular variant. Pricing and capability admission must cover every
+backend the selected slug permits. See the official
+[provider routing contract](https://openrouter.ai/docs/guides/routing/provider-selection).
+These controls do not themselves prove entitlement, token bounds, billing
+settlement, or effective reasoning effort.
+
+For a paid text route, also set `openrouter.max_price` to an object containing
+`prompt`, `completion`, and `request`. All three values must be nonnegative
+decimal strings, for example `{"prompt": "0.10", "completion": "0.34", "request": "0"}`.
+Prompt and completion ceilings are USD per million tokens; the request ceiling
+is USD per request. The adapter forwards these ceilings on every completion
+round without relaxing provider restrictions. Set them consistently with the
+frozen spending reservation. A price ceiling filters providers; the shared
+ledger still enforces the total spending cap and retains uncertain charges.
+
 ## Validation and contribution
 
 ```bash
@@ -433,3 +485,21 @@ an explicit experiment gap.
 
 Evidence storage requires POSIX ownership and locking support. Windows is not
 supported for evidence-backed execution.
+
+## Share a spending cap across research runs
+
+For provider-bound paid execution, include the explicit `spending_policy` in the
+`plan-research` specification described in [request budgets](request-budget.md).
+Pass one absolute path to `run-research --shared-spending-ledger /private/runtime/spending.sqlite`.
+Use that same file for canaries and every scored run under the authorization;
+keep it outside all execution roots. A different output directory does not reset
+the cap when the ledger is reused. Creating a different ledger would create an
+independent budget and must not be used to bypass the authorization.
+
+The plan retains all scheduled cells even when their combined worst-case cost
+exceeds the cap. Execution reserves each segment before sending a request and
+releases unused funds only against authoritative final account charges. A budget
+stop exits 2, preserves the remaining denominator in `budget-stop.json`, and
+prevents a primary score report. It is an incomplete experiment, not a smaller
+successful benchmark. The original upfront-reservation mode remains available
+for existing version 1 plans.

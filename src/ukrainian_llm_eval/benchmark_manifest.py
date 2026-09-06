@@ -28,6 +28,10 @@ from .ulp import import_ulp
 MANIFEST_SCHEMA = "ukrainian-llm-eval.benchmark-manifest.v1"
 EXPERIMENT_MANIFEST_SCHEMA = "ukrainian-llm-eval.experiment-manifest.v1"
 EXECUTION_PLAN_SCHEMA = "ukrainian-llm-eval.execution-plan.v1"
+EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA = "ukrainian-llm-eval.experiment-manifest.v2"
+EXECUTION_PLAN_SEQUENTIAL_SCHEMA = "ukrainian-llm-eval.execution-plan.v2"
+SPENDING_POLICY_SCHEMA = "ukrainian-llm-eval.spending-policy.v1"
+USAGE_BOUND_SPENDING_POLICY_SCHEMA = "ukrainian-llm-eval.spending-policy.v2"
 DEFAULT_NEW_SPEND_CAP_MICRO_USD = 10_000_000
 
 # Costs are represented as integer micro-dollars.  Token rates are per million
@@ -633,6 +637,49 @@ def _normalise_experiment_inputs(
     )
 
 
+def _normalise_spending_policy(value: Any, cap_micro_usd: int) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    fields = {
+        "schema", "mode", "ledger_id", "authorized_cap_micro_usd", "reservation_scope",
+        "settlement", "cap_stop",
+    }
+    policy = _require_exact_dict(value, fields, "spending_policy")
+    settlements = {
+        SPENDING_POLICY_SCHEMA: "authoritative_final_account_charge_only",
+        USAGE_BOUND_SPENDING_POLICY_SCHEMA: (
+            "authoritative_account_charge_or_conservative_final_usage_upper_bound"
+        ),
+    }
+    schema = policy["schema"]
+    if schema not in settlements:
+        raise ExamError("unsupported spending policy schema")
+    if policy["mode"] != "sequential_shared_cap":
+        raise ExamError("unsupported spending policy mode")
+    ledger_id = _require_identifier(policy["ledger_id"], "spending_policy.ledger_id")
+    authorized_cap = _require_nonnegative_integer(
+        policy["authorized_cap_micro_usd"], "spending_policy.authorized_cap_micro_usd"
+    )
+    if authorized_cap != cap_micro_usd:
+        raise ExamError("spending policy cap differs from experiment new-spend cap")
+    if policy["reservation_scope"] != "whole_segment_before_first_request":
+        raise ExamError("unsupported spending reservation scope")
+    settlement = settlements[schema]
+    if policy["settlement"] != settlement:
+        raise ExamError("unsupported spending settlement policy")
+    if policy["cap_stop"] != "not_executed_budget":
+        raise ExamError("unsupported spending cap-stop policy")
+    return {
+        "schema": schema,
+        "mode": "sequential_shared_cap",
+        "ledger_id": ledger_id,
+        "authorized_cap_micro_usd": authorized_cap,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": settlement,
+        "cap_stop": "not_executed_budget",
+    }
+
+
 def build_experiment_manifest(
     protocol_sha256: str,
     suites: list[dict[str, Any]],
@@ -642,6 +689,7 @@ def build_experiment_manifest(
     tool_policy_sha256: str,
     repeats: int = 3,
     new_spend_cap_micro_usd: int = DEFAULT_NEW_SPEND_CAP_MICRO_USD,
+    spending_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze a protocol-bound experiment description without admitting paid execution.
 
@@ -653,8 +701,9 @@ def build_experiment_manifest(
     protocol, checked_suites, checked_routes, scorer, tool_policy, count, cap = _normalise_experiment_inputs(
         protocol_sha256, suites, routes, scorer_sha256, tool_policy_sha256, repeats, new_spend_cap_micro_usd
     )
+    checked_policy = _normalise_spending_policy(spending_policy, cap)
     body = {
-        "schema": EXPERIMENT_MANIFEST_SCHEMA,
+        "schema": EXPERIMENT_MANIFEST_SCHEMA if checked_policy is None else EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA,
         "protocol_sha256": protocol,
         "suites": checked_suites,
         "routes": checked_routes,
@@ -665,19 +714,28 @@ def build_experiment_manifest(
         "evidence_status": "bound_not_verified",
         "execution_admission": "requires_authoritative_runtime_preflight",
     }
+    if checked_policy is not None:
+        body["spending_policy"] = checked_policy
     return body | {"experiment_manifest_sha256": digest(body)}
 
 
 def validate_experiment_manifest(manifest: Any) -> dict[str, Any]:
     """Validate a frozen experiment artifact and return an isolated copy."""
 
-    fields = {
+    base_fields = {
         "schema", "protocol_sha256", "suites", "routes", "scorer_sha256", "tool_policy_sha256", "repeats",
         "new_spend_cap_micro_usd", "evidence_status", "execution_admission", "experiment_manifest_sha256",
     }
-    checked = _require_exact_dict(manifest, fields, "experiment manifest")
-    if checked["schema"] != EXPERIMENT_MANIFEST_SCHEMA:
+    if not isinstance(manifest, dict):
+        raise ExamError("experiment manifest must be an object")
+    schema = manifest.get("schema")
+    if schema == EXPERIMENT_MANIFEST_SCHEMA:
+        fields = base_fields
+    elif schema == EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA:
+        fields = base_fields | {"spending_policy"}
+    else:
         raise ExamError("unsupported experiment manifest schema")
+    checked = _require_exact_dict(manifest, fields, "experiment manifest")
     if checked["evidence_status"] != "bound_not_verified":
         raise ExamError("experiment manifest must not claim evidence verification")
     if checked["execution_admission"] != "requires_authoritative_runtime_preflight":
@@ -686,6 +744,7 @@ def validate_experiment_manifest(manifest: Any) -> dict[str, Any]:
         checked["protocol_sha256"], checked["suites"], checked["routes"],
         scorer_sha256=checked["scorer_sha256"], tool_policy_sha256=checked["tool_policy_sha256"],
         repeats=checked["repeats"], new_spend_cap_micro_usd=checked["new_spend_cap_micro_usd"],
+        spending_policy=checked.get("spending_policy"),
     )
     if rebuilt != checked:
         raise ExamError("experiment manifest does not match its canonical frozen construction")
@@ -700,6 +759,7 @@ def _condition_order(route: dict[str, Any], repeat: int) -> list[str]:
 
 def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
     cells: list[dict[str, Any]] = []
+    sequential = manifest["schema"] == EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA
     for suite in manifest["suites"]:
         for route in manifest["routes"]:
             reservation = _reservation_micro_usd(route)
@@ -713,11 +773,14 @@ def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
                     segments = []
                     for segment in suite["segment_plan"]["segments"]:
                         segment_id = segment["segment_id"]
+                        reservation_identity = {"cell_id": cell_id, "segment_id": segment_id}
+                        if sequential:
+                            reservation_identity["experiment_manifest_sha256"] = manifest["experiment_manifest_sha256"]
                         segments.append({
                             "segment_id": segment_id,
                             "segment_packet_sha256": segment["packet_sha256"],
                             "attempt_id": "attempt-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
-                            "reservation_id": "reserve-" + digest({"cell_id": cell_id, "segment_id": segment_id})[:48],
+                            "reservation_id": "reserve-" + digest(reservation_identity)[:48],
                             "reserved_micro_usd": reservation,
                         })
                     cells.append({
@@ -733,21 +796,23 @@ def _build_execution_plan(manifest: dict[str, Any]) -> dict[str, Any]:
                         "segments": segments,
                     })
     total = sum(segment["reserved_micro_usd"] for cell in cells for segment in cell["segments"])
-    if total > manifest["new_spend_cap_micro_usd"]:
+    if not sequential and total > manifest["new_spend_cap_micro_usd"]:
         raise ExamError("conservative segment reservations exceed the experiment new-spend cap")
     body = {
-        "schema": EXECUTION_PLAN_SCHEMA,
+        "schema": EXECUTION_PLAN_SEQUENTIAL_SCHEMA if sequential else EXECUTION_PLAN_SCHEMA,
         "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
         "new_spend_cap_micro_usd": manifest["new_spend_cap_micro_usd"],
         "reservation_total_micro_usd": total,
         "cells": cells,
         "execution_admission": "requires_authoritative_runtime_preflight",
     }
+    if sequential:
+        body["spending_policy"] = manifest["spending_policy"]
     return body | {"execution_plan_sha256": digest(body)}
 
 
 def build_execution_plan(experiment_manifest: dict[str, Any]) -> dict[str, Any]:
-    """Construct every immutable segment reservation and reject cap overrun."""
+    """Construct every immutable segment reservation under its frozen spending policy."""
 
     return _build_execution_plan(validate_experiment_manifest(experiment_manifest))
 
@@ -756,12 +821,18 @@ def validate_execution_plan(experiment_manifest: dict[str, Any], execution_plan:
     """Reject a rehashed schedule unless it is the exact canonical reconstruction."""
 
     manifest = validate_experiment_manifest(experiment_manifest)
-    fields = {
+    base_fields = {
         "schema", "experiment_manifest_sha256", "new_spend_cap_micro_usd", "reservation_total_micro_usd", "cells",
         "execution_admission", "execution_plan_sha256",
     }
+    expected_schema = (
+        EXECUTION_PLAN_SEQUENTIAL_SCHEMA
+        if manifest["schema"] == EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA
+        else EXECUTION_PLAN_SCHEMA
+    )
+    fields = base_fields | ({"spending_policy"} if expected_schema == EXECUTION_PLAN_SEQUENTIAL_SCHEMA else set())
     plan = _require_exact_dict(execution_plan, fields, "execution plan")
-    if plan["schema"] != EXECUTION_PLAN_SCHEMA:
+    if plan["schema"] != expected_schema:
         raise ExamError("unsupported execution plan schema")
     expected = _build_execution_plan(manifest)
     if plan != expected:
@@ -772,8 +843,12 @@ def validate_execution_plan(experiment_manifest: dict[str, Any], execution_plan:
 __all__ = [
     "DEFAULT_NEW_SPEND_CAP_MICRO_USD",
     "EXECUTION_PLAN_SCHEMA",
+    "EXECUTION_PLAN_SEQUENTIAL_SCHEMA",
     "EXPERIMENT_MANIFEST_SCHEMA",
+    "EXPERIMENT_MANIFEST_SEQUENTIAL_SCHEMA",
     "MANIFEST_SCHEMA",
+    "SPENDING_POLICY_SCHEMA",
+    "USAGE_BOUND_SPENDING_POLICY_SCHEMA",
     "build_execution_plan",
     "build_experiment_manifest",
     "validate_execution_plan",

@@ -174,6 +174,76 @@ def test_metered_unknown_pricing_and_cap_overrun_block_construction() -> None:
         build_execution_plan(_experiment_manifest(cap=215))
 
 
+def test_sequential_policy_preserves_full_over_cap_matrix_without_upfront_admission() -> None:
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 215,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        "1" * 64,
+        [_experiment_suite()],
+        [_metered_route()],
+        scorer_sha256="c" * 64,
+        tool_policy_sha256="d" * 64,
+        new_spend_cap_micro_usd=215,
+        spending_policy=policy,
+    )
+    plan = build_execution_plan(manifest)
+    assert manifest["schema"] == "ukrainian-llm-eval.experiment-manifest.v2"
+    assert plan["schema"] == "ukrainian-llm-eval.execution-plan.v2"
+    assert plan["reservation_total_micro_usd"] > plan["new_spend_cap_micro_usd"]
+    assert len(plan["cells"]) == 6
+    assert sum(len(cell["segments"]) for cell in plan["cells"]) == 12
+    assert validate_execution_plan(manifest, plan) == plan
+
+    drifted = copy.deepcopy(manifest)
+    drifted["spending_policy"]["ledger_id"] = "fresh-ledger"
+    drifted["experiment_manifest_sha256"] = digest(
+        {key: value for key, value in drifted.items() if key != "experiment_manifest_sha256"}
+    )
+    assert build_execution_plan(drifted)["execution_plan_sha256"] != plan["execution_plan_sha256"]
+
+
+def test_usage_bound_spending_policy_is_explicit_and_versioned() -> None:
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v2",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "issue5-public-evaluator",
+        "authorized_cap_micro_usd": 215,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_account_charge_or_conservative_final_usage_upper_bound",
+        "cap_stop": "not_executed_budget",
+    }
+    manifest = build_experiment_manifest(
+        "1" * 64,
+        [_experiment_suite()],
+        [_metered_route()],
+        scorer_sha256="c" * 64,
+        tool_policy_sha256="d" * 64,
+        new_spend_cap_micro_usd=215,
+        spending_policy=policy,
+    )
+    assert manifest["spending_policy"] == policy
+
+    mismatched = copy.deepcopy(policy)
+    mismatched["settlement"] = "authoritative_final_account_charge_only"
+    with pytest.raises(ExamError, match="settlement policy"):
+        build_experiment_manifest(
+            "1" * 64,
+            [_experiment_suite()],
+            [_metered_route()],
+            scorer_sha256="c" * 64,
+            tool_policy_sha256="d" * 64,
+            new_spend_cap_micro_usd=215,
+            spending_policy=mismatched,
+        )
+
+
 def test_route_limits_and_entitlements_are_conservative_and_receipt_bound() -> None:
     route = _metered_route(conditions=["sources"])
     route["billing"]["max_total_output_tokens"] = 399
@@ -197,3 +267,52 @@ def test_route_limits_and_entitlements_are_conservative_and_receipt_bound() -> N
     plan = build_execution_plan(manifest)
     assert plan["reservation_total_micro_usd"] == 0
     assert manifest["execution_admission"] == "requires_authoritative_runtime_preflight"
+
+
+def test_sequential_manifests_share_one_cap_without_reservation_id_collisions(tmp_path):
+    from ukrainian_llm_eval.spending_ledger import SharedSpendingLedger, SpendingCapExceeded
+
+    policy = {
+        "schema": "ukrainian-llm-eval.spending-policy.v1",
+        "mode": "sequential_shared_cap",
+        "ledger_id": "shared-authorization",
+        "authorized_cap_micro_usd": 215,
+        "reservation_scope": "whole_segment_before_first_request",
+        "settlement": "authoritative_final_account_charge_only",
+        "cap_stop": "not_executed_budget",
+    }
+    legacy = build_execution_plan(_experiment_manifest())
+    legacy_cell = legacy["cells"][0]
+    legacy_segment = legacy_cell["segments"][0]
+    assert legacy_segment["reservation_id"] == "reserve-" + digest({
+        "cell_id": legacy_cell["cell_id"], "segment_id": legacy_segment["segment_id"],
+    })[:48]
+    plans = []
+    for scorer_hash in ("c" * 64, "e" * 64):
+        manifest = build_experiment_manifest(
+            "1" * 64, [_experiment_suite()], [_metered_route()],
+            scorer_sha256=scorer_hash, tool_policy_sha256="d" * 64,
+            new_spend_cap_micro_usd=215, spending_policy=policy,
+        )
+        plans.append(build_execution_plan(manifest))
+    first, second = [plan["cells"][0]["segments"][0] for plan in plans]
+    assert plans[0]["cells"][0]["cell_id"] == plans[1]["cells"][0]["cell_id"]
+    assert first["reservation_id"] != second["reservation_id"]
+    ledger = SharedSpendingLedger(tmp_path / "shared.sqlite3", ledger_id="shared-authorization", cap_micro_usd=215)
+    for plan, segment in zip(plans, (first, second), strict=True):
+        receipt = ledger.reserve(
+            segment["reservation_id"], {"execution_plan_sha256": plan["execution_plan_sha256"]},
+            maximum_micro_usd=100, funding_kind="metered", account_sha256="a" * 64,
+        )
+        assert receipt["replayed"] is False
+    replay = ledger.reserve(
+        first["reservation_id"], {"execution_plan_sha256": plans[0]["execution_plan_sha256"]},
+        maximum_micro_usd=100, funding_kind="metered", account_sha256="a" * 64,
+    )
+    assert replay["replayed"] is True
+    assert ledger.snapshot()["reservation_count"] == 2
+    with pytest.raises(SpendingCapExceeded):
+        ledger.reserve(
+            plans[1]["cells"][0]["segments"][1]["reservation_id"], {"execution_plan_sha256": plans[1]["execution_plan_sha256"]},
+            maximum_micro_usd=16, funding_kind="metered", account_sha256="a" * 64,
+        )
