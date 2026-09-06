@@ -4,7 +4,6 @@ import copy
 import http.client
 import io
 import json
-import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,9 +35,10 @@ def payload(gateway):
             "messages": [{"role": "user", "content": "fixture"}],
             "reasoning": {"enabled": gateway.config["openrouter"]["reasoning_enabled"]},
             "provider": {"only": ["venice/bf16"], "allow_fallbacks": False, "require_parameters": True}}
-    if gateway.allowed:
+    if True:
         body["tools"] = [{"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
-                         for name in sorted(gateway.allowed)]
+                         for name in sorted(gateway.allowed | {"StructuredOutput"})]
+    body["tool_choice"] = "required"
     return body
 
 
@@ -46,7 +46,7 @@ def stream(*, call=None, text='{"responses":{"q1":"A"}}', model="google/gemma-4-
     delta = {"content": text}
     if call:
         delta = {"tool_calls": [{"index": 0, "id": "call-1", "type": "function",
-                                 "function": {"name": call, "arguments": '{"word":"fixture"}'}}]}
+                                 "function": {"name": call, "arguments": '{"responses":{"q1":"A"}}' if call == "StructuredOutput" else '{"word":"fixture"}'}}]}
     common = {"id": "fixture", "object": "chat.completion.chunk", "created": 1, "model": model, "provider": provider}
     chunks = [{**common, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
               {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if call else "stop"}],
@@ -76,7 +76,7 @@ def test_native_config_isolates_route_and_tools(condition, reasoning):
         value = native.native_config(config(reasoning), condition, g)
         assert value["enabled_providers"] == ["openrouter"]
         assert value["agent"]["title"]["disable"] and value["agent"]["summary"]["disable"]
-        assert value["permission"] == {"*": "deny", **({"sources_verify_word": "allow"} if condition == "sources" else {})}
+        assert value["permission"] == {"*": "deny", "StructuredOutput": "allow", **({"sources_verify_word": "allow"} if condition == "sources" else {})}
         assert "parent-secret" not in json.dumps(value)
         assert ("mcp" in value) == (condition == "sources")
 
@@ -179,17 +179,31 @@ def test_child_environment_cannot_inherit_credentials_or_customizations(monkeypa
     assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "true"
 
 
-def events(text='{"responses":{"q1":"A"}}'):
-    return "\n".join(json.dumps(item) for item in [
-        {"type": "text", "sessionID": "session", "part": {"messageID": "message", "text": text}},
-        {"type": "step_finish", "sessionID": "session", "part": {"messageID": "message", "reason": "stop"}},
-    ])
+def messages(answer=None):
+    answer = {"responses": {"q1": "A"}} if answer is None else answer
+    return [{"info": {"sessionID": "session", "role": "assistant", "structured": answer},
+             "parts": [{"type": "tool", "tool": "StructuredOutput",
+                        "state": {"status": "completed", "input": answer}}]}]
 
 
-@pytest.mark.parametrize("text", ['```json\n{"responses":{"q1":"A"}}\n```', '{"responses":{}}'])
-def test_final_answers_are_not_repaired(text):
+@pytest.mark.parametrize("answer", ['```json\n{"responses":{"q1":"A"}}\n```', {"responses": {}}])
+def test_final_answers_are_not_repaired(answer):
     with pytest.raises(adapters.AdapterError):
-        native.parse_events(events(text), packet(), set())
+        native.parse_messages(messages(answer), packet(), set())
+
+
+def test_native_failed_reference_prevents_success():
+    value = messages()
+    value[0]["parts"].insert(0, {"type": "tool", "tool": "sources_verify_word", "state": {"status": "error"}})
+    with pytest.raises(adapters.AdapterError, match="tool failed"):
+        native.parse_messages(value, packet(), {"sources_verify_word"})
+
+
+def test_native_terminal_receipt_must_match_answer():
+    value = messages()
+    value[0]["parts"][0]["state"]["input"] = {"responses": {"q1": None}}
+    with pytest.raises(adapters.AdapterError, match="mismatch"):
+        native.parse_messages(value, packet(), set())
 
 
 def test_live_without_budget_stops_before_binary(monkeypatch):
@@ -204,8 +218,8 @@ def test_runner_preserves_native_route_and_parent_key(monkeypatch):
     monkeypatch.setenv("EVAL_TEST_ENDPOINT", "http://localhost:12345/completion-fixture")
     monkeypatch.setenv("EVAL_TEST_KEY", "parent-secret")
     monkeypatch.setattr(native, "_binary", lambda _config: ("fixture", "1.0", "a" * 64))
-    seen = provider(monkeypatch, [stream()])
-    def child(argv, *, cwd, env, prompt, **_kwargs):
+    seen = provider(monkeypatch, [stream(call="StructuredOutput")])
+    def child(binary, *, cwd, env, prompt, **_kwargs):
         assert prompt == "fixture" and not list(cwd.iterdir())
         assert "parent-secret" not in env.values()
         settings = json.loads(Path(env["OPENCODE_CONFIG"]).read_text())
@@ -214,15 +228,16 @@ def test_runner_preserves_native_route_and_parent_key(monkeypatch):
         connection = http.client.HTTPConnection(url.hostname, url.port)
         body = {"model": "google/gemma-4-31b-it", "max_tokens": 4096, "stream": True,
                 "messages": [{"role": "user", "content": prompt}], "reasoning": {"enabled": False},
-                "provider": {"only": ["venice/bf16"], "allow_fallbacks": False, "require_parameters": True}}
+                "provider": {"only": ["venice/bf16"], "allow_fallbacks": False, "require_parameters": True},
+                "tool_choice": "required", "tools": [{"type": "function", "function": {"name": "StructuredOutput", "parameters": adapters.response_schema(packet())}}]}
         connection.request("POST", "/api/v1/chat/completions", body=json.dumps(body),
                            headers={"Authorization": "Bearer " + options["apiKey"], "Content-Type": "application/json"})
         response = connection.getresponse()
         assert response.status == 200
         response.read()
         connection.close()
-        return subprocess.CompletedProcess(argv, 0, stdout=events(), stderr="")
-    monkeypatch.setattr(adapters, "_run_claude_process", child)
+        return messages()
+    monkeypatch.setattr(native, "_run_native_server", child)
     result = native.run_opencode(packet(), config(), "closed-book", sources_url=None, prompt="fixture")
     assert result["responses"] == {"q1": "A"}
     assert result["identity"]["harness"] == "opencode-cli"
@@ -236,3 +251,29 @@ def test_reasoning_changes_pair_identity():
     second = copy.deepcopy(first)
     second["openrouter"]["reasoning_enabled"] = True
     assert _comparison(packet(), first) != _comparison(packet(), second)
+
+
+def test_final_output_does_not_consume_reference_budget(monkeypatch):
+    observed = []
+    class Budget:
+        def commit_request(self, body):
+            return json.dumps(body).encode(), {}
+        def observe(self, usage, *, tool_calls):
+            observed.append(tool_calls)
+            return {}
+    provider(monkeypatch, [stream(call="StructuredOutput")])
+    with gateway(budget=Budget()) as g:
+        g.completion(payload(g))
+        assert g.structured_output == {"responses": {"q1": "A"}}
+        assert g.finished and g.tool_calls == 0 and observed == [0]
+        with pytest.raises(adapters.AdapterError):
+            g.completion(payload(g))
+
+
+def test_structured_schema_drift_stops_before_spend(monkeypatch):
+    seen = provider(monkeypatch, [])
+    with gateway() as g:
+        g.packet = packet()
+        with pytest.raises(adapters.AdapterError, match="schema drift"):
+            g.completion(payload(g))
+    assert not seen

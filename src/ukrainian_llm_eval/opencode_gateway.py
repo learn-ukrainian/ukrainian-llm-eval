@@ -99,7 +99,9 @@ class OpenCodeGateway:
 
     def __init__(self, config: Mapping[str, Any], condition: str, *, endpoint: str, key: str,
                  sources_url: str | None, evidence: Callable[[str, Any], None] | None,
-                 request_budget: Any, deadline: float):
+                 request_budget: Any, deadline: float, packet: Mapping[str, Any] | None = None):
+        self.packet = packet
+        self.structured_output: dict[str, Any] | None = None
         self.config = config
         self.condition = condition
         self.endpoint = endpoint
@@ -227,14 +229,19 @@ class OpenCodeGateway:
         if not isinstance(tools, list):
             raise adapters.AdapterError("tool_policy_error")
         names = [tool.get("function", {}).get("name") for tool in tools]
-        if len(names) != len(set(names)) or set(names) != self.allowed:
+        if len(names) != len(set(names)) or set(names) != self.allowed | {"StructuredOutput"}:
             raise adapters.AdapterError("tool_policy_error")
         if (body.get("model") != self.config["model"] or body.get("max_tokens") != self.config["max_output_tokens"]
                 or body.get("provider") != expected_provider
                 or body.get("reasoning") != {"enabled": routing["reasoning_enabled"]}
                 or body.get("stream") is not True or "response_format" in body
-                or body.get("n", 1) != 1 or body.get("tool_choice", "auto") != "auto"):
+                or body.get("n", 1) != 1 or body.get("tool_choice") != "required"):
             raise adapters.AdapterError("OpenCode request configuration drift")
+        if self.packet is not None:
+            schema = next(tool["function"].get("parameters") for tool in tools
+                          if tool["function"]["name"] == "StructuredOutput")
+            if schema != adapters.response_schema(self.packet):
+                raise adapters.AdapterError("OpenCode final schema drift")
         permitted = {"model", "messages", "max_tokens", "provider", "reasoning", "stream", "stream_options",
                      "tools", "tool_choice", "temperature", "top_p", "parallel_tool_calls", "n", "usage"}
         if set(body) - permitted or not isinstance(body.get("messages"), list):
@@ -274,7 +281,7 @@ class OpenCodeGateway:
         decoded = decode_stream(raw_response)
         usage = decoded["usage"]
         if self.budget is not None:
-            observation = self.budget.observe(usage, tool_calls=len(decoded["calls"]))
+            observation = self.budget.observe(usage, tool_calls=sum(call["name"] != "StructuredOutput" for call in decoded["calls"]))
             self.record("request_budget_observation", observation)
         if decoded["models"] != {self.config["model"]} or decoded["providers"] != {routing["expected_provider_name"]}:
             raise adapters.AdapterError("OpenCode provider identity drift")
@@ -291,10 +298,18 @@ class OpenCodeGateway:
         except (KeyError, ValueError, InvalidOperation) as exc:
             raise adapters.AdapterError("OpenCode provider charge missing") from exc
         self.cost += charge
-        self.tool_calls += len(decoded["calls"])
+        references = [call for call in decoded["calls"] if call["name"] != "StructuredOutput"]
+        terminal = [call for call in decoded["calls"] if call["name"] == "StructuredOutput"]
+        if terminal:
+            if len(terminal) != 1 or references or not terminal[0]["id"]:
+                raise adapters.AdapterError("OpenCode mixed or duplicate final output")
+            self.structured_output = adapters._strict_json_loads(terminal[0]["arguments"])
+            if self.packet is not None:
+                adapters._extract_responses(self.structured_output, self.packet)
+        self.tool_calls += len(references)
         if self.tool_calls > self.config["max_tool_calls"]:
             raise adapters.AdapterError("tool_limit_error")
-        for call in decoded["calls"]:
+        for call in references:
             if call["name"] not in self.allowed or not call["id"]:
                 raise adapters.AdapterError("tool_policy_error")
             arguments = adapters._strict_json_loads(call["arguments"])
@@ -302,5 +317,5 @@ class OpenCodeGateway:
                 raise adapters.AdapterError("tool_policy_error")
             self.pending_calls.setdefault(call["name"], []).append(arguments)
         self.last_content = decoded["content"]
-        self.finished = decoded["finish"] == "stop"
+        self.finished = bool(terminal) or decoded["finish"] == "stop"
         return raw_response
