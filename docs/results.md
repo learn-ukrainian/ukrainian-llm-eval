@@ -5,10 +5,10 @@
 Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report maintenance #24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24), [public study #6](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/6).
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
-- First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
+- First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through native OpenCode and its OpenRouter provider. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini now passes six native AGY canaries, and Gemma passes four native OpenCode canaries; the draft implementations and formal study admission still need independent review. Admission failures are not zero scores.
 - Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
-- Gemma passed both closed-book canaries but failed both initial Sources canaries by skipping the lookup and returning the wrong option. Later unconstrained-response diagnostics made the lookup in both reasoning modes but failed strict JSON validation because the final answers had Markdown fences. All failures remain preserved. Total Gemma spend including diagnostics is $0.002166; no scored exams started.
+- The requested native routes now pass: Gemma **4/4** through OpenCode/OpenRouter and Gemini **6/6** through AGY, including one completed lookup in every Sources case. Earlier direct-HTTP Gemma failures and native transport failures remain preserved. Conservative total Gemma charges across all attempts are **$0.005214**; no scored exams started.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
@@ -26,11 +26,11 @@ Within each suite, rank complete comparable results separately for closed-book a
 | Claude Fable 5.1 — low | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — medium | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — high | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
-| Gemini 3.8 Flash — low | Pending | Pending | Native selector listed; isolation and live admission unverified |
-| Gemini 3.8 Flash — medium | Pending | Pending | Native selector listed; isolation and live admission unverified |
-| Gemini 3.8 Flash — high | Pending | Pending | Native selector listed; isolation and live admission unverified |
-| Gemma 4 31B — reasoning off | Live synthetic passed | Failed: omitted lookup; wrong answer | Model/provider matched; admission blocked |
-| Gemma 4 31B — reasoning on | Live synthetic passed | Failed: omitted lookup; wrong answer | Model/provider matched; admission blocked |
+| Gemini 3.8 Flash — low | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
+| Gemini 3.8 Flash — medium | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
+| Gemini 3.8 Flash — high | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
+| Gemma 4 31B — reasoning off | Native OpenCode synthetic passed | Native OpenCode synthetic passed | Model/provider matched; draft implementation and review pending |
+| Gemma 4 31B — reasoning on | Native OpenCode synthetic passed | Native OpenCode synthetic passed | Model/provider matched; draft implementation and review pending |
 
 ### NMT Ukrainian language
 
@@ -99,7 +99,21 @@ Follow-up captures passed six file/shell denial and ambient-instruction checks: 
 
 Follow-up summary hashes: denial/ambient `24ac65bf9e567262903d0d21b091dc33e9b4ad8555a4821dba8440d0d175aa6b`; successful synthetic answers `1efb99277c82effd203b92e9a924d7c4a77f9b995b50578b6e40dbc55e238cc8`. Their raw evidence also remains private.
 
-## Gemini route investigation
+## Native route fixes
+
+The operator clarified that Gemma must use **OpenCode with its OpenRouter provider**, and Gemini must use **AGY CLI**. These checks exercise those routes. Earlier investigations below remain historical evidence and do not describe current native readiness.
+
+[Draft PR #33](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/33) adds the native OpenCode adapter. A parent gateway verifies the model, Venice provider, reasoning toggle, output cap, request count and reference calls, and settles provider charges before releasing responses. OpenCode's native `StructuredOutput` channel supplies a schema-validated final answer; no Markdown fences are stripped. Reasoning off/on crossed with closed-book/Sources gives **4/4 live synthetic passes**. The Sources cases each completed one lookup and returned A; closed-book cases made no lookup. Earlier native failures exposed repeated terminal stream metadata and fenced final JSON; both attempts remain retained. The passing matrix cost a conservatively rounded **$0.001956**, and all native OpenCode attempts together cost **$0.003048**. With earlier direct-HTTP attempts, total Gemma charges are $0.005214.
+
+[Draft PR #35](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/35) adds the native AGY subscription adapter. A fresh profile, native PreToolUse hook and authenticated reference bridge enforce the Sources allowlist and call cap while denying other actions. Fifteen installed-CLI fixture cases pass across low/medium/high: valid output in both conditions, excess lookup denial, forbidden MCP denial and native task-action denial. **All six live canaries also pass through the normal evaluator evidence runner**, with all 13 reference schemas available in Sources mode and exactly one completed lookup per Sources case. Native results, hook receipts and bridge results agree. G1 credit fallback is disabled and API-key credentials are excluded.
+
+AGY's native title-generation request is metadata overhead: a local marker test showed that its output was not fed to the candidate. The effective output-token cap remains unknown; the native fixture observed 65,536, not enforcement of the requested 4,096. Effective backend reasoning remains unverified. These limits are disclosed rather than treated as evidence of a different candidate route. Subscription usage/cost is not presented as zero.
+
+All new candidate and budget evidence stores verify. Raw evidence is archived privately, excluding credential files and passing a credential-containment check. Combined body-free readiness-summary SHA-256: `5333b6429ac0a0b7792d30e46d927f0fbbd40bbcf71b24aaca9bc5e739190609`. Archive manifest SHA-256: `a31f717e4f3e0b081d3e47ed76e192b951a35f035f9268d3ccaec934d58a2770`. The shared ledger reports $0.005469 in settled new-spend upper bounds, with no unresolved reservations; this includes non-Gemma work.
+
+Owner: evaluator release lead. Next action: obtain exact-head independent review for the draft adapters and budget dependency, integrate them, and freeze formal study admission. The operator's no-agents constraint still limits independent review. Synthetic readiness is established for these two native routes; no scored exam, merge or benchmark completion is claimed.
+
+## Gemini route investigation (historical)
 
 On 6 September 2026, the installed AGY CLI catalog listed `gemini-3.8-flash-low`, `gemini-3.8-flash-medium` and `gemini-3.8-flash-high`. This establishes selectable names only. No Gemini model request or isolation control ran during this investigation, and none of these six model/condition combinations is admitted yet.
 
@@ -123,7 +137,7 @@ A second frozen local fixture disabled both `inheritCustomizations` and `inherit
 
 No live Gemini candidate prompt, scored exam or subagent ran in these checks. Private follow-up summary SHA-256: `6860de1d36ab05e4763cb4ca126c97e6134d2645f471d8b68564e06905ad48ee`; safe evidence was archived separately from credentials. Next action: establish native controls for the auxiliary request, remaining tool and output cap before any live candidate execution. The [global profile discovery contract](https://antigravity.google/docs/cli/subagents/) and [API fixture configuration](https://antigravity.google/docs/cli/install/) are documented by Antigravity; neither substitutes for observed subscription-path controls.
 
-## Gemma execution controls
+## Gemma direct-HTTP investigation (historical)
 
 Four live, unscored synthetic canaries used `google/gemma-4-31b-it` through OpenRouter, requesting the Venice BF16 endpoint with fallback disabled, a 4,096-token output cap and the existing shared $10 spending ledger. Responses identified the expected model and Venice provider; the endpoint precision and effective reasoning switch were not independently attested. Observed reasoning-token counts were zero in both off requests and 150/87 in the on closed-book/Sources requests. No named effort selector was supplied.
 
