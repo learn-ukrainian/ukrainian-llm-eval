@@ -24,9 +24,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 | Claude Fable 5.1 — low | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — medium | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — high | Pending | Pending | Exact native selector/admission checks pending |
-| Gemini 3.8 Flash — low | Pending | Pending | Controlled subscription route validation pending |
-| Gemini 3.8 Flash — medium | Pending | Pending | Controlled subscription route validation pending |
-| Gemini 3.8 Flash — high | Pending | Pending | Controlled subscription route validation pending |
+| Gemini 3.8 Flash — low | Pending | Pending | Native selector listed; isolation and live admission unverified |
+| Gemini 3.8 Flash — medium | Pending | Pending | Native selector listed; isolation and live admission unverified |
+| Gemini 3.8 Flash — high | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemma 4 31B — reasoning off (proposed) | Pending | Pending | Final configuration/admission checks pending |
 | Gemma 4 31B — reasoning on (proposed) | Pending | Pending | Final configuration/admission checks pending |
 
@@ -76,6 +76,14 @@ A local-only capture on 6 September 2026 used fresh empty homes, neutral working
 The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`. The successful synthetic-call capture SHA-256 is `b05725c7357a767f1c0e96638448c20e0a22def09d3695c9afad8912329e43ac`. These are local engineering observations; raw captures are retained privately and are not yet independently verifiable from a public evidence archive. They establish neither live subscription readiness nor language proficiency.
 
 Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. Review delegation remains paused under the operator's no-subagents instruction. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
+
+## Gemini route investigation
+
+On 6 September 2026, the installed AGY CLI catalog listed `gemini-3.8-flash-low`, `gemini-3.8-flash-medium` and `gemini-3.8-flash-high`. This establishes selectable names only. No Gemini model request or isolation control ran during this investigation, and none of these six model/condition combinations is admitted yet.
+
+The documented [headless behavior](https://www.antigravity.google/docs/cli/headless/) permits a successful exit after a tool is denied and allows workspace file access by default. Its stream includes tool inventory and tool events, which must be inspected alongside the answer. The [permission rules](https://www.antigravity.google/docs/cli/permissions/) describe explicit denials and per-tool MCP permissions, but the installed CLI help does not expose a general session tool allowlist or settings-file override. Configuration isolation and enforcement still need installed behavior proof; documentation alone does not establish either. The [SDK quickstart](https://www.antigravity.google/docs/sdk/overview/) uses a Gemini API key or Vertex credentials, so it has not been accepted as a substitute for the selected subscription route.
+
+Owner: evaluator release lead, tracking [provider readiness #5](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/5). Next action: establish an isolated native configuration, then test ambient file, web, command and delegation denial plus the controlled Sources allowlist and call cap before live admission. If the native interface cannot demonstrate those controls, retain the route as unavailable rather than silently substituting paid access.
 
 ## What Sources changes
 
