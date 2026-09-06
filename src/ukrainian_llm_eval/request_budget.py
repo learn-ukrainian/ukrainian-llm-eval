@@ -1259,7 +1259,7 @@ class RequestBudgetController:
             return None
         if self._store is None:
             raise ExamError("request-budget controller is not bound to the execution root")
-        if config.get("adapter") not in {"chat-http", "responses-http"}:
+        if config.get("adapter") not in {"chat-http", "responses-http", "opencode"}:
             raise ExamError("request-level budget requires an exact-byte HTTP adapter")
         if config.get("provider") != self.route_specs[route["route_id"]]["mechanism"]["provider"]:
             raise ExamError("request-budget provider identity drift")
