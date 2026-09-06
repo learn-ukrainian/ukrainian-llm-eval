@@ -202,6 +202,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
                 for value in prices.values():
                     if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,9})?", value):
                         raise AdapterError("configuration OpenRouter price ceiling must be a nonnegative decimal string")
+    if adapter == "responses-http":
+        from .responses_http import _runtime_config
+
+        _runtime_config(config)
     return dict(config)
 
 

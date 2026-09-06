@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from test_research_scheduling import inputs
 from test_responses_http import _config, _message_body
 
@@ -31,3 +32,12 @@ def test_responses_dispatch_binds_endpoint_and_runs_validated_packet(monkeypatch
     assert len(sent) == 1 and "input" in sent[0] and "messages" not in sent[0]
     assert sent[0]["max_output_tokens"] == config["max_output_tokens"]
     assert endpoint not in json.dumps(result)
+
+
+def test_responses_unsupported_effort_rejected_before_endpoint_or_transport(monkeypatch):
+    config = _config(effort="ultra")
+    monkeypatch.delenv(config["endpoint_env"], raising=False)
+    with pytest.raises(adapters.AdapterError, match="Responses effort is unsupported"):
+        adapters.validate_config(config)
+    with pytest.raises(adapters.AdapterError, match="Responses effort is unsupported"):
+        adapters.preflight(config, "closed-book")
