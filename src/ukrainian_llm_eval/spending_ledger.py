@@ -12,6 +12,7 @@ import re
 import sqlite3
 import stat
 from collections.abc import Mapping
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -118,12 +119,23 @@ class SharedSpendingLedger:
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 30000")
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
+    @contextmanager
+    def _connection(self):
+        """Preserve SQLite transaction behavior while deterministically closing handles."""
+
+        with closing(self._connect()) as connection, connection:
+            yield connection
+
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS ledger ("
@@ -173,7 +185,7 @@ class SharedSpendingLedger:
         return int(settled), int(unresolved)
 
     def snapshot(self) -> dict[str, Any]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN")
             settled, unresolved = self._totals(connection)
             count = connection.execute("SELECT COUNT(*) FROM reservations").fetchone()[0]
@@ -206,7 +218,7 @@ class SharedSpendingLedger:
             raise SpendingLedgerError("unsupported shared-ledger funding kind")
         account = _sha(account_sha256, "account identity")
         binding_sha256 = digest(dict(binding))
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
             if existing is not None:
@@ -256,7 +268,7 @@ class SharedSpendingLedger:
             "authoritative_account_charge", "conservative_final_usage_upper_bound"
         }:
             raise SpendingLedgerError("unsupported shared reservation settlement kind")
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
             if row is None:
@@ -284,7 +296,7 @@ class SharedSpendingLedger:
         """Mark a settled credit charge reflected in a later authoritative balance."""
 
         evidence = _sha(evidence_sha256, "credit reconciliation evidence")
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
             if row is None or row["funding_kind"] != "existing_credit" or row["state"] != "settled":
@@ -302,7 +314,7 @@ class SharedSpendingLedger:
             return self._receipt(row, replayed=current is not None)
 
     def get(self, reservation_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("SELECT * FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone()
         return None if row is None else self._receipt(row, replayed=True)
 

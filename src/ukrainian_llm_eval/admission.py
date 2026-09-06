@@ -55,6 +55,8 @@ def _operator_authorization(authorization, route):
     if not isinstance(authorization, dict):
         raise ExamError("invalid operator authorization")
     schema = authorization.get("schema")
+    if not isinstance(schema, str):
+        raise ExamError("unsupported operator authorization schema")
     fields = {
         LEGACY_OPERATOR_AUTHORIZATION_SCHEMA: {
             "schema", "route_sha256", "allow_paid", "max_new_spend_micro_usd",

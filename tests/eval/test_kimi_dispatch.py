@@ -98,6 +98,14 @@ def test_runner_fail_closed_when_candidate_failure_lacks_verified_envelope(monke
     }
     fingerprints = {field: "a" * 64 for field in (
         "binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256")}
+    checked_failures = []
+    original_check = runner.is_candidate_response_failure
+
+    def check_failure(trial, **kwargs):
+        checked_failures.append(trial)
+        return original_check(trial, **kwargs)
+
+    monkeypatch.setattr(runner, "is_candidate_response_failure", check_failure)
     monkeypatch.setattr(
         native_kimi,
         "preflight",
@@ -112,14 +120,22 @@ def test_runner_fail_closed_when_candidate_failure_lacks_verified_envelope(monke
             "status": "failed",
             "failure_reason": CANDIDATE_RESPONSE_ERROR,
             "responses": {"q0001": None, "q0002": None},
-            "identity": {"session_id": None},
-            "metrics": {"tool_calls": 1},
+            "identity": {
+                **fingerprints,
+                "adapter": "kimi", "harness": "kimi-cli", "provider": "managed:kimi-code",
+                "model": "kimi-code/k3", "requested_model": "kimi-code/k3",
+                "requested_model_alias": "kimi-code/k3", "cli_version": "0.41.0",
+                "session_id": None,
+            },
+            "metrics": {"tool_calls": 0},
         },
     )
 
     result = runner.run_exam(inputs()[0]["ulp"], config, "closed-book")
 
+    assert len(checked_failures) == 1
+    assert checked_failures[0]["identity"]["session_id"] is None
     assert result["status"] == "failed"
-    assert result["failure_reason"] == "configuration_error"
+    assert result["failure_reason"] == "response_error"
     assert result["identity"]["session_id"] is None
     assert result["metrics"] == runner._empty_metrics()

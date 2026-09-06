@@ -529,6 +529,26 @@ def test_shared_ledger_cannot_be_scoped_under_execution_root(tmp_path):
         _provider_bound_values(tmp_path, ledger_path=tmp_path / "run" / "spending.sqlite3")
 
 
+def test_prepare_checks_metered_plan_reservation_without_equating_existing_credit(tmp_path):
+    route, _config, controller, _budget = _provider_bound_values(tmp_path)
+    manifest = {
+        "routes": [route],
+        "suites": [{"limits": {"max_tool_calls": 2, "max_output_tokens": 100}}],
+        "spending_policy": controller._spending_policy,
+    }
+    with pytest.raises(ExamError, match="reservation differs"):
+        controller.prepare(
+            manifest,
+            {"cells": [{"route_id": "fixture", "segments": [{"reserved_micro_usd": 605}]}]},
+        )
+
+    existing_credit_route = {**route, "billing": {**route["billing"], "kind": "existing_credit"}}
+    controller.prepare(
+        {**manifest, "routes": [existing_credit_route]},
+        {"cells": [{"route_id": "fixture", "segments": [{"reserved_micro_usd": 0}]}]},
+    )
+
+
 def test_usage_bound_settles_complete_ordered_final_usage_with_per_component_rounding(tmp_path):
     route, config, controller, budget = _provider_bound_values(tmp_path, usage_bound=True)
     first = {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}

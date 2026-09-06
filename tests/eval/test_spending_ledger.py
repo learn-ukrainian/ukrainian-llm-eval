@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from ukrainian_llm_eval import spending_ledger
 from ukrainian_llm_eval.core import digest
 from ukrainian_llm_eval.spending_ledger import (
     LEDGER_SCHEMA,
@@ -25,6 +26,100 @@ def _reserve(path, reservation_id, amount):
         funding_kind="metered",
         account_sha256="a" * 64,
     )
+
+
+class _TrackedConnection:
+    """Proxy that makes deterministic close observable without changing SQLite behavior."""
+
+    def __init__(self, connection):
+        object.__setattr__(self, "connection", connection)
+        object.__setattr__(self, "closed", False)
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def __setattr__(self, name, value):
+        if name in {"connection", "closed"}:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.connection, name, value)
+
+    def __enter__(self):
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self.connection.__exit__(*args)
+
+    def close(self):
+        self.closed = True
+        self.connection.close()
+
+
+def test_connections_close_after_success_and_reservation_error(monkeypatch, tmp_path):
+    ledger = SharedSpendingLedger(
+        tmp_path / "spending.sqlite3", ledger_id="issue5-public-evaluator", cap_micro_usd=100
+    )
+    opened = []
+    real_connect = ledger._connect
+
+    def tracked_connect():
+        tracked = _TrackedConnection(real_connect())
+        opened.append(tracked)
+        return tracked
+
+    monkeypatch.setattr(ledger, "_connect", tracked_connect)
+    assert ledger.snapshot()["reservation_count"] == 0
+    with pytest.raises(SpendingCapExceeded):
+        ledger.reserve(
+            "over-cap", {"attempt_id": "over-cap"}, maximum_micro_usd=101,
+            funding_kind="metered", account_sha256="a" * 64,
+        )
+    assert len(opened) == 2
+    assert all(connection.closed for connection in opened)
+
+
+def test_initialize_error_closes_connection_without_gc(monkeypatch, tmp_path):
+    path = tmp_path / "spending.sqlite3"
+    SharedSpendingLedger(path, ledger_id="issue5-public-evaluator", cap_micro_usd=100)
+    opened = []
+    real_connect = spending_ledger.sqlite3.connect
+
+    def tracked_connect(*args, **kwargs):
+        tracked = _TrackedConnection(real_connect(*args, **kwargs))
+        opened.append(tracked)
+        return tracked
+
+    monkeypatch.setattr(spending_ledger.sqlite3, "connect", tracked_connect)
+    with pytest.raises(SpendingLedgerError, match="identity or cap drift"):
+        SharedSpendingLedger(path, ledger_id="issue5-public-evaluator", cap_micro_usd=101)
+    assert len(opened) == 1
+    assert opened[0].closed is True
+
+
+def test_connect_setup_error_closes_connection_before_context_ownership(monkeypatch, tmp_path):
+    ledger = SharedSpendingLedger(
+        tmp_path / "spending.sqlite3", ledger_id="issue5-public-evaluator", cap_micro_usd=100
+    )
+    opened = []
+    real_connect = spending_ledger.sqlite3.connect
+
+    class PragmaFailureConnection(_TrackedConnection):
+        def execute(self, statement, *args, **kwargs):
+            if statement == "PRAGMA busy_timeout = 30000":
+                raise sqlite3.OperationalError("fixture PRAGMA failure")
+            return self.connection.execute(statement, *args, **kwargs)
+
+    def failing_connect(*args, **kwargs):
+        tracked = PragmaFailureConnection(real_connect(*args, **kwargs))
+        opened.append(tracked)
+        return tracked
+
+    monkeypatch.setattr(spending_ledger.sqlite3, "connect", failing_connect)
+    with pytest.raises(sqlite3.OperationalError, match="PRAGMA failure"):
+        ledger._connect()
+    assert len(opened) == 1
+    assert opened[0].closed is True
 
 
 def test_concurrent_execution_roots_share_one_atomic_cap(tmp_path):

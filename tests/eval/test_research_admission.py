@@ -97,6 +97,14 @@ def test_whole_schedule_rejects_new_spend_when_allow_paid_is_false(tmp_path):
         controller.prepare(manifest, build_execution_plan(manifest))
 
 
+@pytest.mark.parametrize("schema", [[], {}, None, 1, False])
+def test_malformed_authorization_schema_fails_before_admission(tmp_path, schema):
+    args, controller = controller_inputs(tmp_path)
+    controller.authorizations["fixture"]["schema"] = schema
+    with pytest.raises(ExamError, match="unsupported operator authorization schema"):
+        controller.prepare(args[2], args[3])
+
+
 def test_legacy_authorization_retains_total_reservation_meaning_for_sequential_plan(tmp_path):
     _packets, _segments, manifest, _plan, _configs = inputs(metered=True)
     route = manifest["routes"][0]
