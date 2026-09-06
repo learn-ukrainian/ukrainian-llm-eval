@@ -57,11 +57,17 @@ def decode_stream(raw: bytes) -> dict[str, Any]:
         for choice in choices:
             if choice.get("index") != 0:
                 raise adapters.AdapterError("OpenCode provider choice index invalid")
-            if choice.get("finish_reason"):
-                if finish is not None:
-                    raise adapters.AdapterError("OpenCode duplicate finish reason")
-                finish = choice["finish_reason"]
             delta = choice.get("delta", {})
+            # OpenRouter repeats the terminal reason on its usage-only chunk.
+            # Accept that metadata repetition, never more generated content.
+            if finish is not None and (
+                not isinstance(body.get("usage"), dict) or choice.get("finish_reason") != finish
+                or delta.get("content") not in {None, ""} or delta.get("tool_calls")
+                or set(delta) - {"content", "role"}
+            ):
+                raise adapters.AdapterError("OpenCode content after finish")
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
             text = delta.get("content")
             if text is not None:
                 if not isinstance(text, str):

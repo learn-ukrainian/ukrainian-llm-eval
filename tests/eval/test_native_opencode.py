@@ -122,6 +122,19 @@ def test_unfinished_stream_rejected():
         decode_stream(stream().replace(b"data: [DONE]\n\n", b""))
 
 
+def test_openrouter_usage_chunk_can_repeat_finish_metadata():
+    events = stream().split(b"\n\n")
+    terminal = json.loads(events[1][6:])
+    first_terminal = copy.deepcopy(terminal)
+    first_terminal.pop("usage")
+    raw = events[0] + b"\n\n" + b"data: " + json.dumps(first_terminal).encode() + b"\n\n" + b"\n\n".join(events[1:])
+    assert decode_stream(raw)["usage"]["cost"] == 0.00001
+    terminal["choices"][0]["delta"]["content"] = "unexpected output"
+    bad = events[0] + b"\n\n" + b"data: " + json.dumps(first_terminal).encode() + b"\n\ndata: " + json.dumps(terminal).encode() + b"\n\ndata: [DONE]\n\n"
+    with pytest.raises(adapters.AdapterError, match="content after finish"):
+        decode_stream(bad)
+
+
 def test_tool_call_must_match_provider_and_cap(monkeypatch):
     seen = provider(monkeypatch, [stream(call="sources_verify_word"), stream(call="sources_verify_word")])
     with gateway("sources") as g:
