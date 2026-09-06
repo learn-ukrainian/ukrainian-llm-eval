@@ -180,6 +180,38 @@ def test_preflight_sources_checks_exact_proxy_tools(tmp_path: Path, monkeypatch:
     )
 
 
+def test_runtime_tool_hash_is_configured_list_and_preflight_hash_is_live_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = _fixture_cli(tmp_path)
+    private = _provisioning(tmp_path)
+    live_tools = [{"name": "verify_word", "inputSchema": {"type": "object"}}]
+    monkeypatch.setattr(
+        native_kimi.adapters,
+        "_mcp_list_tools",
+        lambda _url, _timeout: (live_tools, "server-hash"),
+    )
+    capability = native_kimi.preflight_kimi(
+        _config(str(binary)),
+        "sources",
+        "https://sources.example.test/mcp",
+        private_env_path=private,
+    )
+    result = native_kimi.run_kimi(
+        _packet(),
+        _config(str(binary)),
+        "sources",
+        sources_url="https://sources.example.test/mcp",
+        prompt="Return only the requested JSON.",
+        private_env_path=private,
+    )
+
+    assert capability["tool_schema_sha256"] == native_kimi.adapters.digest(live_tools)
+    assert result["identity"]["configured_tools_sha256"] == native_kimi.adapters.digest(["verify_word"])
+    assert result["identity"]["tool_schema_sha256"] is None
+    assert result["identity"]["configured_tools_sha256"] != capability["tool_schema_sha256"]
+
+
 def test_run_subprocess_fixture_matches_trial_shape_and_reports_unknown_usage(tmp_path: Path) -> None:
     binary = _fixture_cli(tmp_path)
     private = _provisioning(tmp_path)
@@ -196,6 +228,8 @@ def test_run_subprocess_fixture_matches_trial_shape_and_reports_unknown_usage(tm
     assert result["responses"] == {"opaque-1": "A"}
     assert result["identity"]["session_id"] == "fixture-session"
     assert result["identity"]["effective_backend_model"] == "unknown"
+    assert result["identity"]["configured_tools_sha256"] == native_kimi.adapters.digest([])
+    assert result["identity"]["tool_schema_sha256"] == native_kimi.adapters.digest([])
     assert result["metrics"]["input_tokens"] is None
     assert result["metrics"]["output_tokens"] is None
     assert result["metrics"]["total_tokens"] is None
@@ -333,6 +367,38 @@ def test_run_uses_fresh_neutral_controls_and_exact_source_proxy(monkeypatch: pyt
     assert "${plugin_sections}" not in observed["profile"]
     assert "KIMI_CODE_HOME" in observed["env"]
     assert not observed["cwd"].joinpath(".git").exists()
+
+
+def test_neutral_cwd_accepts_normal_empty_temp(tmp_path: Path) -> None:
+    cwd = tmp_path / "empty"
+    cwd.mkdir()
+
+    native_kimi._assert_neutral_cwd(cwd)
+
+
+def test_neutral_cwd_counts_dangling_control_symlink(tmp_path: Path) -> None:
+    cwd = tmp_path / "empty"
+    cwd.mkdir()
+    (cwd / ".mcp.json").symlink_to(cwd / "missing-mcp.json")
+
+    with pytest.raises(native_kimi.KimiAdapterError, match="ambient project controls"):
+        native_kimi._assert_neutral_cwd(cwd)
+
+
+def test_neutral_cwd_fails_closed_on_control_stat_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cwd = tmp_path / "empty"
+    cwd.mkdir()
+    blocked = cwd / ".git"
+    original_lstat = Path.lstat
+
+    def denied(path: Path) -> Any:
+        if path == blocked:
+            raise PermissionError("permission denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    with pytest.raises(native_kimi.KimiAdapterError, match="control check failed"):
+        native_kimi._assert_neutral_cwd(cwd)
 
 
 @pytest.mark.parametrize(

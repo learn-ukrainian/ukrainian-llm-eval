@@ -51,6 +51,13 @@ or existing-credit zero incremental cost requires separate entitlement evidence.
 These pure constructors bind supplied evidence; they do not authenticate a
 provider, prove entitlement, or authorize spending.
 
+Sequential per-segment authorization uses a v2 record as described in
+[trusted admission](admission.md): its `spending_policy_sha256` binds the
+shared-policy ceiling, while `max_segment_new_spend_micro_usd` independently
+bounds a single metered segment. A legacy v1 `max_new_spend_micro_usd` remains
+the total reservation ceiling and rejects a sequential schedule whose total
+exceeds it.
+
 ```sh
 ukrainian-llm-eval prepare-segments --questions questions.json \
   --suite ulp --protocol-sha256 "$PROTOCOL_SHA256" \

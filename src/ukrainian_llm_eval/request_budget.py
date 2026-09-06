@@ -1161,6 +1161,24 @@ class RequestBudgetController:
         elif policy is not None:
             raise ExamError("sequential shared spending policy has no provider-bound paid route")
 
+        # The execution-plan constructor reserves new spend with the same
+        # whole-segment billing formula used below by the shared ledger.  Check
+        # that contract before admission can retain a successful probe receipt.
+        # Existing-credit routes intentionally have a zero *new-spend*
+        # reservation in the plan; their full charge is separately retained as
+        # a credit commitment and must not be compared to this field.
+        for route_id in normalized:
+            route = routes[route_id]
+            if route["billing"]["kind"] != "metered":
+                continue
+            expected_reservation = _maximum_segment_charge(route["billing"])
+            for cell in _plan.get("cells", []):
+                if cell.get("route_id") != route_id:
+                    continue
+                for segment in cell.get("segments", []):
+                    if segment.get("reserved_micro_usd") != expected_reservation:
+                        raise ExamError("execution-plan reservation differs from request-budget maximum charge")
+
     def bind(self, root: Path) -> None:
         self.validate_execution_root(root)
         if self._spending_policy is not None and self._shared_ledger is None:

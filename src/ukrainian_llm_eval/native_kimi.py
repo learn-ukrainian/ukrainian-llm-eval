@@ -761,9 +761,25 @@ def _child_env(home: Path, max_output_tokens: int, effort: str | None) -> dict[s
 
 
 def _assert_neutral_cwd(cwd: Path) -> None:
+    def control_present(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise _fail("isolated Kimi cwd control check failed") from exc
+        return True
+
     current = cwd.resolve()
     while True:
-        if (current / ".git").exists() or (current / ".mcp.json").exists() or (current / ".kimi-code" / "mcp.json").exists():
+        if any(
+            control_present(path)
+            for path in (
+                current / ".git",
+                current / ".mcp.json",
+                current / ".kimi-code" / "mcp.json",
+            )
+        ):
             raise _fail("isolated Kimi cwd has ambient project controls")
         parent = current.parent
         if parent == current:
@@ -1233,7 +1249,8 @@ def run_kimi(
             "native_config_sha256": provisioning.native_config_sha256,
             "catalog_provider_sha256": provisioning.catalog_provider_sha256,
             "catalog_model_sha256": provisioning.catalog_model_sha256,
-            "tool_schema_sha256": adapters.digest(options.config["tools"] if condition == "sources" else []),
+            "configured_tools_sha256": adapters.digest(options.config["tools"] if condition == "sources" else []),
+            "tool_schema_sha256": None if condition == "sources" else adapters.digest([]),
             "corpus_id_sha256": adapters.digest(options.config["corpus_id"])
             if options.config["corpus_id"] is not None
             else None,

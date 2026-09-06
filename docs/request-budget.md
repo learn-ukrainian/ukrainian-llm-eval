@@ -115,6 +115,15 @@ bound into settlement evidence. The receipt calls `U` a
 `conservative_final_usage_upper_bound`; it never labels it as billed cost or an
 account charge.
 
+The offline verifier validates the receipt's frozen
+`request_budget_mechanism_sha256` hash-chain binding and the resulting
+arithmetic. It does not independently reconstruct a mechanism from route
+metadata and receipt fields. This is a deliberate trust boundary: mechanism
+construction and hashing occur in the trusted execution/controller path, while
+the verifier checks the resulting hash-bound claim and its evidence
+chain. A route whose controller or trusted mechanism construction is not
+trusted is not eligible for this mechanism.
+
 A missing, partial, malformed, ambiguous, or lost usage response leaves the
 whole `W` unresolved, even when earlier requests in the same segment have valid
 usage. The same applies if pricing can vary above the frozen rates, usage may be
@@ -177,6 +186,11 @@ from the complete final-usage proof above. Other estimates never settle it.
 Existing-credit settlement, including a v3 usage-derived upper bound, remains
 retained against later balance observations until separate authoritative
 reconciliation proves that the charge is reflected in the observed balance.
+Before any admission probe, the controller checks that every metered execution
+plan reservation equals its frozen whole-segment request-budget maximum. This
+comparison applies only to new-spend reservations: an existing-credit route has
+`reserved_micro_usd: 0` in the plan while still retaining its full maximum
+charge as a credit commitment.
 
 ## Runtime map
 

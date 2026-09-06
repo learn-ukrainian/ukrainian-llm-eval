@@ -45,8 +45,9 @@ the advertised Sources tool schema. It returns capability evidence including:
   `effort_support_source="private-native-config-model-alias"`;
 * `cli_version`, `version_observed`, `binary_sha256`;
 * `native_config_sha256`, `catalog_provider_sha256`, and `catalog_model_sha256`;
-* `settings_sha256`, `request_shape_sha256`, `tool_schema_sha256`, and the
-  optional Sources `mcp_server_identity_sha256`;
+* `settings_sha256`, `request_shape_sha256`,
+  `tool_schema_sha256`, and the optional Sources
+  `mcp_server_identity_sha256`;
 * `effective_backend_model`, `account_identity`, and
   `max_output_tokens_effective` set to `"unknown"`.
 
@@ -54,7 +55,13 @@ the advertised Sources tool schema. It returns capability evidence including:
 `metrics`. The identity carries the requested alias, managed provider route,
 reported `session.resume_hint` session ID, observed CLI version, native and
 catalog hashes, requested effort, unknown accepted/effective controls, and the
-isolation hashes. Metrics preserve CLI-reported token/cost values when present and use
+isolation hashes. For Sources, `configured_tools_sha256` is the digest of the
+configured tool-name list, while runtime `tool_schema_sha256` is `null`: the
+Kimi CLI does not provide an attestation of the schema it used. The
+`preflight_tool_schema_sha256` identity field added by the shared runner is the
+genuine preflight digest of the full fetched Sources tool records. For
+closed-book, the configured tool surface is empty and `tool_schema_sha256`
+remains the digest of an empty list. Metrics preserve CLI-reported token/cost values when present and use
 `null` when Kimi omits usage. `evidence("cli_result", ...)` retains raw
 stdout/stderr for the caller's private evidence store; the returned trial and
 normal failure reason contain no raw provider output.
@@ -121,6 +128,11 @@ The child environment is rebuilt from a small runtime allowlist and sets
 No resume flag (`-S`, `-r`, or `-c`) is passed. The CLI is invoked with an
 explicit alias, profile, empty skills directory, and `--output-format
 stream-json`.
+
+The Sources preflight fetches and validates the configured tool names against
+the MCP server's advertised records. That fetched schema is recorded in
+preflight capability evidence; the subsequent native runtime does not claim
+that it re-attested the schema.
 
 The parser validates the observed version, assistant, tool-result, and
 resume-hint events as an integrity envelope. It rejects retries, unrecognized
