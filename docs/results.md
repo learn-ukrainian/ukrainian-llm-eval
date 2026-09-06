@@ -8,6 +8,7 @@ Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report 
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
 - Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
 - Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
+- Gemma passed both closed-book canaries but failed both Sources canaries: with reasoning off and on, it skipped the required lookup and returned the wrong option. All four charges settled against the existing cap, totaling $0.000614 after conservative rounding. These failures remain in the evidence; no scored exams started.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
@@ -28,8 +29,8 @@ Within each suite, rank complete comparable results separately for closed-book a
 | Gemini 3.8 Flash — low | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — medium | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — high | Pending | Pending | Native selector listed; isolation and live admission unverified |
-| Gemma 4 31B — reasoning off (proposed) | Pending | Pending | Final configuration/admission checks pending |
-| Gemma 4 31B — reasoning on (proposed) | Pending | Pending | Final configuration/admission checks pending |
+| Gemma 4 31B — reasoning off | Live synthetic passed | Failed: omitted lookup; wrong answer | Model/provider matched; admission blocked |
+| Gemma 4 31B — reasoning on | Live synthetic passed | Failed: omitted lookup; wrong answer | Model/provider matched; admission blocked |
 
 ### NMT Ukrainian language
 
@@ -113,6 +114,18 @@ A locally installed Gemini CLI probe used a dummy API key and loopback fixture. 
 A follow-up launch guard rejected all nine planted-file cases across low, medium and high effort before CLI startup. Fresh empty-workspace captures passed at all three efforts: exact model and effort, capped output, and no callable tools. These are local fixture checks, not subscription eligibility proof. An empty `tools.core` list also creates a policy denying MCP tools. Adding the single qualified fixture name (`mcp_sources_verify_word`) allowed a successful reference call and returned its result to the next request at all three efforts; the fixture's forbidden tool and built-in tools remained absent. The initial assertion incorrectly expected an unqualified name; a separate corrected assessment preserves the original captures and failed assertion. A subsequent check used the evaluator's full 13-tool proxy at all three efforts. Each run advertised exactly those reference tools, forwarded two calls under a two-call cap, rejected the third call, and rejected an upstream tool outside the allowlist. These are local mechanism checks; wider adversarial denial coverage and live native admission remain outstanding.
 
 No-prompt native ACP probes initialized successfully but failed session authentication with error `-32000`, before a model catalog was returned. Existing native credentials were projected into an isolated home; no API-key fallback or model prompt was used. The failure does not establish whether credentials, entitlement or connectivity caused it. CodexBar also returned an error, leaving Gemini quota unknown. Live Gemini readiness remains unproven.
+
+## Gemma execution controls
+
+Four live, unscored synthetic canaries used `google/gemma-4-31b-it` through OpenRouter, requesting the Venice BF16 endpoint with fallback disabled, a 4,096-token output cap and the existing shared $10 spending ledger. Responses identified the expected model and Venice provider; the endpoint precision and effective reasoning switch were not independently attested. Observed reasoning-token counts were zero in both off requests and 150/87 in the on closed-book/Sources requests. No named effort selector was supplied.
+
+Both closed-book cases returned the expected exact-token option with zero tool calls. Both Sources cases advertised all 13 permitted tools but made **zero calls** and returned B instead of the expected A. A separate live VESUM check confirmed the expected six matches before these calls. Transport status was `ok`; semantic readiness was **2/4**, with **0/2 Sources passes**. No retry or answer repair was performed. Tool availability and successful HTTP completion do not establish usable retrieval.
+
+The installed adapter passed 10 local fixture controls covering reasoning off/on, closed-book and Sources requests, forbidden tools, call-cap overflow and provider mismatch. All eight live evidence stores (four candidate, four budget) verified. Each charge settled from the provider's account-charge field, conservatively rounded upward to micro-USD: 31 and 95 for closed-book, 226 and 262 for Sources; total **614 micro-USD ($0.000614)**. This is new-spend-cap accounting, not a claim about the account's unknown prepaid balance.
+
+The canaries used source head `017ccaf` from [draft budget fix PR #29](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/29), which permits authoritative account-charge routes to share the existing policy with conservative usage-bound routes. Its full suite passed 484 tests and all CI checks. Independent review remains pending under the operator's no-subagents instruction. Private live-summary SHA-256: `9bbd413028ea70beb850fa1e9f404373bb118618585eae0851ee415b4306a21b`; raw evidence is not publicly downloadable.
+
+Owner: evaluator release lead. Next action: diagnose the missed tool calls against the frozen request and provider behavior before any further live attempt. Preserve both failed canaries and keep the all-model, both-mode exam gate closed.
 
 ## What Sources changes
 
