@@ -66,12 +66,13 @@ def write_catalog(path: Path, catalog: dict) -> None:
 
 
 def build_argv(binary: str, *, model: str, effort: str, response_schema_path: Path,
-               catalog_path: Path, reference_overrides: tuple[str, ...] = (),
+               catalog_path: Path, final_message_path: Path, reference_overrides: tuple[str, ...] = (),
                transport_overrides: tuple[str, ...] = ()) -> list[str]:
     """Both conditions use the same catalog restrictions and disabled host."""
     return native_codex.build_closed_book_argv(
         binary, model=model, effort=effort, response_schema_path=response_schema_path,
         transport_overrides=(
+            "--output-last-message", str(final_message_path),
             "-c", "model_catalog_json=" + adapters.canonical(str(catalog_path)),
             "-c", "tools.experimental_request_user_input.enabled=false",
             *reference_overrides, *transport_overrides,

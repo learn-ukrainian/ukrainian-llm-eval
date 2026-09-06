@@ -45,6 +45,7 @@ def request_shape(config: dict, condition: str, catalog_identity: dict) -> dict:
         "max_tool_calls": config["max_tool_calls"], "resources": "controller-denied",
         "catalog_override": "exact bundled model with explicit tool-policy fields only",
         "user_input": False, "required_mcp": condition == "sources",
+        "answer_transport": "cli-output-last-message-bound-to-final-stream-message",
     }
 
 
@@ -153,7 +154,7 @@ def reference_overrides(config_path: Path, tools: list[str]) -> tuple[str, ...]:
     return tuple(argv)
 
 
-def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict]):
+def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict], *, final_message: str | None = None):
     if any(not isinstance(entry, dict) for entry in journal):
         raise native._fail("native reference controller evidence is invalid")
     pending, completed, filtered = {}, [], []
@@ -196,7 +197,7 @@ def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict
                 if entry.get("event") == "call" or entry.get("reason") == "call_cap"]
     if recorded != completed:
         raise native._fail("native reference controller and CLI evidence disagree")
-    return native._parse_events("\n".join(filtered), packet), len(completed)
+    return native._parse_events("\n".join(filtered), packet, final_message=final_message), len(completed)
 
 
 def run(packet, config, condition, *, sources_url, prompt, evidence=None, private_env_path=None):
@@ -218,6 +219,8 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
         codex_catalog.write_catalog(schema_path, schema)
         trial_identity["response_schema_sha256"] = adapters.digest(schema)
         journal_path = home / "reference-journal.jsonl"
+        final_message_path = home / "final-message.txt"
+        final_message_path.touch(mode=0o600, exist_ok=False)
         overrides = ()
         if condition == "sources":
             bridge_config = home / "reference.json"
@@ -229,6 +232,7 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
             overrides = reference_overrides(bridge_config, config["tools"])
         argv = codex_catalog.build_argv(str(probe.binary_path), model=config["model"], effort=config["effort"],
                                         response_schema_path=schema_path, catalog_path=catalog_path,
+                                        final_message_path=final_message_path,
                                         reference_overrides=overrides)
         if evidence is not None:
             evidence("cli_invocation", {"argv": argv, "cwd": str(cwd), "env_keys": sorted(env),
@@ -255,7 +259,14 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
             if not ready or any(entry["tools_sha256"] != trial_identity["tool_schema_sha256"]
                                 or entry["server_sha256"] != receipt["source_server_sha256"] for entry in ready):
                 raise native._fail("native reference initialization evidence missing or changed")
-        parsed, calls = parse_events(completed.stdout, packet, config["tools"] if condition == "sources" else [], journal)
+        try:
+            final_message = native._private_file(home.resolve(), final_message_path.name, "native final output").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise native._fail("native final output cannot be read") from exc
+        if evidence is not None:
+            evidence("cli_final_message", {"text": final_message, "sha256": adapters.digest(final_message)})
+        parsed, calls = parse_events(completed.stdout, packet, config["tools"] if condition == "sources" else [],
+                                     journal, final_message=final_message)
     trial_identity["session_id"] = parsed.session_id
     trial = {"responses": parsed.responses, "identity": trial_identity,
              "metrics": {"elapsed_seconds": time.monotonic() - started, **parsed.usage, "tool_calls": calls}}

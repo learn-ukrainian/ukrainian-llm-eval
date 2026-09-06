@@ -192,6 +192,7 @@ def test_reference_run_preserves_failed_answers_and_partial_controller_evidence(
             {"type": "item.completed", "item": {"type": "agent_message", "text": "Malformed answer"}},
             {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}},
         ]
+        Path(argv[argv.index("--output-last-message") + 1]).write_text("Malformed answer")
         return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(event) for event in events), "")
 
     monkeypatch.setattr(native_codex, "_run_process", process)
@@ -216,3 +217,25 @@ def test_empty_closed_book_surface_and_extra_descriptor_rejection():
     assert surface_matches(summary, ["verify_word"], True)
     summary["additional_tool_namespaces"] = {"collaboration": ["spawn_agent"]}
     assert not surface_matches(summary, ["verify_word"], True)
+
+
+@pytest.mark.parametrize("answer", ['{"responses":{"opaque-1":"A"}}', 'Malformed final answer'])
+def test_explicit_final_output_preserves_commentary_and_strict_answer_validation(answer):
+    from test_native_codex import _packet
+
+    events = [
+        {"type": "thread.started", "thread_id": "fixture-session"}, {"type": "turn.started"},
+        {"type": "item.completed", "item": {"type": "agent_message", "text": "Checking the reference."}},
+        {"type": "item.completed", "item": {"type": "agent_message", "text": answer}},
+        {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}},
+    ]
+    raw = "\n".join(json.dumps(event) for event in events)
+    parsed, calls = adapter.parse_events(raw, _packet(), [], [], final_message=answer + "\n")
+    assert calls == 0 and parsed.answer_content == answer + "\n"
+    if answer.startswith("{"):
+        assert parsed.responses == {"opaque-1": "A"} and parsed.answer_failure_reason is None
+    else:
+        assert parsed.responses is None and parsed.answer_failure_reason == "provider JSON is invalid"
+    for mismatched in ("", '{"responses":{"opaque-1":"B"}}', "Checking the reference."):
+        with pytest.raises(native_codex.CodexAdapterError, match="final output disagrees"):
+            adapter.parse_events(raw, _packet(), [], [], final_message=mismatched)

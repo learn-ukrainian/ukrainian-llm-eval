@@ -735,7 +735,7 @@ def _usage(value: Any) -> int | None:
     return value if type(value) is int and value >= 0 else None
 
 
-def _parse_events(stdout: str, packet: Mapping[str, Any]) -> _ParsedCodexEvents:
+def _parse_events(stdout: str, packet: Mapping[str, Any], *, final_message: str | None = None) -> _ParsedCodexEvents:
     """Parse the installed ``codex exec --json`` protocol seen in mock captures.
 
     The observed stream supplies a thread id and selected usage counters.  It
@@ -803,6 +803,13 @@ def _parse_events(stdout: str, packet: Mapping[str, Any]) -> _ParsedCodexEvents:
     if session is None or not turn_started or not turn_completed or not messages:
         raise _fail("Codex CLI omitted required session, usage, or response")
     answer_content = "".join(messages)
+    if final_message is not None:
+        # The explicit CLI output file separates its final answer from progress
+        # messages. Bind it to the final streamed message, never search backward
+        # for a valid JSON answer or discard a malformed final response.
+        if final_message not in (messages[-1], messages[-1] + "\n"):
+            raise _fail("Codex CLI final output disagrees with its event stream")
+        answer_content = final_message
     try:
         payload = adapters._strict_json_loads(answer_content)
         responses = adapters._extract_responses(payload, packet)

@@ -43,6 +43,22 @@ def _events(action, model, index):
     return events
 
 
+def _final_events(model):
+    events = codex_controls._final_events(model)
+    commentary = {"id": "msg_progress", "type": "message", "status": "completed", "role": "assistant",
+                  "content": [{"type": "output_text", "text": "Synthetic progress message.", "annotations": []}]}
+    for kind, event in events:
+        if "output_index" in event:
+            event["output_index"] = 1
+        if kind == "response.completed":
+            event["response"]["output"].insert(0, commentary)
+    events[1:1] = [
+        ("response.output_item.added", {"output_index": 0, "item": {**commentary, "status": "in_progress", "content": []}}),
+        ("response.output_item.done", {"output_index": 0, "item": commentary}),
+    ]
+    return events
+
+
 class _Handler(codex_controls._LoopbackHandler):
     def do_POST(self):
         size = int(self.headers.get("Content-Length", "0"))
@@ -85,7 +101,7 @@ class _Handler(codex_controls._LoopbackHandler):
         if valid and index < len(self.server.actions):
             self._stream(_events(self.server.actions[index], self.server.model, index))
         else:
-            self._stream(codex_controls._final_events(self.server.model))
+            self._stream(_final_events(self.server.model))
 
 
 def _actions(case: str, tool: str, cap: int):
@@ -119,6 +135,7 @@ def capture_case(root: Path, config: dict, probe, catalog, schemas: list[dict], 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     journal = []
+    final_message = None
     try:
         with tempfile.TemporaryDirectory(prefix="codex-ref-control-") as temp:
             home = Path(temp)
@@ -137,6 +154,7 @@ def capture_case(root: Path, config: dict, probe, catalog, schemas: list[dict], 
                 "server_sha256": adapters.digest(SERVER_INFO), "journal": str(journal_path)})
             argv = codex_catalog.build_argv(str(probe.binary_path), model=config["model"], effort=config["effort"],
                 response_schema_path=schema_path, catalog_path=catalog_path,
+                final_message_path=home / "final-message.txt",
                 reference_overrides=() if server.closed else codex_reference.reference_overrides(config_path, config["tools"]),
                 transport_overrides=codex_controls._loopback_overrides(base + "/v1"))
             result = native_codex._run_process(argv, cwd=cwd, env=env, prompt="Synthetic control.",
@@ -144,6 +162,10 @@ def capture_case(root: Path, config: dict, probe, catalog, schemas: list[dict], 
                     root / f"process-{name}.json", value))
             codex_controls._write_new(root / "stdout.bin", result.stdout.encode())
             codex_controls._write_new(root / "stderr.bin", result.stderr.encode())
+            final_path = home / "final-message.txt"
+            if final_path.is_file() and final_path.stat().st_size <= native_codex._MAX_PRIVATE_FILE_BYTES:
+                final_message = final_path.read_text()
+                codex_controls._write_new(root / "final-message.txt", final_message.encode())
             if journal_path.exists():
                 journal = [adapters._strict_json_loads(line) for line in journal_path.read_text().splitlines()]
     finally:
@@ -162,6 +184,8 @@ def capture_case(root: Path, config: dict, probe, catalog, schemas: list[dict], 
     passed = (result.returncode == 0 and server.surface_valid and len(state.posts) == len(actions) + 1
               and len(server.mcp_calls) == expected_calls and outcome
               and set(server.mcp_methods) <= {"initialize", "notifications/initialized", "tools/list", "tools/call"})
+    passed &= (final_message in ("Synthetic probe completed.", "Synthetic probe completed.\n")
+               and "Synthetic progress message." in result.stdout)
     if not server.closed:
         passed &= any(entry.get("event") == "ready" for entry in journal)
     if case in {"schema-drift", "missing-tool"}:
@@ -170,6 +194,7 @@ def capture_case(root: Path, config: dict, probe, catalog, schemas: list[dict], 
               "model": config["model"], "effort": config["effort"], "requests": state.posts,
               "upstream_reference_calls": len(server.mcp_calls), "upstream_methods": server.mcp_methods,
               "tool_outputs": state.tool_outputs, "controller_journal": journal,
+              "final_message": final_message,
               "returncode": result.returncode}
     path = root / "capture.json"
     codex_controls._write_json(path, report)

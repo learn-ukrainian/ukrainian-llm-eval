@@ -79,6 +79,8 @@ fail before any model request reaches the fixture. Unknown tool surfaces stop
 tool injection. No provider inference or scored exam is used. Capture controls
 separately for each exact model/effort/tool-list/cap configuration. The capture
 command supports caps up to 100 to keep deterministic probes bounded.
+Successful control cases also emit a progress message before the final message
+and verify that the CLI's explicit final-output file contains only the latter.
 
 A passing capture produces `reference-control.json`. Keep its immutable capture
 files at their recorded locations, and provision exactly these owner-only files:
@@ -98,6 +100,11 @@ Implementation, native binary, catalog entry, bridge entrypoint, model, effort,
 allowlist, cap and artifact drift invalidate the receipt.
 
 Native MCP events must reconcile with the controller's append-only journal.
+The restricted policy uses `--output-last-message` for the candidate answer and
+checks that file against the final streamed agent message. Progress messages
+remain in the raw evidence and are not concatenated with the final answer.
+An absent or inconsistent final artifact fails execution; a malformed final
+answer remains a candidate failure, even if an earlier message contained JSON.
 Wrong or malformed answers retain their session, usage and tool-call evidence
 as candidate failures. Interrupted controller evidence is retained before an
 execution failure is returned. `tool_calls` counts completed native reference
