@@ -87,9 +87,9 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
         "route": route,
     }
-    if config["adapter"] == "kimi":
+    if config["adapter"] in {"kimi", "codex"}:
         constants["native_adapter_implementation_sha256"] = hashlib.sha256(
-            Path(adapters.__file__).with_name("native_kimi.py").read_bytes()
+            Path(adapters.__file__).with_name(f"native_{config['adapter']}.py").read_bytes()
         ).hexdigest()
     elif config["adapter"] == "responses-http":
         constants["http_adapter_implementation_sha256"] = hashlib.sha256(
@@ -200,6 +200,22 @@ def run_exam(
             for field in ("binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256"):
                 if trial["identity"].get(field) != capability.get(field):
                     raise ExamError("native Kimi configuration changed after preflight")
+        elif checked_config["adapter"] == "codex":
+            from .native_codex import run_codex
+
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the native CLI adapter")
+            trial = run_codex(
+                checked_packet, checked_config, condition, sources_url=sources_url, prompt=prompt,
+                private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_CODEX_PROVISIONING_DIR"),
+                **evidence_options,
+            )
+            for field in (
+                "entrypoint_sha256", "native_runtime_sha256", "control_receipt_sha256",
+                "settings_sha256", "request_shape_sha256", "cli_version",
+            ):
+                if trial["identity"].get(field) != capability.get(field):
+                    raise ExamError("native Codex configuration changed after preflight")
         else:
             budget_options = {"request_budget": request_budget} if request_budget is not None else {}
             if checked_config["adapter"] == "responses-http":

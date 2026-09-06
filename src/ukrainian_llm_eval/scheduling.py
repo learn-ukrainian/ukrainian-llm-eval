@@ -22,7 +22,7 @@ def research_implementation_sha256():
         "admission.py", "admission_command.py", "request_budget.py", "spending_ledger.py",
         "benchmark_manifest.py", "core.py",
         "evidence.py", "gec.py",
-        "native_kimi.py", "responses_http.py", "candidate_outcome.py",
+        "native_kimi.py", "native_codex.py", "responses_http.py", "candidate_outcome.py",
     )
     return digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names})
 
