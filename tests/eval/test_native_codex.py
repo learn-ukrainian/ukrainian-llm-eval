@@ -7,7 +7,11 @@ read a real auth home, or make network requests.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +85,7 @@ def _provisioning(
     receipt = {
         "schema": "native-codex-control.v2", "entrypoint_sha256": "b" * 64,
         "native_runtime_sha256": "c" * 64, "cli_version": "codex-cli 0.153.2",
+        "probe_implementation_sha256": native_codex._probe_implementation_sha256(),
         "request_shape_sha256": native_codex.adapters.digest(native_codex._request_shape(config)),
         "fresh_neutral_cwd": True, "fresh_home": True, "ignore_user_config": True, "ignore_rules": True, "ephemeral": True,
         "handler_controls": controls or {name: "inert" for name in native_codex._INERT_HANDLER_NAMES},
@@ -204,6 +209,195 @@ def test_preflight_rejects_control_receipt_captured_for_another_model(
         native_codex.preflight_codex(changed_model, "closed-book", private_env_path=private)
 
 
+def test_preflight_rejects_stale_control_probe_implementation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    config = _config()
+    private = _provisioning(tmp_path, config)
+    monkeypatch.setattr(native_codex, "_probe_cli", lambda *_args: _probe())
+    receipt_path = private / native_codex.CODEX_CONTROL_FILE
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["probe_implementation_sha256"] = "d" * 64
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    receipt_path.chmod(0o600)
+    with pytest.raises(native_codex.CodexAdapterError, match="probe implementation drift"):
+        native_codex.preflight_codex(config, "closed-book", private_env_path=private)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_process_bounds_streams_and_preserves_partial_overflow_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stream: str,
+) -> None:
+    monkeypatch.setattr(native_codex, "_MAX_OUTPUT_BYTES", 16)
+    evidence: list[tuple[str, Any]] = []
+    with pytest.raises(native_codex.CodexAdapterError, match="output exceeds limit"):
+        native_codex._run_process(
+            [sys.executable, "-c", f"import sys; sys.{stream}.write('x' * 32); sys.{stream}.flush()"],
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="",
+            timeout=5,
+            evidence=lambda kind, payload: evidence.append((kind, payload)),
+        )
+    overflow = dict(evidence)["cli_output_overflow"]
+    assert overflow[f"{stream}_truncated"] is True
+    assert len(overflow[stream].encode("utf-8")) <= 16
+
+
+def test_process_deadline_covers_blocked_large_stdin_write(tmp_path: Path) -> None:
+    started = time.monotonic()
+    with pytest.raises(native_codex.CodexAdapterError, match="CLI timeout"):
+        native_codex._run_process(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="x" * 1_000_000,
+            timeout=1,
+            evidence=None,
+        )
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    ("argv", "timeout"),
+    [
+        ([sys.executable, "-c", "import sys; sys.stdout.write('x' * 3_000_000); sys.stdout.flush()"], 5),
+        ([sys.executable, "-c", "import time; time.sleep(10)"], 1),
+    ],
+)
+def test_process_evidence_callback_retains_its_open_file_descriptor(
+    tmp_path: Path, argv: list[str], timeout: int,
+) -> None:
+    retained = tmp_path / "evidence-callback.txt"
+    handles: list[Any] = []
+
+    def evidence(_kind: str, _payload: Any) -> None:
+        handle = retained.open("wb")
+        handle.write(b"callback")
+        handles.append(handle)
+
+    with pytest.raises(native_codex.CodexAdapterError):
+        native_codex._run_process(
+            argv,
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="",
+            timeout=timeout,
+            evidence=evidence,
+        )
+    assert len(handles) == 1
+    handles[0].write(b"-still-open")
+    handles[0].close()
+    assert retained.read_bytes() == b"callback-still-open"
+
+
+def test_process_deadline_kills_descendant_that_keeps_parent_pipes_open(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "descendant.pid"
+    started = time.monotonic()
+    with pytest.raises(native_codex.CodexAdapterError, match="CLI timeout"):
+        native_codex._run_process(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib, subprocess, sys; "
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+                    "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')"
+                ),
+                str(child_pid_path),
+            ],
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="",
+            timeout=1,
+            evidence=None,
+        )
+    assert time.monotonic() - started < 5
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("descendant remained alive after process-group cleanup")
+
+
+def test_process_deadline_returns_when_escaped_descendant_keeps_pipes_open(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "escaped-descendant.pid"
+    child_pid: int | None = None
+    started = time.monotonic()
+    try:
+        with pytest.raises(native_codex.CodexAdapterError, match="CLI timeout"):
+            native_codex._run_process(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import pathlib, subprocess, sys; "
+                        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+                        "start_new_session=True); "
+                        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')"
+                    ),
+                    str(child_pid_path),
+                ],
+                cwd=tmp_path,
+                env={"PATH": "/usr/bin:/bin"},
+                prompt="",
+                timeout=1,
+                evidence=None,
+            )
+        assert time.monotonic() - started < 5
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        os.kill(child_pid, 0)
+    finally:
+        if child_pid_path.exists():
+            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            for _ in range(20):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("escaped descendant remained alive after test cleanup")
+
+
+def test_process_rejects_invalid_utf8_with_bounded_raw_evidence(tmp_path: Path) -> None:
+    evidence: list[tuple[str, Any]] = []
+    with pytest.raises(native_codex.CodexAdapterError, match="invalid UTF-8"):
+        native_codex._run_process(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff'); sys.stdout.flush()"],
+            cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin"},
+            prompt="",
+            timeout=5,
+            evidence=lambda kind, payload: evidence.append((kind, payload)),
+        )
+    invalid = dict(evidence)["cli_invalid_utf8"]
+    assert invalid["invalid_utf8_streams"] == ["stdout"]
+    assert invalid["stdout_raw_base64"] == "/w=="
+    assert "stdout" not in invalid
+
+
+def test_process_preserves_valid_unicode_stdout(tmp_path: Path) -> None:
+    completed = native_codex._run_process(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write('Привіт'.encode('utf-8'))"],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
+        prompt="",
+        timeout=5,
+        evidence=None,
+    )
+    assert completed.stdout == "Привіт"
+
+
 def _native_fixture(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\xcf\xfa\xed\xfe" + b"fixture-native-runtime")
@@ -306,6 +500,18 @@ def test_run_uses_fresh_home_structured_envelope_and_raw_evidence(monkeypatch: p
 ])
 def test_parser_rejects_bad_lifecycle_and_tool_envelope(stream: list[dict[str, Any]], message: str) -> None:
     with pytest.raises(native_codex.CodexAdapterError, match=message):
+        native_codex._parse_events("\n".join(json.dumps(event) for event in stream), _packet())
+
+
+def test_parser_rejects_item_error_after_turn_started() -> None:
+    stream = [
+        {"type": "thread.started", "thread_id": "fresh"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"type": "error", "message": "mid-turn failure"}},
+        {"type": "item.completed", "item": {"type": "agent_message", "text": '{"responses":{"opaque-1":"A"}}'}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}},
+    ]
+    with pytest.raises(native_codex.CodexAdapterError, match="item error during a turn"):
         native_codex._parse_events("\n".join(json.dumps(event) for event in stream), _packet())
 
 

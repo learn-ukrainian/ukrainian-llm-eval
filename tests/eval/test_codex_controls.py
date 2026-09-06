@@ -52,6 +52,7 @@ def test_receipt_binds_the_exact_requested_model_and_capture_hashes(tmp_path: Pa
     assert receipt["request_shape_sha256"] != adapters.digest(
         native_codex._request_shape({"model": "gpt-5.6-sol", "effort": "medium"})
     )
+    assert receipt["probe_implementation_sha256"] == native_codex._probe_implementation_sha256()
     assert set(receipt["handler_evidence"]) == native_codex._INERT_HANDLER_NAMES
     assert all(item["source_kind"] == "local-mock-capture" for item in receipt["handler_evidence"].values())
 

@@ -16,11 +16,13 @@ handlers are not.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import platform
 import re
+import selectors
 import shutil
 import signal
 import stat
@@ -49,6 +51,7 @@ _EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
 _MAX_PRIVATE_FILE_BYTES = 1_000_000
 _MAX_CONTROL_ARTIFACT_BYTES = 20_000_000
 _MAX_OUTPUT_BYTES = 2_000_000
+_PROCESS_CLEANUP_SECONDS = 1
 _MAX_HELP_BYTES = 256_000
 _MAX_VERSION_BYTES = 16_384
 _DISABLED_FEATURES = (
@@ -442,7 +445,7 @@ def _load_control(options: NativeCodexOptions, probe: _CliProbe) -> dict[str, An
         raise _fail("native Codex control receipt is invalid") from exc
     if not isinstance(receipt, Mapping):
         raise _fail("native Codex control receipt is invalid")
-    required = {"schema", "entrypoint_sha256", "native_runtime_sha256", "cli_version", "request_shape_sha256", "fresh_neutral_cwd", "fresh_home", "ignore_user_config", "ignore_rules", "ephemeral", "handler_controls", "handler_evidence"}
+    required = {"schema", "entrypoint_sha256", "native_runtime_sha256", "cli_version", "probe_implementation_sha256", "request_shape_sha256", "fresh_neutral_cwd", "fresh_home", "ignore_user_config", "ignore_rules", "ephemeral", "handler_controls", "handler_evidence"}
     if set(receipt) != required or receipt.get("schema") != "native-codex-control.v2":
         raise _fail("native Codex control receipt schema is invalid")
     if (
@@ -451,6 +454,8 @@ def _load_control(options: NativeCodexOptions, probe: _CliProbe) -> dict[str, An
         or receipt.get("cli_version") != probe.version
     ):
         raise _fail("native Codex control receipt identity drift")
+    if receipt.get("probe_implementation_sha256") != _probe_implementation_sha256():
+        raise _fail("native Codex control receipt probe implementation drift")
     if receipt.get("request_shape_sha256") != adapters.digest(_request_shape(options.config)):
         raise _fail("native Codex control receipt request shape drift")
     if any(receipt.get(key) is not True for key in ("fresh_neutral_cwd", "fresh_home", "ignore_user_config", "ignore_rules", "ephemeral")):
@@ -482,6 +487,15 @@ def _load_control(options: NativeCodexOptions, probe: _CliProbe) -> dict[str, An
         except OSError as exc:
             raise _fail("native Codex handler evidence artifact is unavailable") from exc
     return dict(receipt)
+
+
+def _probe_implementation_sha256() -> str:
+    """Bind a receipt to the local verifier that produced its mock evidence."""
+
+    try:
+        return hashlib.sha256(Path(__file__).with_name("codex_controls.py").read_bytes()).hexdigest()
+    except OSError as exc:
+        raise _fail("native Codex control probe implementation is unavailable") from exc
 
 
 def _validate_condition(condition: str, sources_url: str | None) -> None:
@@ -527,24 +541,176 @@ def _child_env(home: Path, auth_bytes: bytes) -> dict[str, str]:
     return env
 
 
-def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int, evidence: Callable[[str, Any], None] | None) -> subprocess.CompletedProcess[str]:
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> bool:
+    """Kill and reap the POSIX process group created for one CLI invocation."""
+
+    # The group can retain a descendant after its leader has already exited.
+    # Always address the original group before falling back to its leader.
     try:
-        process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-        stdout, stderr = process.communicate(prompt, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (NameError, ProcessLookupError, OSError):
-            if "process" in locals():
-                process.kill()
-        if "process" in locals():
-            stdout, stderr = process.communicate()
-            if evidence is not None:
-                evidence("cli_timeout", {"stdout": stdout, "stderr": stderr, "returncode": process.returncode})
-        raise _fail("Codex CLI timeout") from exc
+            process.kill()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=_PROCESS_CLEANUP_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=_PROCESS_CLEANUP_SECONDS)
+        except subprocess.TimeoutExpired:
+            return False
+    return process.poll() is not None
+
+
+def _bounded_capture(
+    output: Mapping[str, bytearray],
+    truncated: Mapping[str, bool],
+    returncode: int | None,
+    *,
+    incomplete_io: list[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Return strict text output or bounded raw bytes for decode failures."""
+
+    capture: dict[str, Any] = {
+        "stdout_truncated": truncated["stdout"],
+        "stderr_truncated": truncated["stderr"],
+        "returncode": returncode,
+        "io_incomplete": bool(incomplete_io),
+        "incomplete_io": incomplete_io,
+    }
+    invalid_streams: list[str] = []
+    for name in ("stdout", "stderr"):
+        raw = bytes(output[name])
+        try:
+            capture[name] = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            invalid_streams.append(name)
+            capture[f"{name}_raw_base64"] = base64.b64encode(raw).decode("ascii")
+    return capture, invalid_streams
+
+
+def _close_selector_stream(selector: selectors.BaseSelector, stream: Any) -> None:
+    """Release one unbuffered Popen-owned stream after selector unregistering."""
+
+    try:
+        selector.unregister(stream)
+    except KeyError:
+        pass
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
+
+
+def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int, evidence: Callable[[str, Any], None] | None) -> subprocess.CompletedProcess[str]:
+    """Run one CLI process while bounding both streams and the input deadline."""
+
+    if timeout <= 0:
+        raise _fail("Codex CLI timeout must be positive")
+    try:
+        process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, bufsize=0, start_new_session=True)
     except OSError as exc:
         raise _fail("Codex CLI invocation failed") from exc
-    return subprocess.CompletedProcess(argv, process.returncode, stdout=stdout, stderr=stderr)
+    assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    truncated = {"stdout": False, "stderr": False}
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    stdin_fd, stdout_fd, stderr_fd = process.stdin.fileno(), process.stdout.fileno(), process.stderr.fileno()
+    for fd in (stdin_fd, stdout_fd, stderr_fd):
+        os.set_blocking(fd, False)
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    prompt_bytes = prompt.encode("utf-8")
+    prompt_offset = 0
+    if prompt_bytes:
+        selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+    else:
+        _close_selector_stream(selector, process.stdin)
+    timed_out = False
+    overflow = False
+    stream_error: str | None = None
+    while selector.get_map() or process.poll() is None:
+        if overflow or stream_error is not None:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        try:
+            events = selector.select(timeout=min(remaining, 0.05))
+        except OSError:
+            stream_error = "selector"
+            break
+        for key, _mask in events:
+            name = key.data
+            fd = key.fd
+            if name == "stdin":
+                try:
+                    written = os.write(fd, prompt_bytes[prompt_offset:prompt_offset + 65_536])
+                except (BlockingIOError, InterruptedError):
+                    continue
+                except (BrokenPipeError, OSError):
+                    _close_selector_stream(selector, key.fileobj)
+                    continue
+                prompt_offset += written
+                if prompt_offset == len(prompt_bytes):
+                    _close_selector_stream(selector, key.fileobj)
+                continue
+            try:
+                chunk = os.read(fd, 65_536)
+            except (BlockingIOError, InterruptedError):
+                continue
+            except OSError:
+                stream_error = name
+                break
+            if not chunk:
+                _close_selector_stream(selector, key.fileobj)
+                continue
+            remaining_output = _MAX_OUTPUT_BYTES - len(output[name])
+            if remaining_output > 0:
+                output[name].extend(chunk[:remaining_output])
+            if len(chunk) > remaining_output:
+                truncated[name] = True
+                overflow = True
+                break
+    incomplete_io = [str(item.data) for item in selector.get_map().values()]
+    reaped = True
+    if overflow or timed_out or stream_error is not None:
+        reaped = _terminate_process_group(process)
+    for key in list(selector.get_map().values()):
+        _close_selector_stream(selector, key.fileobj)
+    selector.close()
+    capture, invalid_streams = _bounded_capture(
+        output, truncated, process.returncode, incomplete_io=incomplete_io,
+    )
+    if invalid_streams:
+        capture["invalid_utf8_streams"] = invalid_streams
+        if evidence is not None:
+            evidence("cli_invalid_utf8", capture)
+        raise _fail("Codex CLI emitted invalid UTF-8")
+    if not reaped:
+        if evidence is not None:
+            evidence("cli_io_incomplete", capture)
+        raise _fail("Codex CLI process cleanup is incomplete")
+    if overflow:
+        if evidence is not None:
+            evidence("cli_output_overflow", capture)
+        raise _fail("Codex CLI output exceeds limit")
+    if timed_out:
+        if evidence is not None:
+            evidence("cli_timeout", capture)
+        raise _fail("Codex CLI timeout")
+    if stream_error is not None:
+        if evidence is not None:
+            evidence("cli_stream_error", capture)
+        raise _fail("Codex CLI stream read failed")
+    return subprocess.CompletedProcess(argv, process.returncode, stdout=capture["stdout"], stderr=capture["stderr"])
 
 
 def _usage(value: Any) -> int | None:
@@ -597,7 +763,10 @@ def _parse_events(stdout: str, packet: Mapping[str, Any]) -> _ParsedCodexEvents:
                 messages.append(item["text"])
             elif item.get("type") == "error" and isinstance(item.get("message"), str):
                 # Captures show bootstrap warnings represented as item errors.
-                # Raw text is retained only through the private evidence callback.
+                # They are acceptable only after the session is known and before
+                # a turn begins; an in-turn error cannot be hidden as bootstrap.
+                if session is None or turn_started:
+                    raise _fail("Codex CLI reported an item error during a turn")
                 continue
             elif item.get("type") in {"function_call", "custom_tool_call", "mcp_call", "tool_call"}:
                 raise _fail("Codex CLI tool event violates closed-book policy")

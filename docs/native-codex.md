@@ -5,6 +5,10 @@ adapter for native Codex CLI evaluation. It has no login flow, no API-key
 fallback, no provider substitution, and no dependency on Learn Ukrainian or
 fleet configuration.
 
+Windows is unsupported. The installed npm launcher forms and the invocation
+cleanup both rely on POSIX executable and process-group behavior; Windows npm
+shims and process groups have no implementation in this adapter.
+
 It currently supports **only `closed-book`**. `sources` is explicitly
 unsupported: the existing Codex control captures do not establish an isolated
 MCP route, so callers must not label a Sources run as closed-book.
@@ -46,7 +50,8 @@ a mock capture to prove handler effects instead of assuming those flags work.
 
 The control receipt is mandatory and uses `native-codex-control.v2`. It binds
 the invoking entrypoint SHA-256, the actual native runtime SHA-256, the CLI
-version, and the generated request-shape hash. That shape includes the exact
+version, the SHA-256 of the local control-probe implementation, and the
+generated request-shape hash. That shape includes the exact
 requested model and effort, so a receipt captured for one model cannot attest
 another model. A direct native executable is supported. For the supported
 installed Node launcher, the adapter derives the platform vendor executable
@@ -82,6 +87,11 @@ The command below invokes only the installed CLI and a process-local
 CODEX_HOME, and cwd; passes no auth file or token; disables retries; bounds
 request/process output; and terminates a timed-out process group. It creates a
 new owner-only capture directory and will not overwrite a prior capture.
+
+Runtime cleanup signals only the original POSIX process group. A child that
+creates a separate session is outside that group: the adapter closes its own
+nonblocking pipe descriptors and returns a bounded failure, but cannot claim
+to terminate that escaped process.
 
 ```sh
 umask 077

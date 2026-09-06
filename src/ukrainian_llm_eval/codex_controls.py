@@ -602,6 +602,7 @@ def _build_receipt(
         "entrypoint_sha256": probe.entrypoint_sha256,
         "native_runtime_sha256": probe.native_runtime_sha256,
         "cli_version": probe.version,
+        "probe_implementation_sha256": native_codex._probe_implementation_sha256(),
         "request_shape_sha256": request_shape_sha256,
         "fresh_neutral_cwd": True,
         "fresh_home": True,
