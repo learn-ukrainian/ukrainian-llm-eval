@@ -21,9 +21,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 | GPT-6 Astra — low | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
 | GPT-6 Astra — medium | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
 | GPT-6 Astra — high | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
-| Claude Fable 5.1 — low | Pending | Pending | Exact native selector/admission checks pending |
-| Claude Fable 5.1 — medium | Pending | Pending | Exact native selector/admission checks pending |
-| Claude Fable 5.1 — high | Pending | Pending | Exact native selector/admission checks pending |
+| Claude Fable 5.1 — low | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
+| Claude Fable 5.1 — medium | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
+| Claude Fable 5.1 — high | Local request capture only | Local request/call-cap capture only | Live identity and admission pending |
 | Gemini 3.8 Flash — low | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — medium | Pending | Pending | Native selector listed; isolation and live admission unverified |
 | Gemini 3.8 Flash — high | Pending | Pending | Native selector listed; isolation and live admission unverified |
@@ -76,6 +76,14 @@ A local-only capture on 6 September 2026 used fresh empty homes, neutral working
 The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`. The successful synthetic-call capture SHA-256 is `b05725c7357a767f1c0e96638448c20e0a22def09d3695c9afad8912329e43ac`. These are local engineering observations; raw captures are retained privately and are not yet independently verifiable from a public evidence archive. They establish neither live subscription readiness nor language proficiency.
 
 Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. Review delegation remains paused under the operator's no-subagents instruction. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
+
+## Native Claude request controls
+
+Local captures on 6 September 2026 requested `claude-fable-5-1` at low/medium/high through the existing adapter, redirecting inference to a synthetic server with a dummy API key and separate configuration directory. All six effort/condition combinations sent the requested model string and matching effort field. Closed-book requests exposed only `StructuredOutput`; Sources requests added exactly the 13 reference tools. This proves request construction, not subscription eligibility or the provider's accepted model/effort.
+
+At every effort, an injected reference call returned the synthetic marker. A second injected call with a configured cap of one returned `Reference call limit reached`; only the first reached the synthetic upstream. Captures ended intentionally with a synthetic HTTP error, so these are not successful answer canaries. The server observed two requests in each request-only capture and four in each call-cap capture; native retries remain visible. No provider inference or scored exam material was used. Broader adversarial isolation and live admission remain pending.
+
+The verified summary SHA-256 is `f42989148892a94fe69fdd20d0f67dfd652c777cee9ea6924915386eedb309ff`. Captures, scripts and binary/adapter identities are archived privately; no public raw archive is available. Owner: evaluator release lead, tracking [provider readiness #5](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/5).
 
 ## Gemini route investigation
 
