@@ -6,7 +6,7 @@ Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report 
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local synthetic isolation controls; independent review and live subscription readiness remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
 - Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
@@ -19,9 +19,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 
 | Configuration | Closed-book | With Sources | Current status |
 | --- | --- | --- | --- |
-| GPT-6 Astra — low | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
-| GPT-6 Astra — medium | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
-| GPT-6 Astra — high | Local controls pass; live pending | Local controls pass; live pending | Draft implementation; independent review pending |
+| GPT-6 Astra — low | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
+| GPT-6 Astra — medium | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
+| GPT-6 Astra — high | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
 | Claude Fable 5.1 — low | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — medium | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — high | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
@@ -57,11 +57,15 @@ Denominator: **2,696 sentences in 166 documents**, using both reference annotato
 
 ## Native Codex execution controls
 
-The subsequent restricted-catalog implementation at source head `2876012` in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) passes **27/27 local synthetic control cases**: nine cases at each requested low/medium/high effort, using all 13 permitted live Sources tool schemas. A clean wheel installation also passes all six public preflight combinations with synthetic credential files. No provider inference or live subscription validation occurred.
+The subsequent restricted-catalog implementation at source head `9b37fd1` in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) passes **27/27 local synthetic control cases**: nine cases at each requested low/medium/high effort, using all 13 permitted live Sources tool schemas. These controls were repeated from a clean wheel installation. Successful cases also check that an explicit final-output file separates the final answer from progress messages. No provider inference occurs in that local matrix.
 
-The nine cases cover an empty closed-book surface, a permitted call, three denied resource operations, call-cap overflow, an unlisted tool, schema drift and a missing tool. Denied operations never reach the synthetic upstream; missing/changed schemas stop before the fixture receives a model request. The full test suite passed 488 tests, with lint also passing. These are implementation checks, not Ukrainian language scores.
+The nine cases cover an empty closed-book surface, a permitted call, three denied resource operations, call-cap overflow, an unlisted tool, schema drift and a missing tool. Denied operations never reach the synthetic upstream; missing/changed schemas stop before the fixture receives a model request. The full test suite passed 490 tests, with lint also passing. These are implementation checks, not Ukrainian language scores.
 
-Final installed control-report SHA-256 identifiers: low `934110a88ed9f87dd2465e020904a0eadb00f14262303b0c5fe79638b745ae1d`; medium `c6bcf452947d227c75235705fd58293376f79ee4bc295c7a171bcf64f96a1bf6`; high `47ca86f9dbf50a70199f8ab9a9de4f15237674bc065f38b66ee557f09342b8ea`. Raw captures remain private, so these reports are not independently downloadable yet.
+Final installed control-report SHA-256 identifiers: low `527d8354fffea81dd686221088e528dcab148debee162b3126170b2d8be8e4c3`; medium `1f85de04a28b009d25145380d26e8b7ff164862a5d21db581e0fc34b6665f6e7`; high `47fc9e637fc3a984a744b6fb4d442a2b68fb4a343339056d7da4e1c273809c2e`. Raw captures remain private, so these reports are not independently downloadable yet.
+
+Six fresh live synthetic canaries passed through the native ChatGPT subscription route after the final-output fix: low/medium/high in both conditions. Closed-book returned the expected exact-token answer with zero tool calls; Sources returned the expected tool-result count with one reference call each. All six evidence receipts and archive checksums verified. Effective backend model and effort remain `unknown` in the native protocol; requested labels are not attestation. Summary SHA-256: `39ad93f7636c9ea4c51db2929c6ab20b5dd3d0f88584e6d1aa3b36f45aba6b25`.
+
+The first live low-effort Sources attempt remains recorded as failed. Its lookup succeeded and the CLI emitted correct final JSON, but the adapter concatenated a progress message with that answer. The fix uses the CLI final-output file, checks it against the final streamed message, and retains malformed final answers as failures. Fresh local controls preceded the six new live attempts; the original failure was not relabeled. These canaries establish execution behavior, not exam scores or complete study admission.
 
 The earlier baseline failure below is retained as historical engineering evidence; the new policy explicitly restricts catalog tool settings instead of relying on feature-disable flags alone.
 
