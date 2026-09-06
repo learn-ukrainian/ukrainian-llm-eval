@@ -121,6 +121,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise AdapterError("configuration must be an object")
     adapter = config.get("adapter")
+    if adapter == "agy":
+        from .native_agy import validate_config as validate_agy_config
+
+        return validate_agy_config(config)
     if adapter == "kimi":
         from .native_kimi import validate_config as validate_kimi_config
 
@@ -250,6 +254,11 @@ def _claude_capabilities(config: Mapping[str, Any], *, needs_sources: bool = Fal
 def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None = None) -> dict[str, Any]:
     """Check only capability and boundaries, returning no endpoint/key values."""
     checked = validate_config(config)
+    if checked["adapter"] == "agy":
+        from .native_agy import preflight as agy_preflight
+
+        return agy_preflight(checked, condition, sources_url,
+                             private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_AGY_PROVISIONING_DIR"))
     if checked["adapter"] == "kimi":
         from .native_kimi import preflight as kimi_preflight
 

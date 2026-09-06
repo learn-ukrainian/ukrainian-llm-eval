@@ -4,7 +4,7 @@ Reproducible evaluation of **Ukrainian language** models and agents, with option
 
 This project is under development toward its first release. It does not yet publish a complete model leaderboard. Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
 
-The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, and closed-book Codex execution, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
+The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, AGY Gemini, and closed-book Codex execution, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
 ## Development installation
 
@@ -20,6 +20,10 @@ python3 -m venv .venv
 ```
 
 Provider runs require your own authorized CLI subscription or endpoint credentials. Running tests does not invoke paid models. Do not commit credentials, grading keys, raw provider logs or retrievals.
+
+The [AGY runbook](docs/native-agy.md) covers subscription-only Gemini execution
+at low, medium and high effort, with or without Sources MCP, including native
+tool restrictions and the unverified effective output-token cap.
 
 The [Kimi runbook](docs/native-kimi.md) explains private subscription provisioning
 and execution with or without Sources MCP. Kimi results identify the requested

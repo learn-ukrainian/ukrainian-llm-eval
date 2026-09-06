@@ -87,9 +87,13 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
         "route": route,
     }
-    if config["adapter"] in {"kimi", "codex"}:
+    if config["adapter"] in {"kimi", "codex", "agy"}:
         constants["native_adapter_implementation_sha256"] = hashlib.sha256(
             Path(adapters.__file__).with_name(f"native_{config['adapter']}.py").read_bytes()
+        ).hexdigest()
+    if config["adapter"] == "agy":
+        constants["native_hook_sha256"] = hashlib.sha256(
+            Path(adapters.__file__).with_name("agy_hook.py").read_bytes()
         ).hexdigest()
     elif config["adapter"] == "responses-http":
         constants["http_adapter_implementation_sha256"] = hashlib.sha256(
@@ -187,6 +191,17 @@ def run_exam(
                 prompt=prompt,
                 **evidence_options,
             )
+        elif checked_config["adapter"] == "agy":
+            from .native_agy import run_agy
+
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the native subscription adapter")
+            trial = run_agy(checked_packet, checked_config, condition, sources_url=sources_url, prompt=prompt,
+                            private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_AGY_PROVISIONING_DIR"),
+                            **evidence_options)
+            for field in ("binary_sha256", "native_controls_sha256"):
+                if trial["identity"].get(field) != capability.get(field):
+                    raise ExamError("native AGY controls changed after preflight")
         elif checked_config["adapter"] == "kimi":
             from .native_kimi import run_kimi
 
