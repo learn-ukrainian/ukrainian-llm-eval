@@ -6,7 +6,7 @@ Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report 
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through OpenRouter. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Compare the same configuration with and without controlled Sources MCP where the route supports both. Native Codex currently supports closed-book only; Gemini's controlled subscription route still needs validation. Unsupported assistance is not a zero score.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. Native Codex currently fails the fresh tool-isolation control; its Sources connection works in a local fixture but is not isolated. Gemini's controlled subscription route still needs validation. Admission failures are not zero scores.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
@@ -18,9 +18,9 @@ Within each suite, rank complete comparable results separately for closed-book a
 
 | Configuration | Closed-book | With Sources | Current status |
 | --- | --- | --- | --- |
-| GPT-6 Astra — low | Pending | Unsupported by current native adapter | Admission/pre-exam checks pending |
-| GPT-6 Astra — medium | Pending | Unsupported by current native adapter | Admission/pre-exam checks pending |
-| GPT-6 Astra — high | Pending | Unsupported by current native adapter | Admission/pre-exam checks pending |
+| GPT-6 Astra — low | Paused: isolation control failed | Paused: isolation incomplete | Native tool-surface controls require repair |
+| GPT-6 Astra — medium | Pending; paused for isolation repair | Pending; paused for isolation repair | Readiness not yet checked at this effort |
+| GPT-6 Astra — high | Pending; paused for isolation repair | Pending; paused for isolation repair | Readiness not yet checked at this effort |
 | Claude Fable 5.1 — low | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — medium | Pending | Pending | Exact native selector/admission checks pending |
 | Claude Fable 5.1 — high | Pending | Pending | Exact native selector/admission checks pending |
@@ -53,6 +53,21 @@ Denominator: **2,696 sentences in 166 documents**, using both reference annotato
 | Configuration | Closed-book rank / P, R, F0.5 | Sources rank / P, R, F0.5 | Paired difference (F0.5) | Repeats / document coverage | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | All planned configurations | Not ranked | Not ranked | Not measured | 0 completed primary repeats | None yet |
+
+## Current execution blocker — native Codex
+
+A local-only capture on 6 September 2026 used fresh empty homes, neutral working directories, a loopback Responses fixture and a synthetic MCP server. It supplied no credentials, made no provider inference call and used no scored exam material. Scope: GPT-6 Astra requested at low effort; medium/high readiness remains untested by this capture.
+
+| Check | Observed outcome | Admission consequence |
+| --- | --- | --- |
+| Existing closed-book control suite | Failed: unexpected collaboration and asynchronous-input tool descriptions; delegation injection did not establish an inert handler | No fresh closed-book control receipt issued |
+| Direct MCP call with Code Mode host disabled | MCP initialized and listed tools; direct reference call rejected | Connection startup alone does not establish usability |
+| Code Mode host enabled, synthetic reference call | Returned the synthetic reference marker | Connection works, but reference-only isolation remains unproven |
+| Code Mode nested tool inventory | Included `apply_patch`, a clock tool and MCP resource helpers alongside the allowed synthetic reference tool | Broader than the permitted reference allowlist; no Sources readiness claim |
+
+The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`. The successful synthetic-call capture SHA-256 is `b05725c7357a767f1c0e96638448c20e0a22def09d3695c9afad8912329e43ac`. These are local engineering observations; raw captures are retained privately and are not yet independently verifiable from a public evidence archive. They establish neither live subscription readiness nor language proficiency.
+
+Owner: evaluator release lead. Next action: resolve native tool isolation, retain controller-enforced Sources allowlist/call-cap evidence, and repeat both-mode synthetic admission for every selected configuration. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
 
 ## What Sources changes
 
