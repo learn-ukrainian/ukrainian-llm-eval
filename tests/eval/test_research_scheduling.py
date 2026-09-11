@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,28 @@ from ukrainian_llm_eval.request_budget import (
     request_budget_attempt_id,
 )
 from ukrainian_llm_eval.segmentation import derive_segment_plan
+
+
+@pytest.mark.parametrize("filename", [
+    "codex_catalog.py", "codex_reference.py", "codex_reference_bridge.py", "codex_reference_controls.py",
+    "native_agy.py", "agy_hook.py", "native_opencode.py", "opencode_gateway.py",
+])
+def test_native_control_change_invalidates_frozen_research_before_execution(monkeypatch, tmp_path, filename):
+    packets, plans, manifest, plan, configs = inputs()
+    original_read = Path.read_bytes
+
+    def changed_read(path):
+        data = original_read(path)
+        return data + b"\n# changed native control\n" if path.name == filename else data
+
+    monkeypatch.setattr(Path, "read_bytes", changed_read)
+    calls = []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+    root = tmp_path / "research"
+    with pytest.raises(ExamError, match="research controller implementation drift"):
+        list(scheduling.run_research(packets, plans, manifest, plan, configs, root, admission_probe=admit))
+    assert calls == []
+    assert not root.exists()
 
 
 def inputs(*, metered=False):
