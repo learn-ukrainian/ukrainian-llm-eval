@@ -54,6 +54,35 @@ unknown fit, unhealthy routes, insufficient credit, changed identity or limits,
 expired entitlement and unauthorized incremental new-money cost all fail
 closed.
 
+### Native subscriptions without a published expiry
+
+An integration may explicitly select `ukrainian-llm-eval.admission-result.v2`
+for `verified_subscription` routes. V1 is unchanged and still requires a future
+provider expiry. V2 adds `verification: "live_subscription"` to the frozen
+entitlement state and permits `valid_until: null` when the provider does not
+expose that date. A known date must still be honored. A credential expiry,
+quota reset, or locally chosen freshness deadline is never a substitute.
+
+V2 entitlement observations add `subscription_status: "active"`,
+`paid_fallback_enabled: false`, and `status_observed_at`. The trusted command
+must obtain these from current authenticated provider evidence and verified
+native billing controls for each admission request. The status observation
+must fall between that request's timestamp and the result's observation time,
+within the existing freshness window. Cached canary success, a configured
+subscription label, or a timestamp added to old account data is insufficient.
+Inactive/unknown status, enabled/unknown paid fallback, stale observations,
+identity drift, and an exposed expired entitlement fail. V2 is rejected for
+metered and existing-credit routes.
+
+The state hash changes when this mode is selected, so an existing frozen V1
+route cannot silently acquire the relaxed date representation. Separate
+operator authorization, pricing, capability, request/nonce binding and the
+experiment's spending ceiling still apply. The preserved admission result
+retains the explicit null expiry and verification mode; its hash remains bound
+by the normal receipt. These checks validate a trusted command's claims, not
+the honesty of arbitrary command code. Live provider integrations and their
+installed behavior require review before study admission.
+
 Admission binds the complete request-budget mechanism SHA-256 into its
 composite identity. Its receipt also retains the account identity and observed
 existing-credit balance needed by the request controller. Admission remains a

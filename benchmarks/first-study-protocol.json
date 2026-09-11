@@ -1,0 +1,388 @@
+{
+  "admission": "not granted by this protocol; live route claims and source/implementation/scorer bindings required by plan-research/run-research",
+  "budget": {
+    "includes_prior_canaries": true,
+    "ledger_reset": false,
+    "mode": "sequential_shared_cap",
+    "new_spend_cap_micro_usd": 10000000
+  },
+  "conditions": [
+    "closed-book",
+    "sources"
+  ],
+  "configs": {
+    "astra-high": {
+      "adapter": "codex",
+      "codex_bin": "codex",
+      "codex_tool_policy": "reference-only",
+      "corpus_id": "live-sources",
+      "effort": "high",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gpt-6-astra",
+      "provider": "managed:codex-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "astra-low": {
+      "adapter": "codex",
+      "codex_bin": "codex",
+      "codex_tool_policy": "reference-only",
+      "corpus_id": "live-sources",
+      "effort": "low",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gpt-6-astra",
+      "provider": "managed:codex-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "astra-medium": {
+      "adapter": "codex",
+      "codex_bin": "codex",
+      "codex_tool_policy": "reference-only",
+      "corpus_id": "live-sources",
+      "effort": "medium",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gpt-6-astra",
+      "provider": "managed:codex-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "fable-high": {
+      "adapter": "claude",
+      "corpus_id": "live-sources",
+      "effort": "high",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "claude-fable-5-1",
+      "provider": "managed:claude-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "fable-low": {
+      "adapter": "claude",
+      "corpus_id": "live-sources",
+      "effort": "low",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "claude-fable-5-1",
+      "provider": "managed:claude-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "fable-medium": {
+      "adapter": "claude",
+      "corpus_id": "live-sources",
+      "effort": "medium",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "claude-fable-5-1",
+      "provider": "managed:claude-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "gemini-high": {
+      "adapter": "agy",
+      "agy_bin": "agy",
+      "corpus_id": "live-sources",
+      "effort": "high",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gemini-3.8-flash-high",
+      "provider": "managed:antigravity-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "gemini-low": {
+      "adapter": "agy",
+      "agy_bin": "agy",
+      "corpus_id": "live-sources",
+      "effort": "low",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gemini-3.8-flash-low",
+      "provider": "managed:antigravity-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "gemini-medium": {
+      "adapter": "agy",
+      "agy_bin": "agy",
+      "corpus_id": "live-sources",
+      "effort": "medium",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "gemini-3.8-flash-medium",
+      "provider": "managed:antigravity-subscription",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "gemma-off": {
+      "adapter": "opencode",
+      "corpus_id": "live-sources",
+      "effort": null,
+      "endpoint_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_URL",
+      "key_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_KEY",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "google/gemma-4-31b-it",
+      "opencode_bin": "opencode",
+      "openrouter": {
+        "expected_provider_name": "Venice",
+        "provider_endpoint": "venice/bf16",
+        "reasoning_enabled": false
+      },
+      "provider": "openrouter",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    },
+    "gemma-on": {
+      "adapter": "opencode",
+      "corpus_id": "live-sources",
+      "effort": null,
+      "endpoint_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_URL",
+      "key_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_KEY",
+      "max_output_tokens": 4096,
+      "max_tool_calls": 20,
+      "model": "google/gemma-4-31b-it",
+      "opencode_bin": "opencode",
+      "openrouter": {
+        "expected_provider_name": "Venice",
+        "provider_endpoint": "venice/bf16",
+        "reasoning_enabled": true
+      },
+      "provider": "openrouter",
+      "repeats": 3,
+      "schema": "zno-nmt.config.v1",
+      "timeout_seconds": 300,
+      "tools": [
+        "verify_word",
+        "check_modern_form",
+        "get_chunk_context",
+        "query_pravopys",
+        "search_definitions",
+        "search_idioms",
+        "search_literary",
+        "search_style_guide",
+        "search_synonyms",
+        "search_text",
+        "verify_lemma",
+        "verify_stress",
+        "verify_words"
+      ]
+    }
+  },
+  "configuration_status": "prepared for review; concrete common suite limits must be covered by route admission and installed controls",
+  "failure": "preserve every attempt; no retry, answer repair or best-repeat selection; failed segment stops its cell; incomplete cells receive no primary score",
+  "integrity_stop": "identity, tools, implementation, session, admission or spending drift stops the experiment",
+  "ordering": "existing canonical scheduler; paired condition order counterbalanced across repeats",
+  "protocol": "benchmark-segmentation.v1",
+  "repeats": 3,
+  "review": "operator-arranged whole-codebase Gemini review before main integration and scored execution",
+  "scoring": "NMT official points; ULP exact-option accuracy; UA-GEC full-corpus official-compatible F0.5 with both annotators; no cross-suite aggregate",
+  "sources": "live reference-only tools; no snapshots required; archive observed calls privately; disclose corpus overlap and change",
+  "study": "first-ukrainian-study",
+  "suites": {
+    "nmt-2022-demo-ukrainian": {
+      "denominator": {
+        "items": 20,
+        "matching": 5,
+        "points": 35,
+        "single_choice": 15
+      },
+      "limits": {
+        "max_output_tokens": 4096,
+        "max_tool_calls": 20,
+        "timeout_seconds": 300
+      },
+      "segments": 20
+    },
+    "ua-gec-public-gec-only-test": {
+      "denominator": {
+        "documents": 166,
+        "sentences": 2696,
+        "tokens": 43603
+      },
+      "limits": {
+        "max_output_tokens": 16384,
+        "max_tool_calls": 20,
+        "timeout_seconds": 600
+      },
+      "segments": 166
+    },
+    "ulp": {
+      "denominator": {
+        "items": 347,
+        "points": 347
+      },
+      "limits": {
+        "max_output_tokens": 4096,
+        "max_tool_calls": 20,
+        "timeout_seconds": 300
+      },
+      "segments": 347
+    }
+  }
+}

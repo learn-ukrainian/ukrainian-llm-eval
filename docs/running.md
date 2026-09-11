@@ -361,6 +361,15 @@ For endpoints that support JSON-object mode but not JSON Schema, set
 returned answer IDs and structure locally; this setting changes the provider
 request format, not the scoring contract. The default remains `json_schema`.
 
+For `chat-http` endpoints where provider JSON constraints interfere with tool
+calling, `http_response_format: "text"` omits `response_format` from every
+request, including tool follow-ups. The prompt still requests the same JSON
+answer, and local validation still rejects malformed JSON or unexpected answer
+IDs. Tool selection remains automatic; this option does not force a lookup or
+retry a failed answer. Record it as a distinct configuration and validate the
+route before study admission. The `responses-http` adapter does not support
+this option.
+
 An OpenRouter route can freeze these explicit controls:
 
 ```json

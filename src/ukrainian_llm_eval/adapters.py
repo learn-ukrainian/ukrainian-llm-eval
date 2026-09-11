@@ -121,6 +121,14 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise AdapterError("configuration must be an object")
     adapter = config.get("adapter")
+    if adapter == "opencode":
+        from .native_opencode import validate_config as validate_opencode_config
+
+        return validate_opencode_config(config)
+    if adapter == "agy":
+        from .native_agy import validate_config as validate_agy_config
+
+        return validate_agy_config(config)
     if adapter == "kimi":
         from .native_kimi import validate_config as validate_kimi_config
 
@@ -186,7 +194,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         if key_env is not None and (not isinstance(key_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", key_env)):
             raise AdapterError("configuration key_env must be an environment variable name or null")
         http_format = config.get("http_response_format", "json_schema")
-        if not isinstance(http_format, str) or http_format not in {"json_schema", "json_object"}:
+        http_formats = {"json_schema", "json_object", "text"} if adapter == "chat-http" else {"json_schema", "json_object"}
+        if not isinstance(http_format, str) or http_format not in http_formats:
             raise AdapterError("configuration HTTP response format is unsupported")
         if "openrouter" in config:
             routing = config["openrouter"]
@@ -250,6 +259,15 @@ def _claude_capabilities(config: Mapping[str, Any], *, needs_sources: bool = Fal
 def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None = None) -> dict[str, Any]:
     """Check only capability and boundaries, returning no endpoint/key values."""
     checked = validate_config(config)
+    if checked["adapter"] == "opencode":
+        from .native_opencode import preflight as opencode_preflight
+
+        return opencode_preflight(checked, condition, sources_url)
+    if checked["adapter"] == "agy":
+        from .native_agy import preflight as agy_preflight
+
+        return agy_preflight(checked, condition, sources_url,
+                             private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_AGY_PROVISIONING_DIR"))
     if checked["adapter"] == "kimi":
         from .native_kimi import preflight as kimi_preflight
 
@@ -879,6 +897,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, output_parameter: checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
     if checked.get("http_response_format") == "json_object":
         request_base["response_format"] = {"type": "json_object"}
+    elif checked.get("http_response_format") == "text":
+        del request_base["response_format"]
     routing = checked.get("openrouter")
     if routing is not None:
         request_base["provider"] = {"only": [routing["provider_endpoint"]], "allow_fallbacks": False, "require_parameters": True}

@@ -80,6 +80,12 @@ account-charge evidence leaves the full segment reservation unresolved.
 
 ## Conservative final-usage settlement
 
+The broader spending-policy.v2 also accepts authoritative-charge v2 request
+mechanisms, including a run containing only those routes. They can reuse the
+same shared ledger as v3 routes. Each mechanism retains its own settlement
+requirements: a v2 reservation still needs authoritative account charges;
+the broader policy does not permit settling it from usage alone.
+
 The strict `ukrainian-llm-eval.request-budget-mechanism.v3` schema extends the
 v2 provider bounds without changing v1 or v2 receipts. Its cost path, kind, and
 scope must all be `null`. A manifest using it must select

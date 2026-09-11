@@ -15,7 +15,7 @@ from .runner import run_exam
 
 def route_fingerprint(config: Mapping[str, Any], sources_url: str | None) -> str:
     """Bind resolved endpoints without retaining their text or credentials."""
-    completion = os.environ.get(str(config.get("endpoint_env"))) if config.get("adapter") in {"chat-http", "responses-http"} else None
+    completion = os.environ.get(str(config.get("endpoint_env"))) if config.get("adapter") in {"chat-http", "responses-http", "opencode"} else None
     return digest({"sources": sources_url, "completion": completion})
 
 
