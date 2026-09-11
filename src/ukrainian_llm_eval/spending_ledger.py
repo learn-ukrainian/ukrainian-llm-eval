@@ -200,6 +200,104 @@ class SharedSpendingLedger:
             "reservation_count": int(count),
         }
 
+    @classmethod
+    def inspect_readiness(
+        cls, path: Path, *, ledger_id: str, cap_micro_usd: int,
+    ) -> dict[str, Any]:
+        """Validate one existing rollback-journal snapshot without any initialization.
+
+        WAL databases are rejected: a nominally read-only SQLite connection may
+        create or update shared-memory sidecars. Immutable mode is deliberately
+        not used because it can ignore committed journal state.
+        """
+
+        path = Path(path)
+        ledger_id = _identifier(ledger_id, "spending ledger ID")
+        cap = _integer(cap_micro_usd, "spending cap")
+        if not path.is_absolute():
+            raise SpendingLedgerError("spending ledger path must be absolute")
+        try:
+            for entry, mode, directory in ((path.parent, 0o700, True), (path, 0o600, False)):
+                status = os.lstat(entry)
+                valid_type = stat.S_ISDIR(status.st_mode) if directory else stat.S_ISREG(status.st_mode)
+                if (
+                    not valid_type or stat.S_IMODE(status.st_mode) != mode
+                    or (hasattr(os, "getuid") and status.st_uid != os.getuid())
+                    or (not directory and status.st_nlink != 1)
+                ):
+                    raise SpendingLedgerError("readiness requires an existing private spending ledger")
+            with path.open("rb") as source:
+                header = source.read(100)
+            if len(header) != 100 or header[:16] != b"SQLite format 3\x00":
+                raise SpendingLedgerError("corrupt spending ledger header")
+            if header[18:20] != b"\x01\x01":
+                raise SpendingLedgerError("read-only readiness requires rollback-journal ledger mode")
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None)) as connection:
+                connection.row_factory = sqlite3.Row
+                connection.execute("BEGIN")
+                if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
+                    raise SpendingLedgerError("read-only readiness requires rollback-journal ledger mode")
+                if [row[0] for row in connection.execute("PRAGMA integrity_check")] != ["ok"]:
+                    raise SpendingLedgerError("corrupt spending ledger")
+                identity = connection.execute("SELECT * FROM ledger").fetchall()
+                if len(identity) != 1 or tuple(identity[0]) != (1, LEDGER_SCHEMA, ledger_id, cap):
+                    raise SpendingLedgerError("shared spending ledger identity or cap drift")
+                rows = [dict(row) for row in connection.execute(
+                    "SELECT reservation_id, binding_sha256, funding_kind, account_sha256, "
+                    "maximum_micro_usd, state, settled_micro_usd, settlement_evidence_sha256, "
+                    "credit_reconciliation_sha256, settlement_kind FROM reservations ORDER BY reservation_id"
+                )]
+                settled, unresolved = cls._totals(connection)
+                credits: dict[str, int] = {}
+                ids: set[str] = set()
+                for row in rows:
+                    reservation_id = _identifier(row["reservation_id"], "reservation ID")
+                    if reservation_id in ids:
+                        raise SpendingLedgerError("duplicate shared reservation")
+                    ids.add(reservation_id)
+                    _sha(row["binding_sha256"], "reservation binding")
+                    account = _sha(row["account_sha256"], "account identity")
+                    maximum = _integer(row["maximum_micro_usd"], "maximum reservation")
+                    if row["funding_kind"] not in {"metered", "existing_credit"}:
+                        raise SpendingLedgerError("unsupported shared-ledger funding kind")
+                    if row["state"] == "unresolved":
+                        if any(row[key] is not None for key in (
+                            "settled_micro_usd", "settlement_evidence_sha256",
+                            "settlement_kind", "credit_reconciliation_sha256",
+                        )):
+                            raise SpendingLedgerError("unresolved reservation has settlement data")
+                        retained = maximum
+                    elif row["state"] == "settled":
+                        retained = _integer(row["settled_micro_usd"], "settled charge")
+                        if retained > maximum:
+                            raise SpendingLedgerError("settled amount exceeds reserved worst case")
+                        _sha(row["settlement_evidence_sha256"], "settlement evidence")
+                        if row["settlement_kind"] not in {
+                            "authoritative_account_charge", "conservative_final_usage_upper_bound",
+                        }:
+                            raise SpendingLedgerError("unsupported shared reservation settlement kind")
+                        if row["credit_reconciliation_sha256"] is not None:
+                            _sha(row["credit_reconciliation_sha256"], "credit reconciliation evidence")
+                            if row["funding_kind"] != "existing_credit":
+                                raise SpendingLedgerError("metered reservation has credit reconciliation")
+                            retained = 0
+                    else:
+                        raise SpendingLedgerError("invalid shared reservation state")
+                    if row["funding_kind"] == "existing_credit":
+                        credits[account] = credits.get(account, 0) + retained
+                if settled + unresolved > cap:
+                    raise SpendingLedgerError("shared spending commitments exceed authorized cap")
+                return {
+                    "schema": LEDGER_SCHEMA, "ledger_id": ledger_id, "cap_micro_usd": cap,
+                    "settled_new_spend_upper_bounds_micro_usd": settled,
+                    "unresolved_new_spend_micro_usd": unresolved,
+                    "remaining_new_spend_micro_usd": cap - settled - unresolved,
+                    "reservation_count": len(rows), "reservations_sha256": digest(rows),
+                    "credit_commitments_micro_usd": credits,
+                }
+        except (OSError, sqlite3.Error) as exc:
+            raise SpendingLedgerError("existing spending ledger is missing, corrupt, or unreadable") from exc
+
     def reserve(
         self,
         reservation_id: str,
