@@ -1102,10 +1102,10 @@ class RequestBudgetController:
                 ):
                     raise ExamError("route input billing bound is below documented provider-context commitment")
                 if any(
-                    suite["limits"]["max_output_tokens"] != output["max_tokens_per_request"]
+                    suite["limits"]["max_output_tokens"] > output["max_tokens_per_request"]
                     for suite in manifest["suites"]
                 ):
-                    raise ExamError("provider output bound differs from frozen suite output parameter")
+                    raise ExamError("frozen suite output parameter exceeds provider output bound")
                 if mechanism["pricing_evidence_sha256"] != route["pricing_evidence_sha256"]:
                     raise ExamError("provider-bound pricing evidence drift")
                 if (

@@ -7,8 +7,13 @@ import sqlite3
 import pytest
 from test_request_budget import _provider_bound_values
 
-from ukrainian_llm_eval.core import ExamError
-from ukrainian_llm_eval.request_budget import RequestBudgetController
+from ukrainian_llm_eval.core import ExamError, digest
+from ukrainian_llm_eval.evidence import EvidenceStore
+from ukrainian_llm_eval.request_budget import (
+    RequestBudgetController,
+    RequestBudgetError,
+    verify_request_budget_evidence,
+)
 from ukrainian_llm_eval.spending_ledger import SharedSpendingLedger, SpendingLedgerError
 
 
@@ -177,3 +182,87 @@ def test_inspection_uses_one_readonly_transaction(tmp_path, prepared, monkeypatc
     assert all('=' not in query for query in statements if query.startswith('PRAGMA'))
     with pytest.raises(sqlite3.ProgrammingError, match='closed'):
         connections[0].execute('SELECT 1')
+
+
+def mixed_output_controller(tmp_path, usage_bound, *, suite_outputs=(4096, 16384)):
+    fixture = tmp_path / 'fixture'
+    fixture.mkdir()
+    route, config, original, _ = _provider_bound_values(fixture, usage_bound=usage_bound)
+    spec = copy.deepcopy(original._raw_route_specs['fixture'])
+    spec['mechanism']['output_parameter']['max_tokens_per_request'] = 16384
+    route['request_budget_mechanism_sha256'] = digest(spec['mechanism'])
+    route['billing']['max_total_output_tokens'] = 3 * 16384
+    policy = copy.deepcopy(original._spending_policy)
+    policy['authorized_cap_micro_usd'] = 100_000
+    controller = RequestBudgetController({'fixture': spec}, shared_ledger_path=tmp_path / 'shared' / 'budget.db')
+    maximum = route['billing']['max_total_input_tokens'] + 3 * 16384 + 6
+    controller.prepare({
+        'routes': [route], 'spending_policy': policy,
+        'suites': [{'limits': {'max_tool_calls': 2, 'max_output_tokens': output}} for output in suite_outputs],
+    }, {'cells': [{'route_id': 'fixture', 'segments': [{'reserved_micro_usd': maximum}]}]})
+    return route, config, controller, maximum
+
+
+@pytest.mark.parametrize('usage_bound', [False, True], ids=['v2', 'v3'])
+def test_mixed_suite_output_limit_above_provider_bound_rejects_before_binding(tmp_path, usage_bound, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail('invalid preparation reached admission or execution')
+
+    monkeypatch.setattr('ukrainian_llm_eval.request_budget.invoke_admission', forbidden)
+    # The reusable fixture is synthetic execution evidence; only the newly
+    # prepared controller's root must remain absent when its suite is too large.
+    with pytest.raises(ExamError, match='suite output parameter exceeds provider output bound'):
+        mixed_output_controller(tmp_path, usage_bound, suite_outputs=(4096, 16385))
+    assert not (tmp_path / 'shared').exists()
+
+
+@pytest.mark.parametrize('usage_bound', [False, True], ids=['v2', 'v3'])
+def test_smaller_suite_enforces_payload_and_usage_caps_and_retains_failed_reservation(tmp_path, usage_bound):
+    route, config, controller, maximum = mixed_output_controller(tmp_path, usage_bound)
+    config['max_output_tokens'] = 4096
+    root = tmp_path / 'run'
+    root.mkdir()
+    controller.bind(root)
+    budget = controller.for_attempt(route, config, 'mixed-failed',
+                                    {'credit_available_micro_usd': None, 'account_sha256': 'c' * 64},
+                                    reservation_id='mixed-failed', reservation_binding={})
+    with pytest.raises(RequestBudgetError, match='output parameter differs'):
+        budget.commit_request({'max_tokens': 16384})
+    assert budget.rounds == 0
+    _, committed = budget.commit_request({'max_tokens': 4096})
+    assert committed['cumulative_output_tokens_reserved'] == 4096
+    with pytest.raises(RequestBudgetError, match='output exceeds committed bound'):
+        budget.observe({'prompt_tokens': 11, 'completion_tokens': 4097, 'cost': '0.00001'}, tool_calls=0)
+    budget.finalize('failed')
+    retained = controller._shared_ledger.get('mixed-failed')
+    assert retained['state'] == 'unresolved'
+    assert retained['maximum_micro_usd'] == maximum
+    assert controller._shared_ledger.snapshot()['remaining_new_spend_micro_usd'] == 100_000 - maximum
+
+
+@pytest.mark.parametrize('usage_bound', [False, True], ids=['v2', 'v3'])
+@pytest.mark.parametrize('suite_output', [4096, 16384], ids=['smaller', 'equal'])
+def test_mixed_suite_limits_preserve_whole_reservation_settlement_and_verification(
+    tmp_path, usage_bound, suite_output,
+):
+    route, config, controller, maximum = mixed_output_controller(tmp_path, usage_bound)
+    config['max_output_tokens'] = suite_output
+    root = tmp_path / 'run'
+    root.mkdir()
+    controller.bind(root)
+    budget = controller.for_attempt(route, config, 'mixed-complete',
+                                    {'credit_available_micro_usd': None, 'account_sha256': 'c' * 64},
+                                    reservation_id='mixed-complete', reservation_binding={})
+    assert controller._shared_ledger.get('mixed-complete')['maximum_micro_usd'] == maximum
+    assert controller._shared_ledger.snapshot()['remaining_new_spend_micro_usd'] == 100_000 - maximum
+    _, committed = budget.commit_request({'max_tokens': suite_output})
+    assert committed['cumulative_output_tokens_reserved'] == suite_output
+    budget.observe({'prompt_tokens': 11, 'completion_tokens': 5, 'cost': '0.00001'}, tool_calls=0)
+    receipt = budget.finalize('completed')
+    settled = controller._shared_ledger.get('mixed-complete')
+    assert settled['state'] == 'settled'
+    assert settled['settled_micro_usd'] == (24 if usage_bound else 10)
+    assert settled['maximum_micro_usd'] == maximum
+    evidence = EvidenceStore(root / 'request-budget-evidence').verify(receipt['attempt_id'])
+    candidate = {'status': 'ok', 'identity': {'request_budget_receipt_sha256': digest(evidence)}}
+    verify_request_budget_evidence(evidence, route, config, 'mixed-complete', candidate)
