@@ -62,7 +62,7 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
     runner_source = Path(__file__).read_bytes()
     proxy_source = Path(adapters.__file__).with_name("mcp_proxy.py").read_bytes()
     route: dict[str, Any] = {"provider": config.get("provider"), "adapter": config["adapter"]}
-    if config["adapter"] in {"chat-http", "responses-http"}:
+    if config["adapter"] in {"chat-http", "responses-http", "opencode"}:
         endpoint_env = config["endpoint_env"]
         route["endpoint_env_sha256"] = digest(endpoint_env)
         endpoint = os.environ.get(endpoint_env)
@@ -87,7 +87,13 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
         "route": route,
     }
-    if config["adapter"] in {"kimi", "codex"}:
+    if config["adapter"] == "opencode":
+        constants["openrouter"] = config["openrouter"]
+        for filename in ("native_opencode.py", "opencode_gateway.py"):
+            constants[filename + "_sha256"] = hashlib.sha256(
+                Path(adapters.__file__).with_name(filename).read_bytes()
+            ).hexdigest()
+    elif config["adapter"] in {"kimi", "codex"}:
         constants["native_adapter_implementation_sha256"] = hashlib.sha256(
             Path(adapters.__file__).with_name(f"native_{config['adapter']}.py").read_bytes()
         ).hexdigest()
@@ -200,6 +206,16 @@ def run_exam(
             for field in ("binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256"):
                 if trial["identity"].get(field) != capability.get(field):
                     raise ExamError("native Kimi configuration changed after preflight")
+        elif checked_config["adapter"] == "opencode":
+            from .native_opencode import run_opencode
+
+            trial = run_opencode(
+                checked_packet, checked_config, condition, sources_url=sources_url, prompt=prompt,
+                request_budget=request_budget, **evidence_options,
+            )
+            for field in ("binary_sha256", "cli_version"):
+                if trial["identity"].get(field) != capability.get(field):
+                    raise ExamError("native OpenCode changed after preflight")
         elif checked_config["adapter"] == "codex":
             from .native_codex import run_codex
 
