@@ -307,8 +307,8 @@ schema. It contains:
   `current_subscription_endpoint_verified`,
   `all_additional_charge_paths_excluded`, `api_credentials_excluded`,
   `native_control_enforcement_verified`, `capacity_source_verified`,
-  `byte_token_upper_bound_verified`, `initial_history_verified`, and
-  `output_headroom_verified`, all boolean true and backed by the frozen
+  `byte_token_upper_bound_verified` and `initial_history_verified`,
+  all boolean true and backed by the frozen
   reviewed artifacts. `framing_tokens` is a positive reviewed upper bound for
   all native/system/developer/tool-schema/setup framing;
   `initial_history_tokens` is a nonnegative bound covering only history actually
@@ -316,17 +316,29 @@ schema. It contains:
   messages. Explicit reviewed evidence must substantiate the bound; zero does
   not follow merely from a fresh process. The previous private
   `permitted_history_tokens` field is rejected rather than reinterpreted.
-- `context_window_tokens` is the source-reviewed combined input/output window;
+- `input_capacity_basis` is an explicit private discriminator. For
+  `combined_window`, `context_window_tokens` is the source-reviewed combined
+  input/output window and `output_headroom_verified` must be true;
   `output_headroom_tokens` is positive, source-reviewed safe output headroom.
   It must cover at least capability `max_output_tokens`, but that inequality
   alone is not proof. When native output enforcement is unknown, reserve the
   actual runtime/model maximum output allowance or otherwise proven safe
   headroom, never merely the requested suite output cap. Available input must
   satisfy `0 < context_input_tokens <= context_window_tokens - output_headroom_tokens`.
-  This collector currently represents combined-window evidence only. A source
-  documenting net input capacity separately cannot be relabeled as a combined
-  window; that evidence representation remains unsupported, which does not
-  establish provider incapacity.
+- For `input_capacity_basis: native_usable_input`, bind original native
+  `context_window_tokens`, integer `effective_context_window_percent` (1–100),
+  and `native_usable_input_verified: true` to exact model/runtime source evidence.
+  That source must define usable input after native system/tool/output reserves.
+  The bound is `floor(context_window_tokens * effective_context_window_percent / 100)`;
+  capability input cannot exceed it. Do not subtract output again or invent a
+  separate numeric headroom. This variant forbids both `output_headroom_*`
+  fields; combined-window evidence forbids the native percentage/proof fields.
+  Missing or mixed interpretations fail closed. For example, a verified native
+  entry of 272,000 at 95% yields 258,400 usable input tokens. This says nothing
+  about a separate maximum-output guarantee or effective output enforcement;
+  supported-output checks remain separate. Do not relabel unrelated net-input
+  documentation as a combined window or as this native percentage interpretation.
+
 
 These declarations are **not proof by themselves**. The independent review
 must inspect the referenced bytes and demonstrate that the exact model/runtime

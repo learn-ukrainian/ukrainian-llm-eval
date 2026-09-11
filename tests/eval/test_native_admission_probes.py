@@ -48,7 +48,7 @@ def config():
 
 def support():
     return {"conditions": ["closed_book", "sources"], "framing_tokens": 50, "initial_history_tokens": 200,
-            "initial_history_verified": True, "context_window_tokens": 1600,
+            "initial_history_verified": True, "input_capacity_basis": "combined_window", "context_window_tokens": 1600,
             "output_headroom_tokens": 400, "output_headroom_verified": True}
 
 
@@ -738,3 +738,54 @@ def test_agy_rpc_disables_proxy_and_rejects_redirect_response(monkeypatch):
     monkeypatch.setattr(agy.urllib.request, "build_opener", opener)
     with pytest.raises(common.ProbeError, match="native_response_rejected"):
         child.rpc(("[::1]", 12), "GetUserStatus", {})
+
+
+
+def native_input_support():
+    supp = support()
+    del supp["output_headroom_tokens"]
+    del supp["output_headroom_verified"]
+    supp.update(input_capacity_basis="native_usable_input", context_window_tokens=272000,
+                effective_context_window_percent=95, native_usable_input_verified=True)
+    return supp
+
+
+def test_native_usable_input_exact_source_derivation_without_double_subtraction():
+    cfg, supp = config(), native_input_support()
+    cfg["capability"]["context_input_tokens"] = 258400
+    cfg["capability"]["max_output_tokens"] = 1000000  # Independent supported-output semantics.
+    assert probe.initial_capacity(cfg["capability"], supp) == (50, 200, 258400)
+    cfg["capability"]["context_input_tokens"] += 1
+    with pytest.raises(common.ProbeError, match="native_input_capacity_invalid"):
+        probe.initial_capacity(cfg["capability"], supp)
+
+
+@pytest.mark.parametrize("percent", [None, 0, 101, True, 95.0])
+def test_native_usable_input_rejects_unknown_or_invalid_percent(percent):
+    supp = native_input_support()
+    supp["effective_context_window_percent"] = percent
+    with pytest.raises(common.ProbeError):
+        probe.initial_capacity(config()["capability"], supp)
+
+
+@pytest.mark.parametrize("field,value", [("output_headroom_tokens", 400), ("output_headroom_verified", True)])
+def test_native_input_cannot_mix_combined_window_fields(field, value):
+    supp = native_input_support()
+    supp[field] = value
+    with pytest.raises(common.ProbeError, match="input_capacity_basis_conflict"):
+        probe.initial_capacity(config()["capability"], supp)
+
+
+def test_native_input_semantics_need_reviewed_source_and_explicit_basis():
+    supp = native_input_support()
+    supp["native_usable_input_verified"] = False
+    with pytest.raises(common.ProbeError, match="support_proof_unavailable"):
+        probe.initial_capacity(config()["capability"], supp)
+    for basis in (None, "unknown"):
+        supp["input_capacity_basis"] = basis
+        with pytest.raises(common.ProbeError, match="input_capacity_basis_unknown"):
+            probe.initial_capacity(config()["capability"], supp)
+    supp = support()
+    supp["effective_context_window_percent"] = 95
+    with pytest.raises(common.ProbeError, match="input_capacity_basis_conflict"):
+        probe.initial_capacity(config()["capability"], supp)

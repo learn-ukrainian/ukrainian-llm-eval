@@ -120,7 +120,7 @@ def support_for(config, base):
     for key in ("current_subscription_endpoint_verified", "all_additional_charge_paths_excluded",
                 "api_credentials_excluded", "native_control_enforcement_verified",
                 "capacity_source_verified", "byte_token_upper_bound_verified",
-                "initial_history_verified", "output_headroom_verified"):
+                "initial_history_verified"):
         if support.get(key) is not True:
             fail("support_proof_unavailable")
     initial_capacity(config["capability"], support)
@@ -128,22 +128,37 @@ def support_for(config, base):
 
 
 def initial_capacity(capability, support):
-    """Validate reviewed initial history and combined-window/output semantics."""
+    """Validate reviewed initial history and discriminated native input semantics."""
     if "permitted_history_tokens" in support:
         fail("legacy_history_bound_rejected")
-    if (support.get("initial_history_verified") is not True
-            or support.get("output_headroom_verified") is not True):
+    if support.get("initial_history_verified") is not True:
         fail("support_proof_unavailable")
     history = integer(support.get("initial_history_tokens"))
     framing = integer(support.get("framing_tokens"), 1)
     window = integer(support.get("context_window_tokens"), 1)
-    headroom = integer(support.get("output_headroom_tokens"), 1)
     available_input = integer(capability["context_input_tokens"], 1)
-    # Headroom is source-reviewed maximum runtime output, not a request cap.
-    # context_input_tokens is already net; never subtract headroom from it.
-    if (headroom < integer(capability["max_output_tokens"], 1)
-            or headroom >= window or available_input > window - headroom):
-        fail("output_headroom_invalid")
+    basis = support.get("input_capacity_basis")
+    if basis == "combined_window":
+        if {"effective_context_window_percent", "native_usable_input_verified"} & support.keys():
+            fail("input_capacity_basis_conflict")
+        if support.get("output_headroom_verified") is not True:
+            fail("support_proof_unavailable")
+        headroom = integer(support.get("output_headroom_tokens"), 1)
+        if (headroom < integer(capability["max_output_tokens"], 1)
+                or headroom >= window or available_input > window - headroom):
+            fail("output_headroom_invalid")
+    elif basis == "native_usable_input":
+        if {"output_headroom_tokens", "output_headroom_verified"} & support.keys():
+            fail("input_capacity_basis_conflict")
+        if support.get("native_usable_input_verified") is not True:
+            fail("support_proof_unavailable")
+        percent = integer(support.get("effective_context_window_percent"), 1)
+        if percent > 100 or available_input > window * percent // 100:
+            fail("native_input_capacity_invalid")
+        # Source-defined usable input already reserves native headroom. It is
+        # not a separate numeric output guarantee; do not subtract output again.
+    else:
+        fail("input_capacity_basis_unknown")
     return framing, history, available_input
 
 
