@@ -6,6 +6,9 @@ This project is under development toward its first release. It does not yet publ
 
 The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, AGY Gemini, and controlled Codex execution, Gemma through native OpenCode/OpenRouter, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
+The [first-study preparation](docs/first-study.md) records the selected model matrix,
+complete source denominators, concrete per-suite limits and remaining launch checks.
+
 ## Development installation
 
 Requires Python 3.11 or newer. Validation targets Linux and macOS; Windows behavior is unverified. From a clean clone:

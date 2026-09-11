@@ -2,15 +2,27 @@
 
 ## TL;DR
 
-Updated: 6 September 2026. Owner: the evaluator release lead. Tracking: [report maintenance #24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24), [public study #6](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/6).
+Updated: 11 September 2026. Owner: the evaluator release lead. Tracking: [report maintenance #24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24), [public study #6](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/6).
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through native OpenCode and its OpenRouter provider. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini now passes six native AGY canaries, and Gemma passes four native OpenCode canaries; the draft implementations and formal study admission still need independent review. Admission failures are not zero scores.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The following live-canary observations are from 6 September; fresh local controls on 11 September are recorded below, and do not renew live admission. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini now passes six native AGY canaries, and Gemma passes four native OpenCode canaries; the draft implementations and formal study admission still need independent review. Admission failures are not zero scores.
 - Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
 - The requested native routes now pass: Gemma **4/4** through OpenCode/OpenRouter and Gemini **6/6** through AGY, including one completed lookup in every Sources case. Earlier direct-HTTP Gemma failures and native transport failures remain preserved. Conservative total Gemma charges across all attempts are **$0.005214**; no scored exams started.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
+
+## Integrated preparation for review — 11 September 2026
+
+[Draft PR #36](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/36) combines the six outstanding implementation/report branches into one reviewable tree. The operator will arrange Gemini's whole-codebase review. No independent verdict or merge is claimed by this preparation.
+
+The integrated code passes **599 tests** and Ruff. Research identity now includes every newly integrated native adapter and tool-control module; eight mutation checks reject a changed implementation before execution. The explicit V2 live-subscription admission form preserves unknown expiry and requires fresh active status with disabled paid fallback, while V1 retains its expiry requirement. Its tests establish validation behavior, not live provider entitlement.
+
+A clean wheel installation passed **58 local native control cases**: Codex 27, AGY 15, OpenCode/Gemma 4, and Claude 12. These use loopback model fixtures with dummy credentials. They include valid answers/reference round trips and applicable denial, call-cap, schema-drift and ambient-instruction checks. Codex was now `0.154.0`; older live canaries are not evidence for that changed binary. No real candidate inference or scored exam ran in these checks.
+
+All **206** preserved source-preparation files matched their archive checksums. Fresh installed-package reconstruction reproduced all three complete source manifests exactly. The [prepared study](first-study.md) covers **11 configurations, 198 cells and 35,178 segment sessions**, with separate runtime and scoring maps and the original full denominators. This is a prepared inventory, not an executable admitted experiment: live admission commands, authorization/budget maps and current runtime proof still need to be bound.
+
+Linux CI passed the pinned scorer build and all six parity cases. Local Docker image inspection succeeded, but executing its amd64 Python returned `exec format error` on this arm64 host. The image was not altered; local scoring requires working emulation or a verified Linux host. Prior source/scorer evidence and the failed local check remain preserved.
 
 ## Leaderboards
 
@@ -81,7 +93,7 @@ A local-only capture on 6 September 2026 used fresh empty homes, neutral working
 
 The capture identifies CLI `0.153.4`, native-runtime SHA-256 `b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3`. The successful synthetic-call capture SHA-256 is `b05725c7357a767f1c0e96638448c20e0a22def09d3695c9afad8912329e43ac`. These are local engineering observations; raw captures are retained privately and are not yet independently verifiable from a public evidence archive. They establish neither live subscription readiness nor language proficiency.
 
-Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. Review delegation remains paused under the operator's no-subagents instruction. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
+Owner: evaluator release lead. Next action: obtain independent exact-head review of the draft implementation, then complete live admission/readiness for every selected configuration in both conditions. The operator will arrange the integrated whole-codebase Gemini review after preparation. Track implementation in [#26](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/26). No scored runs may proceed while the all-model readiness gate is incomplete.
 
 ## Native Claude execution controls
 
