@@ -26,7 +26,16 @@ Linux CI passed the pinned scorer build and all six parity cases. Local Docker i
 
 [PR #38](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/38) adds admission-only launch checks and provider status collectors. These changes need their own final exact-head review. Read-only native status diagnostics have observed the selected subscription accounts and available quota; diagnostic observations are not nonce-bound admission receipts. Complete reviewed framing/capacity evidence and fresh command bindings remain necessary before the 198-cell readiness check can pass.
 
-The selected Gemma `venice/bf16` endpoint currently reports an 8,192-token completion maximum, below the frozen GEC requirement of 16,384. No cap reduction, backend substitution or scored evaluation has been made. The evaluator lead owns the remaining readiness work, including an explicit operator decision on that conflict and restoration of the pinned local scorer. The current operator goal stops before Ukrainian scored execution; results and release remain later work.
+The operator selected Google AI Studio's free Gemma route through OpenRouter
+and native OpenCode, accepting unknown precision. The earlier Venice output
+limit conflict remains historical evidence. The native free-route synthetic attempt reached Google AI Studio and received
+HTTP 429 with an upstream rate-limit diagnostic. No successful free canary is
+claimed. The existing key can list batches. Eight real-CLI loopback batch controls
+passed, covering reasoning off/on, both conditions and both suite output
+limits. These use synthetic provider responses; live batch compatibility and
+fresh readiness bindings remain pending. The evaluator lead owns the remaining readiness
+work. The current operator goal stops before Ukrainian scored execution;
+results and release remain later work.
 
 ## Leaderboards
 

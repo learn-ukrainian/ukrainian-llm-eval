@@ -11,16 +11,20 @@ each complete suite: **198 cells and 35,178 segment sessions**. Tool rounds and
 native auxiliary requests can produce additional model requests; this session
 count is not a request count or cost estimate.
 
-Both Gemma configurations select the full `google/gemma-4-31b-it` model through
-OpenRouter's `novita/bf16` backend. BF16 is the provider's reported precision,
-not independent inspection of its weights. Admission rejects missing or changed
-precision, and requests disable provider fallback. The configured price ceilings
-are $0.14 per million input tokens, $0.40 per million output tokens, and no
-per-request fee; the existing shared $10 spending cap remains unchanged. This
-operator-approved route replaces Venice, whose advertised 8,192-token output
-limit did not support the common GEC allowance below. Preserve old Venice
-canaries as historical evidence and obtain fresh Novita controls and canaries;
-changing the configuration alone does not establish launch readiness.
+Both Gemma configurations select `google/gemma-4-31b-it:free` through
+OpenRouter's `google-ai-studio` backend, using native OpenCode. The operator
+accepts unknown precision for this route. Requests disable provider fallback
+and set input, output and per-request price ceilings to zero. The existing
+shared $10 spending ledger and all earlier commitments remain unchanged.
+Free access depends on current availability and quota; fresh native canaries
+must establish whether this route works.
+
+If free access is unavailable, the operator has selected the OpenRouter batch
+variant as the fallback. That variant uses an asynchronous Batch API and a
+Together backend, so it requires its own execution path and fresh route,
+pricing and accounting bindings. It is not an automatic provider fallback
+inside an OpenCode request. Preserve earlier Venice and Novita evidence as
+history. This route decision does not authorize scored exams.
 
 | Suite | Full denominator | Sessions per cell | Timeout per session | Requested output tokens | Reference-call cap |
 | --- | --- | --- | --- | --- | --- |

@@ -271,15 +271,15 @@
       "key_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_KEY",
       "max_output_tokens": 4096,
       "max_tool_calls": 20,
-      "model": "google/gemma-4-31b-it",
+      "model": "google/gemma-4-31b-it:free",
       "opencode_bin": "opencode",
       "openrouter": {
-        "expected_provider_name": "Novita",
-        "provider_endpoint": "novita/bf16",
+        "expected_provider_name": "Google AI Studio",
+        "provider_endpoint": "google-ai-studio",
         "reasoning_enabled": false,
         "max_price": {
-          "prompt": "0.14",
-          "completion": "0.40",
+          "prompt": "0",
+          "completion": "0",
           "request": "0"
         }
       },
@@ -311,15 +311,15 @@
       "key_env": "UKRAINIAN_LLM_EVAL_OPENROUTER_KEY",
       "max_output_tokens": 4096,
       "max_tool_calls": 20,
-      "model": "google/gemma-4-31b-it",
+      "model": "google/gemma-4-31b-it:free",
       "opencode_bin": "opencode",
       "openrouter": {
-        "expected_provider_name": "Novita",
-        "provider_endpoint": "novita/bf16",
+        "expected_provider_name": "Google AI Studio",
+        "provider_endpoint": "google-ai-studio",
         "reasoning_enabled": true,
         "max_price": {
-          "prompt": "0.14",
-          "completion": "0.40",
+          "prompt": "0",
+          "completion": "0",
           "request": "0"
         }
       },

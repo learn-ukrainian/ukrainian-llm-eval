@@ -11,13 +11,14 @@ import hashlib
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Self
 
-from . import adapters
+from . import adapters, opencode_batch
 from .mcp_proxy import Bridge
 
 MAX_BYTES = 2_000_000
@@ -253,37 +254,60 @@ class OpenCodeGateway:
         if self.condition == "closed-book" and self.requests:
             raise adapters.AdapterError("OpenCode unexpected auxiliary request")
         self.requests.add(request_hash)
+        batch = self.config["model"] == opencode_batch.MODEL
+        child = opencode_batch.child_request(body) if batch else body
+        if batch:
+            opencode_batch.validate_endpoint(self.endpoint)
+            if self.budget is None:
+                raise adapters.AdapterError("OpenCode batch requires request budget")
         if self.budget is not None:
-            raw, commitment = self.budget.commit_request(body)
+            raw, commitment = self.budget.commit_request(child)
             self.record("request_budget_commitment", commitment)
-        remaining = self.deadline - time.monotonic()
-        if remaining <= 0:
-            raise adapters.AdapterError("OpenCode total timeout")
-        request = urllib.request.Request(self.endpoint, data=raw, method="POST",
-                                         headers={"Authorization": "Bearer " + self.key,
-                                                  "Content-Type": "application/json", "Accept": "text/event-stream"})
-        opener = urllib.request.build_opener(adapters._RejectRedirects())
-        with opener.open(request, timeout=remaining) as response:  # nosec B310 -- validated operator endpoint
-            chunks = []
-            received = 0
-            while received <= MAX_BYTES:
-                if time.monotonic() >= self.deadline:
-                    raise adapters.AdapterError("OpenCode total timeout")
-                chunk = response.read1(min(65536, MAX_BYTES + 1 - received))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                received += len(chunk)
-            raw_response = b"".join(chunks)
-        if len(raw_response) > MAX_BYTES:
-            raise adapters.AdapterError("OpenCode provider response exceeds limit")
+        if batch:
+            if raw != adapters.canonical(child).encode() + b"\n":
+                raise adapters.AdapterError("OpenCode batch committed bytes drift")
+            self.record("opencode_batch_request_binding", {"native_sha256": request_hash,
+                "child_sha256": hashlib.sha256(raw).hexdigest()})
+            raw_response = opencode_batch.complete(raw, endpoint=self.endpoint, key=self.key,
+                                                   deadline=self.deadline, record=self.record)
+        else:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise adapters.AdapterError("OpenCode total timeout")
+            request = urllib.request.Request(self.endpoint, data=raw, method="POST",
+                                             headers={"Authorization": "Bearer " + self.key,
+                                                      "Content-Type": "application/json", "Accept": "text/event-stream"})
+            opener = urllib.request.build_opener(adapters._RejectRedirects())
+            try:
+                response = opener.open(request, timeout=remaining)  # nosec B310 -- validated operator endpoint
+            except urllib.error.HTTPError as exc:
+                # Keep bounded provider diagnostics in private attempt evidence.
+                # Do not expose request headers, credentials or endpoint details.
+                self.record("opencode_provider_http_error", {
+                    "status": exc.code, "body": exc.read(8192).decode("utf-8", errors="replace")})
+                raise adapters.AdapterError("OpenCode provider HTTP request failed") from exc
+            with response:
+                chunks = []
+                received = 0
+                while received <= MAX_BYTES:
+                    if time.monotonic() >= self.deadline:
+                        raise adapters.AdapterError("OpenCode total timeout")
+                    chunk = response.read1(min(65536, MAX_BYTES + 1 - received))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    received += len(chunk)
+                raw_response = b"".join(chunks)
+            if len(raw_response) > MAX_BYTES:
+                raise adapters.AdapterError("OpenCode provider response exceeds limit")
         self.record("opencode_provider_stream", {"text": raw_response.decode("utf-8")})
         decoded = decode_stream(raw_response)
         usage = decoded["usage"]
         if self.budget is not None:
             observation = self.budget.observe(usage, tool_calls=sum(call["name"] != "StructuredOutput" for call in decoded["calls"]))
             self.record("request_budget_observation", observation)
-        if decoded["models"] != {self.config["model"]} or decoded["providers"] != {routing["expected_provider_name"]}:
+        response_model = opencode_batch.BASE_MODEL if batch else self.config["model"]
+        if decoded["models"] != {response_model} or decoded["providers"] != {routing["expected_provider_name"]}:
             raise adapters.AdapterError("OpenCode provider identity drift")
         for target, source in (("input_tokens", "prompt_tokens"), ("output_tokens", "completion_tokens"),
                                ("total_tokens", "total_tokens")):
