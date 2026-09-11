@@ -22,7 +22,7 @@ from ukrainian_llm_eval.request_budget import (
     RequestBudgetError,
     validate_mechanism,
 )
-from ukrainian_llm_eval.spending_ledger import SharedSpendingLedger
+from ukrainian_llm_eval.spending_ledger import SharedSpendingLedger, SpendingCapExceeded
 
 
 def _packet():
@@ -352,7 +352,7 @@ def test_paid_controller_cannot_return_no_budget_before_candidate(monkeypatch, t
 
 def _provider_bound_values(
     tmp_path, *, attempt_id="attempt-provider-bound", ledger_path=None, inline_charge=True,
-    usage_bound=False,
+    usage_bound=False, broad_policy=False, reservation_id="reserve-provider-bound",
 ):
     route_sha = "b" * 64
     mechanism = {
@@ -432,14 +432,14 @@ def _provider_bound_values(
     policy = {
         "schema": (
             "ukrainian-llm-eval.spending-policy.v2"
-            if usage_bound else "ukrainian-llm-eval.spending-policy.v1"
+            if usage_bound or broad_policy else "ukrainian-llm-eval.spending-policy.v1"
         ),
         "mode": "sequential_shared_cap", "ledger_id": "issue5-public-evaluator",
         "authorized_cap_micro_usd": 1_000,
         "reservation_scope": "whole_segment_before_first_request",
         "settlement": (
             "authoritative_account_charge_or_conservative_final_usage_upper_bound"
-            if usage_bound else "authoritative_final_account_charge_only"
+            if usage_bound or broad_policy else "authoritative_final_account_charge_only"
         ),
         "cap_stop": "not_executed_budget",
     }
@@ -462,14 +462,15 @@ def _provider_bound_values(
     budget = controller.for_attempt(
         route, config, attempt_id,
         {"credit_available_micro_usd": None, "account_sha256": "c" * 64},
-        reservation_id="reserve-provider-bound",
+        reservation_id=reservation_id,
         reservation_binding={"candidate_attempt_id": attempt_id},
     )
     return route, config, controller, budget
 
 
-def test_provider_bound_mechanism_labels_upper_bound_and_settles_authoritative_charge(tmp_path):
-    _route, _config, controller, budget = _provider_bound_values(tmp_path)
+@pytest.mark.parametrize("broad_policy", [False, True])
+def test_provider_bound_mechanism_labels_upper_bound_and_settles_authoritative_charge(tmp_path, broad_policy):
+    _route, _config, controller, budget = _provider_bound_values(tmp_path, broad_policy=broad_policy)
     raw, commitment = budget.commit_request(
         {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
     )
@@ -484,8 +485,9 @@ def test_provider_bound_mechanism_labels_upper_bound_and_settles_authoritative_c
     assert ledger.snapshot()["remaining_new_spend_micro_usd"] == 990
 
 
-def test_provider_bound_timeout_keeps_full_shared_reservation(tmp_path):
-    _route, _config, _controller, budget = _provider_bound_values(tmp_path)
+@pytest.mark.parametrize("broad_policy", [False, True])
+def test_provider_bound_timeout_keeps_full_shared_reservation(tmp_path, broad_policy):
+    _route, _config, _controller, budget = _provider_bound_values(tmp_path, broad_policy=broad_policy)
     budget.commit_request(
         {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
     )
@@ -499,8 +501,9 @@ def test_provider_bound_timeout_keeps_full_shared_reservation(tmp_path):
     assert ledger.snapshot()["unresolved_new_spend_micro_usd"] == 606
 
 
-def test_valid_usage_without_inline_charge_keeps_full_reservation_across_roots(tmp_path):
-    _route, _config, _controller, budget = _provider_bound_values(tmp_path, inline_charge=False)
+@pytest.mark.parametrize("broad_policy", [False, True])
+def test_valid_usage_without_inline_charge_keeps_full_reservation_across_roots(tmp_path, broad_policy):
+    _route, _config, _controller, budget = _provider_bound_values(tmp_path, inline_charge=False, broad_policy=broad_policy)
     budget.commit_request(
         {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
     )
@@ -513,6 +516,58 @@ def test_valid_usage_without_inline_charge_keeps_full_reservation_across_roots(t
     )
     assert restarted.get("reserve-provider-bound")["state"] == "unresolved"
     assert restarted.snapshot()["unresolved_new_spend_micro_usd"] == 606
+
+
+@pytest.mark.parametrize("override", [
+    {"schema": []}, {"settlement": {}},
+    {"schema": "ukrainian-llm-eval.spending-policy.v2"},
+])
+def test_authoritative_route_rejects_malformed_or_mismatched_policy_pair(tmp_path, override):
+    route, _config, original, _budget = _provider_bound_values(tmp_path)
+    replacement = RequestBudgetController({"fixture": {
+        "schema": PROVIDER_BOUND_ROUTE_SPEC_SCHEMA, "mechanism": original.route_specs["fixture"]["mechanism"],
+    }}, shared_ledger_path=tmp_path / "other.sqlite3")
+    with pytest.raises(ExamError, match="settlement policy differ"):
+        replacement.prepare({
+            "routes": [route], "suites": [{"limits": {"max_tool_calls": 2, "max_output_tokens": 100}}],
+            "spending_policy": {**original._spending_policy, **override},
+        }, {"cells": []})
+    assert not (tmp_path / "other.sqlite3").exists()
+
+
+def test_authoritative_route_reuses_usage_bound_ledger_without_resetting_cap(tmp_path):
+    first_root = tmp_path / "first"
+    first_root.mkdir()
+    shared = tmp_path / "shared" / "spending.sqlite3"
+    _route, _config, first_controller, first = _provider_bound_values(
+        first_root, ledger_path=shared, usage_bound=True,
+    )
+    blocked_root = tmp_path / "blocked"
+    blocked_root.mkdir()
+    with pytest.raises(SpendingCapExceeded):
+        _provider_bound_values(
+            blocked_root, ledger_path=shared, broad_policy=True,
+            attempt_id="blocked-authoritative", reservation_id="blocked-authoritative",
+        )
+    payload = {"model": "fixture", "messages": [{"role": "user", "content": "x"}], "max_tokens": 100}
+    first.commit_request(payload)
+    first.observe({"prompt_tokens": 11, "completion_tokens": 5}, tool_calls=0)
+    first_receipt = first.finalize("completed")
+    assert first_receipt["result"]["charge_upper_bound_micro_usd"] == 24
+
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    _route, _config, second_controller, second = _provider_bound_values(
+        second_root, ledger_path=shared, broad_policy=True,
+        attempt_id="second-authoritative", reservation_id="second-authoritative",
+    )
+    assert second_controller._shared_ledger.snapshot()["remaining_new_spend_micro_usd"] == 1_000 - 24 - 606
+    second.commit_request(payload)
+    second.observe({"prompt_tokens": 12, "completion_tokens": 5, "cost": "0.000010"}, tool_calls=0)
+    receipt = second.finalize("completed")
+    assert receipt["result"]["schema"] == "ukrainian-llm-eval.request-budget-receipt.v2"
+    assert second_controller._shared_ledger.get("second-authoritative")["settled_micro_usd"] == 10
+    assert first_controller._shared_ledger.snapshot()["remaining_new_spend_micro_usd"] == 966
 
 
 def test_configured_authoritative_charge_path_cannot_disappear(tmp_path):
