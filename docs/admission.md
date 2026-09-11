@@ -173,7 +173,7 @@ admission evidence retention still belongs to `invoke_validated_admission`.
 | Route | Fresh read-only sources | Deliberate rejection cases |
 | --- | --- | --- |
 | Codex | Initialized native app-server `account/read` with `refreshToken:false`, `account/rateLimits/read`, `model/list` | Non-ChatGPT/unknown plan; unavailable included-usage permission; missing backend account ID; unknown/enabled credits; missing selected quota bucket or model/effort |
-| Claude | Native `auth status --json`; authenticated OAuth profile and usage using the same explicit bearer | Unknown subscription type; profile/native account mismatch; `extra_usage.is_enabled` absent, null or anything other than boolean false; unavailable quota |
+| Claude | Native `auth status --json`; authenticated OAuth profile and usage using the same explicit bearer | Unsupported or inactive personal Max profile; profile/native account mismatch; extra usage not explicitly false; missing, ambiguous or exhausted global/Fable quota |
 | Antigravity | Google userinfo; same-bearer `loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuota` | Missing subject/project; missing current paid tier; onboarding tiers alone; absent/exhausted exact-model quota |
 
 Codex requires an explicitly provisioned `CODEX_HOME`. Use the evaluator's fresh
@@ -212,6 +212,26 @@ and [Antigravity status fetcher](https://github.com/steipete/CodexBar/blob/51874
 The implementation does not depend on or copy those integrations. Google's
 [userinfo endpoint](https://accounts.google.com/.well-known/openid-configuration)
 only proves identity; it does not prove entitlement, capacity or billing controls.
+
+### Claude current entitlement and family quota
+
+The collector currently supports the observed personal Max 5x route for exact
+`claude-fable-5-1`: native subscription type `max`, fresh organization status
+`active`, billing type `stripe_subscription`, and rate-limit tier
+`default_claude_max_5x`. Other tiers and plans remain unsupported until their
+current entitlement and billing semantics are reviewed. Cached login alone
+cannot establish an active subscription.
+
+[Fable plan documentation](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)
+places Fable 5.1 within the personal Max Fable allowance. The observed provider
+quota scope `{model: {id: null, display_name: "Fable"}, surface: null}` therefore
+maps to this selected model's family allowance. The parser also accepts its
+exact model ID with an absent or compatible family name. Missing family proof,
+conflicting IDs/names, malformed scopes, and unknown scope applicability fail
+closed. All family windows must have remaining quota, including entries whose
+UI `is_active` flag is false. Global five-hour and weekly windows must also
+remain available. Explicit `extra_usage.is_enabled: false` and same-account,
+same-organization correlation are still mandatory.
 
 ### Claude exact-model refusal controls
 

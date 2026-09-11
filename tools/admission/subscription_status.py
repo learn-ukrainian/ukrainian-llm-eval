@@ -33,30 +33,66 @@ def collect_claude(config, diagnostics=None):
 
 
 def normalize_claude(auth, profile, usage, model):
+    if not all(isinstance(value, dict) for value in (auth, profile, usage)):
+        fail("subscription_unknown")
     if auth.get("loggedIn") is not True or auth.get("authMethod") != "claude.ai":
         fail("subscription_auth_required")
-    if auth.get("subscriptionType") not in {"pro", "max", "team"}:
+    if auth.get("subscriptionType") != "max":
         fail("subscription_unknown")
     account = profile.get("account") or {}
     organization = profile.get("organization") or {}
+    if not isinstance(account, dict) or not isinstance(organization, dict):
+        fail("subscription_unknown")
+    if (organization.get("subscription_status") != "active"
+            or organization.get("billing_type") != "stripe_subscription"
+            or organization.get("rate_limit_tier") != "default_claude_max_5x"):
+        fail("subscription_unknown")
+    if model != "claude-fable-5-1":
+        fail("model_quota_unknown")
     account_id = text(account.get("uuid"))
     org_id = text(organization.get("uuid"))
     # Exact same-account correlation, never a token digest or guessed identity.
     if auth.get("orgId") != org_id or auth.get("email") != account.get("email"):
         fail("subscription_identity_mismatch")
     text(account.get("email"))
-    if (usage.get("extra_usage") or {}).get("is_enabled") is not False:
+    extra_usage = usage.get("extra_usage")
+    if not isinstance(extra_usage, dict) or extra_usage.get("is_enabled") is not False:
         fail("paid_fallback_unknown")
     windows = [usage.get("five_hour"), usage.get("seven_day")]
     if not all(isinstance(window, dict) for window in windows):
         fail("quota_unknown")
     for window in windows:
         available_percent(window.get("utilization"))
-    # Check all active scoped limits matching the exact provider model, too.
-    for limit in usage.get("limits") or []:
-        scoped = ((limit.get("scope") or {}).get("model") or {}).get("id")
-        if scoped in (None, model) and limit.get("is_active") is not False:
+    # Provider scope display_name=Fable denotes this exact selected model's
+    # family allowance. Unknown families/surfaces need reviewed mapping first.
+    limits = usage.get("limits")
+    if not isinstance(limits, list) or not limits:
+        fail("model_quota_unknown")
+    family_found = False
+    for limit in limits:
+        if not isinstance(limit, dict):
+            fail("model_quota_unknown")
+        scope = limit.get("scope")
+        if scope is None or scope == {}:
             available_percent(limit.get("percent"))
+            continue
+        if not isinstance(scope, dict) or set(scope) - {"model", "surface"}:
+            fail("model_quota_unknown")
+        scoped_model = scope.get("model")
+        if scope.get("surface") is not None or not isinstance(scoped_model, dict):
+            fail("model_quota_unknown")
+        if "id" not in scoped_model or set(scoped_model) - {"id", "display_name"}:
+            fail("model_quota_unknown")
+        scoped_id = scoped_model.get("id")
+        name = scoped_model.get("display_name")
+        if not ((scoped_id is None and name == "Fable")
+                or (scoped_id == model and name in (None, "Fable"))):
+            fail("model_quota_unknown")
+        family_found = True
+        # is_active is a UI flag, not an exemption from a quota window.
+        available_percent(limit.get("percent"))
+    if not family_found:
+        fail("model_quota_unknown")
     return digest({"provider": "anthropic-claude", "account_id": account_id, "organization_id": org_id})
 
 

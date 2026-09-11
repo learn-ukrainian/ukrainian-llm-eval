@@ -66,9 +66,12 @@ def claude_values():
     return ({"loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "max",
              "orgId": "synthetic-org", "email": "synthetic@example.invalid"},
         {"account": {"uuid": "synthetic-account", "email": "synthetic@example.invalid"},
-         "organization": {"uuid": "synthetic-org"}},
+         "organization": {"uuid": "synthetic-org", "subscription_status": "active",
+                          "billing_type": "stripe_subscription", "rate_limit_tier": "default_claude_max_5x"}},
         {"extra_usage": {"is_enabled": False}, "five_hour": {"utilization": 20},
-         "seven_day": {"utilization": 30}})
+         "seven_day": {"utilization": 30},
+         "limits": [{"scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+                     "percent": 83, "is_active": True}]})
 
 
 def agy_values():
@@ -110,13 +113,13 @@ def test_codex_does_not_substitute_model_or_effort():
 
 
 def test_claude_same_account_binding():
-    result = subscriptions.normalize_claude(*claude_values(), "claude-fable-5")
+    result = subscriptions.normalize_claude(*claude_values(), "claude-fable-5-1")
     assert result == common.digest({"provider": "anthropic-claude", "account_id": "synthetic-account",
                                     "organization_id": "synthetic-org"})
     values = claude_values()
     values[0]["orgId"] = "other-org"
     with pytest.raises(common.ProbeError, match="identity_mismatch"):
-        subscriptions.normalize_claude(*values, "claude-fable-5")
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
 
 
 @pytest.mark.parametrize("extra", [{}, None, {"is_enabled": None}, {"is_enabled": True},
@@ -125,7 +128,7 @@ def test_claude_missing_null_extra_usage_not_false(extra):
     values = claude_values()
     values[2]["extra_usage"] = extra
     with pytest.raises(common.ProbeError, match="paid_fallback_unknown"):
-        subscriptions.normalize_claude(*values, "claude-fable-5")
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
 
 
 @pytest.mark.parametrize("plan", [None, "unknown", "free", ""])
@@ -133,6 +136,61 @@ def test_claude_auth_plus_quota_does_not_prove_paid_subscription(plan):
     values = claude_values()
     values[0]["subscriptionType"] = plan
     with pytest.raises(common.ProbeError, match="subscription_unknown"):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("subscription_status", "cancelled"), ("subscription_status", None),
+    ("billing_type", "invoice"), ("billing_type", None),
+    ("rate_limit_tier", "unknown"), ("rate_limit_tier", "default_claude_max_20x"),
+])
+def test_claude_requires_current_supported_personal_max_profile(field, value):
+    values = claude_values()
+    values[1]["organization"][field] = value
+    with pytest.raises(common.ProbeError, match="subscription_unknown"):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+@pytest.mark.parametrize("limits", [None, [], {}, [None], [{"scope": {}, "percent": 20}],
+    [{"scope": {"model": {"id": None, "display_name": "Unknown"}}, "percent": 20}],
+    [{"scope": {"model": {"id": "other-model", "display_name": "Fable"}}, "percent": 20}],
+    [{"scope": {"model": {"id": "claude-fable-5-1", "display_name": "Other"}}, "percent": 20}],
+    [{"scope": {"model": "Fable"}, "percent": 20}],
+    [{"scope": {"model": {"display_name": "Fable"}}, "percent": 20}],
+    [{"scope": {"model": {"id": None, "display_name": "Fable"}, "surface": "unknown"}, "percent": 20}],
+])
+def test_claude_requires_unambiguous_family_quota(limits):
+    values = claude_values()
+    values[2]["limits"] = limits
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+@pytest.mark.parametrize("active", [True, False, None])
+@pytest.mark.parametrize("percent", [100, 101, -1, None, True, "83"])
+def test_claude_every_family_window_must_have_quota(active, percent):
+    values = claude_values()
+    values[2]["limits"].append({"scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+                                "percent": percent, "is_active": active})
+    with pytest.raises(common.ProbeError):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+@pytest.mark.parametrize("window", ["five_hour", "seven_day"])
+def test_claude_family_allowance_does_not_override_exhausted_global_window(window):
+    values = claude_values()
+    values[2][window]["utilization"] = 100
+    with pytest.raises(common.ProbeError):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+def test_claude_observed_global_and_family_shape_with_inactive_windows():
+    values = claude_values()
+    values[2]["limits"][:0] = [{"scope": {}, "percent": 52, "is_active": False},
+                              {"scope": {}, "percent": 57, "is_active": False}]
+    values[2]["limits"][-1]["is_active"] = False
+    assert subscriptions.normalize_claude(*values, "claude-fable-5-1")
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
         subscriptions.normalize_claude(*values, "claude-fable-5")
 
 
