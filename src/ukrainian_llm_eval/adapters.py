@@ -186,7 +186,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         if key_env is not None and (not isinstance(key_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", key_env)):
             raise AdapterError("configuration key_env must be an environment variable name or null")
         http_format = config.get("http_response_format", "json_schema")
-        if not isinstance(http_format, str) or http_format not in {"json_schema", "json_object"}:
+        http_formats = {"json_schema", "json_object", "text"} if adapter == "chat-http" else {"json_schema", "json_object"}
+        if not isinstance(http_format, str) or http_format not in http_formats:
             raise AdapterError("configuration HTTP response format is unsupported")
         if "openrouter" in config:
             routing = config["openrouter"]
@@ -879,6 +880,8 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
     request_base: dict[str, Any] = {"model": checked["model"], "messages": messages, output_parameter: checked["max_output_tokens"], "response_format": {"type": "json_schema", "json_schema": {"name": response_name, "strict": True, "schema": response_schema(packet)}}}
     if checked.get("http_response_format") == "json_object":
         request_base["response_format"] = {"type": "json_object"}
+    elif checked.get("http_response_format") == "text":
+        del request_base["response_format"]
     routing = checked.get("openrouter")
     if routing is not None:
         request_base["provider"] = {"only": [routing["provider_endpoint"]], "allow_fallbacks": False, "require_parameters": True}

@@ -55,7 +55,8 @@ def _counter(tmp_path):
     return spec, semantics
 
 
-def _values(tmp_path, *, kind="metered", credit=None, max_input=100_000, max_output=300, max_result=4096):
+def _values(tmp_path, *, kind="metered", credit=None, max_input=100_000, max_output=300, max_result=4096,
+            output_format="json_schema"):
     command, semantics = _counter(tmp_path)
     route_sha = "b" * 64
     mechanism = {
@@ -112,6 +113,7 @@ def _values(tmp_path, *, kind="metered", credit=None, max_input=100_000, max_out
         "corpus_id": "fixture-corpus",
         "endpoint_env": "FIXTURE_ENDPOINT",
         "key_env": None,
+        "http_response_format": output_format,
     }
     route_spec = {"schema": ROUTE_SPEC_SCHEMA, "mechanism": mechanism, "counter_command": command}
     controller = RequestBudgetController({"fixture": route_spec})
@@ -124,8 +126,9 @@ def _values(tmp_path, *, kind="metered", credit=None, max_input=100_000, max_out
     return route, config, mechanism, controller, budget
 
 
-def test_http_sends_exact_counted_bytes_with_schema_tools_and_full_tool_history(monkeypatch, tmp_path):
-    _route, config, _mechanism, _controller, budget = _values(tmp_path)
+@pytest.mark.parametrize("output_format", ["json_schema", "json_object", "text"])
+def test_http_sends_exact_counted_bytes_with_tools_and_full_tool_history(monkeypatch, tmp_path, output_format):
+    _route, config, _mechanism, _controller, budget = _values(tmp_path, output_format=output_format)
     monkeypatch.setenv("FIXTURE_ENDPOINT", "https://provider.invalid/chat")
     monkeypatch.setattr(
         adapters,
@@ -162,7 +165,13 @@ def test_http_sends_exact_counted_bytes_with_schema_tools_and_full_tool_history(
     assert len(sent) == 2
     first, second = map(json.loads, sent)
     assert first["tools"][0]["function"]["parameters"] == {"type": "object"}
-    assert first["response_format"]["json_schema"]["schema"]["required"] == ["responses"]
+    for request in (first, second):
+        if output_format == "text":
+            assert "response_format" not in request
+        elif output_format == "json_object":
+            assert request["response_format"] == {"type": "json_object"}
+        else:
+            assert request["response_format"]["json_schema"]["schema"]["required"] == ["responses"]
     assert second["messages"][1]["tool_calls"][0]["function"]["arguments"] == "{\"word\":\"слово\"}"
     assert json.loads(second["messages"][2]["content"]) == {"valid": True, "word": "слово"}
     evidence = EvidenceStore(tmp_path / "research" / "request-budget-evidence").verify(receipt["attempt_id"])
