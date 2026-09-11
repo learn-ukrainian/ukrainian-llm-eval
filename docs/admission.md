@@ -187,7 +187,8 @@ The exact selected model-to-quota-bucket mapping must also have reviewed proof.
 A quota check is an observation, not a guarantee that future capacity is reserved.
 
 Claude and Antigravity require `ADMISSION_BEARER_TOKEN` to be passed explicitly
-through the command spec's `env_names`. The operator supplies the existing token
+through the command spec's `env_names`. Claude also requires `USER` for its
+existing native Keychain principal lookup; this does not enable ambient API keys. The operator supplies the existing token
 from the *same native account provisioning used by the adapter*. Do not put it
 in argv, JSON, an evidence artifact or a committed file. The probe never reads a
 credential store, changes accounts, refreshes or persists credentials. Claude

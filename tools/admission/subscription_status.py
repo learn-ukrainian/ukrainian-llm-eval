@@ -15,11 +15,20 @@ def bearer():
     return text(value)
 
 
-def collect_claude(config):
+def status_read(stage, url, token, diagnostics, **kwargs):
+    if diagnostics is not None:
+        diagnostics.append({"stage": stage, "state": "started"})
+    result = provider_json(url, token, **kwargs)
+    if diagnostics is not None:
+        diagnostics.append({"stage": stage, "state": "completed"})
+    return result
+
+
+def collect_claude(config, diagnostics=None):
     token = bearer()
     auth = native_json([config["binary"], "auth", "status", "--json"], child_env())
-    profile = provider_json(CLAUDE + "profile", token)
-    usage = provider_json(CLAUDE + "usage", token, headers={"anthropic-beta": "oauth-2025-04-20"})
+    profile = status_read("profile", CLAUDE + "profile", token, diagnostics)
+    usage = status_read("usage", CLAUDE + "usage", token, diagnostics, headers={"anthropic-beta": "oauth-2025-04-20"})
     return auth, profile, usage, utcnow()
 
 
@@ -51,17 +60,17 @@ def normalize_claude(auth, profile, usage, model):
     return digest({"provider": "anthropic-claude", "account_id": account_id, "organization_id": org_id})
 
 
-def collect_agy(config):
+def collect_agy(config, diagnostics=None):
     token = bearer()  # One credential instance for identity, plan, model and quota.
-    identity = provider_json(USERINFO, token)
-    plan = provider_json(AGY + "loadCodeAssist", token, body={"metadata": {
+    identity = status_read("identity", USERINFO, token, diagnostics)
+    plan = status_read("plan", AGY + "loadCodeAssist", token, diagnostics, body={"metadata": {
         "ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
     project = plan.get("cloudaicompanionProject")
     if isinstance(project, dict):
         project = project.get("id") or project.get("projectId")
     project = text(project)
-    models = provider_json(AGY + "fetchAvailableModels", token, body={"project": project})
-    quota = provider_json(AGY + "retrieveUserQuota", token, body={"project": project})
+    models = status_read("models", AGY + "fetchAvailableModels", token, diagnostics, body={"project": project})
+    quota = status_read("quota", AGY + "retrieveUserQuota", token, diagnostics, body={"project": project})
     return identity, plan, models, quota, project, utcnow()
 
 

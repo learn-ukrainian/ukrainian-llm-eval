@@ -63,10 +63,10 @@ def inspect_codex(config, diagnostics=None):
                                for item in models.get("data", []) if item.get("model") == config["model"]]}
 
 
-def inspect_subscription(config):
+def inspect_subscription(config, diagnostics=None):
     """Diagnostic shape/normalized status only, never native admission proof."""
     if config["provider"] == "claude":
-        auth, profile, usage, observed = subscription_status.collect_claude(config)
+        auth, profile, usage, observed = subscription_status.collect_claude(config, diagnostics)
         account, org = profile.get("account") or {}, profile.get("organization") or {}
         return {"admission": False, "observed_at": observed,
             "logged_in": auth.get("loggedIn") is True, "native_subscription_auth": auth.get("authMethod") == "claude.ai",
@@ -77,7 +77,7 @@ def inspect_subscription(config):
             "extra_usage_explicitly_disabled": (usage.get("extra_usage") or {}).get("is_enabled") is False,
             "quota_windows_present": all(isinstance(usage.get(key), dict) for key in ("five_hour", "seven_day"))}
     if config["provider"] == "agy":
-        identity, plan, models, quota, project, observed = subscription_status.collect_agy(config)
+        identity, plan, models, quota, project, observed = subscription_status.collect_agy(config, diagnostics)
         selected = (models.get("models") or {}).get(config["model"])
         return {"admission": False, "observed_at": observed,
             "subject_present": bool(identity.get("sub")), "project_present": bool(project),
@@ -208,7 +208,7 @@ def main():
                     fail("provider_unsupported")
                 result = inspect_codex(config, diagnostics)
             else:
-                result = inspect_subscription(config)
+                result = inspect_subscription(config, diagnostics)
         else:
             request = validate_request(parse(sys.stdin.buffer.read(MAX_BYTES + 1)))
             support = support_for(config, path.parent)

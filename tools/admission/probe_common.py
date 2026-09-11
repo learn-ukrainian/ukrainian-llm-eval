@@ -140,7 +140,7 @@ def verified_runtime(config):
 def child_env():
     # Never propagate API keys, endpoint overrides, proxies, or code-loading env.
     return {key: value for key, value in os.environ.items()
-            if key in {"PATH", "HOME", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
+            if key in {"PATH", "HOME", "USER", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
 
 
 class Process:

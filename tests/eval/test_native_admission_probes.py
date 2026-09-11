@@ -438,3 +438,20 @@ def test_failed_status_cli_does_not_emit_secret(tmp_path):
     assert result.returncode == 1
     assert result.stdout == b""
     assert result.stderr == b"probe_failed\n"
+
+
+def test_native_user_principal_preserved_without_api_credentials(monkeypatch):
+    monkeypatch.setenv("USER", "synthetic-principal")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-secret")
+    env = common.child_env()
+    assert env["USER"] == "synthetic-principal"
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_status_stage_survives_failure_without_endpoint_or_secret(monkeypatch):
+    diagnostics = []
+    monkeypatch.setenv("ADMISSION_BEARER_TOKEN", "synthetic-secret")
+    monkeypatch.setattr(subscriptions, "provider_json", lambda *a, **k: common.fail("provider_http_401"))
+    with pytest.raises(common.ProbeError, match="provider_http_401"):
+        subscriptions.collect_agy({}, diagnostics)
+    assert diagnostics == [{"stage": "identity", "state": "started"}]
