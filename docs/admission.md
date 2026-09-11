@@ -184,6 +184,13 @@ covered by the reviewed `runtime_files` list. Account identity comes from the
 backend usage account ID, not the auth-file label. Current `ordinaryUsageAllowed`
 must be true; percentages do not override an absent/false backend permission.
 The exact selected model-to-quota-bucket mapping must also have reviewed proof.
+The ordinary `codex` bucket is always checked, together with every additional
+bucket applicable to the selected model. The collector conservatively matches
+case-folded model slugs and catalog-backed display names, including
+`normalModelSlug`; this extension is stricter than the native TUI's exact
+`limitName` comparison. Conflicting or unmapped extra identities fail closed.
+Only explicit catalog bindings can exclude another model's extra bucket; an
+unknown extra bucket is never silently ignored.
 A quota check is an observation, not a guarantee that future capacity is reserved.
 
 Claude and Antigravity require `ADMISSION_BEARER_TOKEN` to be passed explicitly

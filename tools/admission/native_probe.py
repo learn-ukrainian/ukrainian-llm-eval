@@ -51,7 +51,8 @@ def inspect_codex(config, diagnostics=None):
             "plan_type": (account.get("account") or {}).get("planType"),
             "account_id_present": isinstance(usage.get("accountId"), str) and bool(usage["accountId"]),
             "ordinary_usage_allowed": usage.get("ordinaryUsageAllowed"),
-            "quota": [{"limit_id": key, "plan_type": value.get("planType"),
+            "quota": [{"limit_id": key, "limit_name": value.get("limitName"),
+                       "normal_model_slug": value.get("normalModelSlug"), "plan_type": value.get("planType"),
                        "used_percent": [(value.get(window) or {}).get("usedPercent")
                                         for window in ("primary", "secondary")],
                        "has_credits": (value.get("credits") or {}).get("hasCredits"),

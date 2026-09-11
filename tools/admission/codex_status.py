@@ -45,25 +45,62 @@ def normalize(account_reply, usage, catalog, model, effort, quota_key):
         fail("subscription_ineligible")
     account_id = text(usage.get("accountId"))
     buckets = usage.get("rateLimitsByLimitId")
-    if not isinstance(buckets, dict) or quota_key not in buckets:
+    if not isinstance(buckets, dict) or quota_key != "codex" or "codex" not in buckets:
         fail("model_quota_unknown")
-    quota = buckets[quota_key]
-    if quota.get("planType") != account["planType"]:
-        fail("subscription_identity_mismatch")
-    if quota.get("rateLimitReachedType") is not None or quota.get("spendControlReached") is True:
-        fail("quota_exhausted")
-    credits = quota.get("credits") or {}
-    if credits.get("hasCredits") is not False or credits.get("unlimited") is not False:
-        fail("paid_fallback_unknown")
-    windows = [quota.get("primary"), quota.get("secondary")]
-    if not any(isinstance(window, dict) for window in windows):
-        fail("quota_unknown")
-    for window in windows:
-        if window is not None:
-            available_percent(window.get("usedPercent"))
-    matches = [item for item in catalog.get("data", []) if item.get("model") == model]
+    rows = catalog.get("data")
+    if not isinstance(rows, list) or any(not isinstance(item, dict) for item in rows):
+        fail("model_unavailable")
+    matches = [item for item in rows if item.get("model") == model]
     if len(matches) != 1 or matches[0].get("hidden") is not False:
         fail("model_unavailable")
     if effort not in {item.get("reasoningEffort") for item in matches[0].get("supportedReasoningEfforts", [])}:
         fail("effort_unsupported")
+    identities = {}
+    slugs = {text(row.get("model")).casefold() for row in rows}
+    for row in rows:
+        slug = text(row.get("model"))
+        for name in (slug, row.get("displayName")):
+            if name is not None:
+                identities.setdefault(text(name).casefold(), set()).add(slug)
+    selected = [("codex", buckets["codex"])]
+    for key, bucket in buckets.items():
+        if not isinstance(bucket, dict):
+            fail("model_quota_unknown")
+        if bucket.get("limitId") not in (None, key):
+            fail("model_quota_unknown")
+        if key == "codex":
+            continue
+        slug, name = bucket.get("normalModelSlug"), bucket.get("limitName")
+        mapped = set()
+        for label in (slug, name):
+            if label is not None:
+                mapped.update(identities.get(text(label).casefold(), set()))
+        # A known normal-model slug may accompany a non-model quota label
+        # such as gpt-reserve. Unknown slugs or conflicting identities are not
+        # grounds to discard a potentially applicable constraint.
+        if ((slug is not None and text(slug).casefold() not in slugs) or len(mapped) != 1):
+            fail("model_quota_unknown")
+        if model in mapped:
+            selected.append((key, bucket))
+    for key, quota in selected:
+        if quota.get("planType") != account["planType"]:
+            fail("subscription_identity_mismatch")
+        if quota.get("rateLimitReachedType") is not None or quota.get("spendControlReached") not in (None, False):
+            fail("quota_exhausted")
+        credits = quota.get("credits") or {}
+        if not isinstance(credits, dict):
+            fail("paid_fallback_unknown")
+        if key == "codex":
+            if credits.get("hasCredits") is not False or credits.get("unlimited") is not False:
+                fail("paid_fallback_unknown")
+        elif credits.get("hasCredits") is True or credits.get("unlimited") is True:
+            fail("paid_fallback_unknown")
+        windows = [quota.get("primary"), quota.get("secondary")]
+        if not any(isinstance(window, dict) for window in windows):
+            fail("quota_unknown")
+        for window in windows:
+            if window is not None:
+                if not isinstance(window, dict):
+                    fail("quota_unknown")
+                available_percent(window.get("usedPercent"))
     return digest({"provider": "openai-chatgpt", "account_id": account_id})

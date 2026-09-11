@@ -789,3 +789,60 @@ def test_native_input_semantics_need_reviewed_source_and_explicit_basis():
     supp["effective_context_window_percent"] = 95
     with pytest.raises(common.ProbeError, match="input_capacity_basis_conflict"):
         probe.initial_capacity(config()["capability"], supp)
+
+
+
+@pytest.mark.parametrize("name", ["gpt-6-astra", "GPT-6-ASTRA", "GPT-6-Astra display"])
+def test_codex_all_matching_model_limits_apply(name):
+    values = codex_values()
+    values[2]["data"][0]["displayName"] = "GPT-6-Astra display"
+    extra = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    extra.update(limitName=name, primary={"usedPercent": 100})
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    with pytest.raises(common.ProbeError, match="quota_exhausted"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+def test_codex_ordinary_quota_cannot_be_replaced_by_selected_extra():
+    values = codex_values()
+    values[1]["rateLimitsByLimitId"]["extra"] = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "extra")
+
+
+def test_codex_known_other_catalog_bindings_can_exclude_other_model_limits():
+    values = codex_values()
+    values[2]["data"].extend([{"model": "gpt-5.3-codex-spark", "displayName": "GPT-5.3-Codex-Spark"},
+                               {"model": "gpt-5.6-luna", "displayName": "GPT-5.6-Luna"}])
+    for key, name, slug in [("spark", "GPT-5.3-Codex-Spark", None), ("reserve", "gpt-reserve", "gpt-5.6-luna")]:
+        values[1]["rateLimitsByLimitId"][key] = {"limitName": name, "normalModelSlug": slug,
+                                               "primary": {"usedPercent": 100}}
+    assert codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+    values[1]["rateLimitsByLimitId"]["reserve"]["normalModelSlug"] = "gpt-6-astra"
+    values[1]["rateLimitsByLimitId"]["reserve"]["planType"] = "pro"
+    with pytest.raises(common.ProbeError, match="quota_exhausted"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+@pytest.mark.parametrize("extra", [
+    {}, {"limitName": "unknown"}, {"normalModelSlug": "unknown", "limitName": "gpt-6-astra"},
+    {"normalModelSlug": "gpt-6-astra", "limitName": "other-model"},
+])
+def test_codex_ambiguous_extra_limits_fail_closed(extra):
+    values = codex_values()
+    values[2]["data"].append({"model": "other-model"})
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+
+def test_codex_positive_extra_does_not_override_ordinary_exhaustion():
+    values = codex_values()
+    extra = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    extra["limitName"] = "gpt-6-astra"
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    assert codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+    values[1]["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = 100
+    with pytest.raises(common.ProbeError, match="quota_exhausted"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
