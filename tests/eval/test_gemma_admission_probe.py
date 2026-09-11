@@ -69,7 +69,7 @@ def responses():
             probe.CREDITS_URL: {'total_credits': '2', 'total_usage': '0.1'},
             probe.MODEL_URL: {'id': probe.MODEL, 'endpoints': [{
                 'tag': probe.BACKEND, 'provider_name': 'Venice', 'model_id': probe.MODEL,
-                'status': 0, 'context_length': 256_000, 'max_completion_tokens': 8192,
+                'quantization': 'bf16', 'status': 0, 'context_length': 256_000, 'max_completion_tokens': 8192,
                 'max_prompt_tokens': None,
                 'supported_parameters': ['tools', 'structured_outputs', 'reasoning', 'max_tokens'],
                 'pricing': {'prompt': '0.00000012', 'completion': '0.00000036',
@@ -498,3 +498,85 @@ def test_initial_input_also_fits_cumulative_billing_budget():
     req['requirements']['max_total_input_tokens'] = 2099
     with pytest.raises(common.ProbeError, match='input_does_not_fit'):
         probe.requirements_for(rehash(req), config(), support())
+
+
+def novita_fixture():
+    # Public endpoint metadata from the approved proposal; all funding is synthetic.
+    cfg, data = config(), responses()
+    cfg.update(backend='novita/bf16', expected_provider_name='Novita', maximum_segment_micro_usd=908_330)
+    cfg['pricing'].update(input_micro_usd_per_million_tokens=140_000,
+                          output_micro_usd_per_million_tokens=400_000)
+    cfg['capability'].update(context_input_tokens=131_072, max_output_tokens=131_072)
+    cfg['support'].update(context_window_tokens=262_144, output_headroom_tokens=131_072)
+    endpoint = data[probe.MODEL_URL]['endpoints'][0]
+    endpoint.update(tag='novita/bf16', provider_name='Novita', context_length=262_144,
+                    max_completion_tokens=131_072)
+    endpoint['pricing'].update(prompt='0.00000014', completion='0.00000040')
+    return cfg, data
+
+
+@pytest.mark.parametrize('output_limit', [4096, 16384])
+def test_full_novita_metadata_fits_suite_limits(monkeypatch, output_limit):
+    cfg, data = novita_fixture()
+    req = request()
+    req['requirements'].update(max_output_tokens=output_limit,
+                               max_total_output_tokens=21 * output_limit)
+    req = rehash(req)
+    install_responses(monkeypatch, data)
+    observed = probe.collect(cfg)
+    result = probe.build_result(req, cfg, cfg['support'], observed,
+                                {'unresolved_new_spend_micro_usd': 111,
+                                 'remaining_new_spend_micro_usd': 9_000_000})
+    assert result['entitlement']['observed']['eligible'] is True
+    assert result['capability']['state']['max_output_tokens'] == 131_072
+    assert result['pricing']['observed']['conservative_segment_cost_micro_usd'] == 908_330
+
+
+@pytest.mark.parametrize('novita', [False, True])
+@pytest.mark.parametrize('precision', [None, 'unknown', 'fp4', 'fp8', 'BF16'])
+def test_endpoint_precision_must_be_explicit_bf16(monkeypatch, novita, precision):
+    cfg, data = novita_fixture() if novita else (config(), responses())
+    endpoint = data[probe.MODEL_URL]['endpoints'][0]
+    if precision is None:
+        endpoint.pop('quantization')
+    else:
+        endpoint['quantization'] = precision
+    install_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError, match='provider_precision_unverified'):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('field,value', [('tag', 'venice/bf16'), ('model_id', 'google/gemma-4-26b-a4b-it'),
+                                        ('provider_name', 'Venice'), ('context_length', 256_000),
+                                        ('max_completion_tokens', 16384)])
+def test_novita_endpoint_identity_and_capacity_drift_reject(monkeypatch, field, value):
+    cfg, data = novita_fixture()
+    data[probe.MODEL_URL]['endpoints'][0][field] = value
+    install_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('field,value', [('prompt', '0.00000015'), ('completion', '0.00000041')])
+def test_novita_price_drift_rejects(monkeypatch, field, value):
+    cfg, data = novita_fixture()
+    data[probe.MODEL_URL]['endpoints'][0]['pricing'][field] = value
+    install_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError, match='provider_pricing_drift'):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('backend,provider,allowed', [('venice/bf16', 'Venice', True),
+    ('novita/bf16', 'Novita', True), ('novita/bf16', 'Venice', False),
+    ('venice/bf16', 'Novita', False), ('novita/fp8', 'Novita', False)])
+def test_support_accepts_only_exact_approved_backend_provider_pairs(tmp_path, monkeypatch, backend, provider, allowed):
+    spec, _ = snapshot_spec(tmp_path, monkeypatch, 'valid')
+    path = next(Path(item['path']) for item in spec['declared_files'] if item['role'] == 'runtime_lock')
+    cfg = common.parse(path.read_bytes())
+    cfg.update(backend=backend, expected_provider_name=provider)
+    cfg['support']['backend'] = backend
+    if allowed:
+        assert probe.support_for(cfg, tmp_path) == cfg['support']
+    else:
+        with pytest.raises(common.ProbeError, match='unsupported_route'):
+            probe.support_for(cfg, tmp_path)

@@ -36,6 +36,7 @@ from probe_common import (
 
 MODEL = "google/gemma-4-31b-it"
 BACKEND = "venice/bf16"
+BACKEND_PROVIDERS = ((BACKEND, "Venice"), ("novita/bf16", "Novita"))
 KEY_URL = "https://openrouter.ai/api/v1/key"
 CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 MODEL_URL = "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it/endpoints"
@@ -142,7 +143,7 @@ def local_dependency(base, declaration):
 def support_for(config, base):
     support = config["support"]
     if (config["provider"] != "openrouter" or config["model"] != MODEL or config["effort"] is not None
-            or config["backend"] != BACKEND or config["expected_provider_name"] != "Venice"
+            or (config["backend"], config["expected_provider_name"]) not in BACKEND_PROVIDERS
             or type(config["reasoning_enabled"]) is not bool
             or config["account_scope"] != "personal_provider_user"):
         fail("unsupported_route")
@@ -304,6 +305,8 @@ def collect(config):
     endpoint = selected[0]
     if endpoint.get("model_id") != MODEL or endpoint.get("provider_name") != config["expected_provider_name"]:
         fail("provider_backend_identity_mismatch")
+    if endpoint.get("quantization") != "bf16":
+        fail("provider_precision_unverified")
     if type(endpoint.get("status")) is not int or endpoint["status"] != 0:
         fail("provider_backend_unhealthy")
     if (endpoint.get("context_length") != integer(config["support"].get("context_window_tokens"), 1)

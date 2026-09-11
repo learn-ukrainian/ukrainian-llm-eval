@@ -274,9 +274,14 @@
       "model": "google/gemma-4-31b-it",
       "opencode_bin": "opencode",
       "openrouter": {
-        "expected_provider_name": "Venice",
-        "provider_endpoint": "venice/bf16",
-        "reasoning_enabled": false
+        "expected_provider_name": "Novita",
+        "provider_endpoint": "novita/bf16",
+        "reasoning_enabled": false,
+        "max_price": {
+          "prompt": "0.14",
+          "completion": "0.40",
+          "request": "0"
+        }
       },
       "provider": "openrouter",
       "repeats": 3,
@@ -309,9 +314,14 @@
       "model": "google/gemma-4-31b-it",
       "opencode_bin": "opencode",
       "openrouter": {
-        "expected_provider_name": "Venice",
-        "provider_endpoint": "venice/bf16",
-        "reasoning_enabled": true
+        "expected_provider_name": "Novita",
+        "provider_endpoint": "novita/bf16",
+        "reasoning_enabled": true,
+        "max_price": {
+          "prompt": "0.14",
+          "completion": "0.40",
+          "request": "0"
+        }
       },
       "provider": "openrouter",
       "repeats": 3,

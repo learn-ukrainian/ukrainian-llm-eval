@@ -11,6 +11,17 @@ each complete suite: **198 cells and 35,178 segment sessions**. Tool rounds and
 native auxiliary requests can produce additional model requests; this session
 count is not a request count or cost estimate.
 
+Both Gemma configurations select the full `google/gemma-4-31b-it` model through
+OpenRouter's `novita/bf16` backend. BF16 is the provider's reported precision,
+not independent inspection of its weights. Admission rejects missing or changed
+precision, and requests disable provider fallback. The configured price ceilings
+are $0.14 per million input tokens, $0.40 per million output tokens, and no
+per-request fee; the existing shared $10 spending cap remains unchanged. This
+operator-approved route replaces Venice, whose advertised 8,192-token output
+limit did not support the common GEC allowance below. Preserve old Venice
+canaries as historical evidence and obtain fresh Novita controls and canaries;
+changing the configuration alone does not establish launch readiness.
+
 | Suite | Full denominator | Sessions per cell | Timeout per session | Requested output tokens | Reference-call cap |
 | --- | --- | --- | --- | --- | --- |
 | NMT 2022 demonstration language block | 20 tasks / 35 points | 20 | 300 seconds | 4,096 | 20 |
