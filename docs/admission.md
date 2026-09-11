@@ -325,3 +325,110 @@ reviewed evidence is assembled, omit the diagnostic flag and invoke through the
 normal hash-bound admission-command/controller path. Refresh admission with a
 new nonce at launch and every required segment; saved diagnostics never become
 permanent readiness.
+
+## Personal metered Gemma through native OpenCode
+
+`tools/admission/gemma_probe.py` implements admission-result.v1 for the selected
+`google/gemma-4-31b-it` OpenRouter route, exact `venice/bf16` backend and `Venice`
+provider. It supports the native reasoning off/on configurations with null
+`effort`. It does not launch OpenCode or send completions, and cannot turn a
+successful diagnostic canary into admission. The selected backend's current
+published limit must cover every requested suite limit; a published 8192-token
+maximum rejects a 16384-token request without reducing that request or changing
+backend.
+
+The probe uses three bounded, current read-only GETs with verified TLS, no
+redirects or environment proxies, and no credential refresh:
+
+- `/api/v1/key` on `openrouter.ai` authenticates the exact selected ordinary key;
+- `/api/v1/credits` on that host obtains `total_credits` and `total_usage` using
+  the same key; permission denial rejects admission without seeking a
+  management key;
+- `/api/v1/models/google/gemma-4-31b-it/endpoints` checks the exact backend,
+  model, availability, context/output capacity, supported controls and prices.
+  This public request receives no credential.
+
+The frozen `credential_sha256` is SHA-256 of the exact UTF-8 token, and
+`key_env` names its sole environment input. Neither token nor fingerprint is
+used as an account identity. For a reviewed **personal** key,
+`account_sha256` is the canonical digest of
+`{"provider":"openrouter","creator_user_id":<authenticated subject>}`.
+It identifies the returned provider user, not an organization billing pool.
+The probe rejects management/provisioning/free-tier keys, unknown identity and
+other billing kinds. This personal metered interpretation must not be reused
+for organization accounts or existing-credit aggregation.
+
+V1 `valid_until` is a restrictive latest-use bound no later than the actual
+provider-reported key expiry and any earlier known access expiry. A missing or
+expired key expiry rejects admission. A future expiry does not establish
+current eligibility: current funds, finite key limits, route health and all
+other gates must also pass. It is not a subscription-expiry claim.
+
+The probe requires available provider funds (and `limit_remaining` when a
+finite key limit applies) to cover the full frozen
+`maximum_segment_micro_usd` plus **all** unresolved shared new-spend
+commitments. Including old commitments with unknown account identities is
+conservative. Decimal monetary inputs are retained exactly and available
+funds are rounded down to integer micro-USD. The independent shared cap must
+also cover the next full reservation. Funds below the entire experiment cap
+are not automatically insufficient. Because this is a metered route,
+`credit_available_micro_usd` remains null in the admission result; no provider
+balance is printed in its output.
+
+Supply a private frozen configuration with these groups:
+
+| Group | Required inputs |
+| --- | --- |
+| Route | `provider: "openrouter"`, the exact `model`, `effort: null`, `backend: "venice/bf16"`, `expected_provider_name: "Venice"`, boolean `reasoning_enabled`, `account_scope: "personal_provider_user"` |
+| Credential | `key_env`, `credential_sha256`; no token in the file |
+| Native runtime | `binary` and `runtime_files` with absolute paths and byte hashes, as for the native subscription probe |
+| Frozen states | V1 `pricing`, `entitlement`, and `capability` objects with the exact fields accepted by `validate_admission_result`; the full `maximum_segment_micro_usd` |
+| Shared ledger | `ledger: {"path": <existing absolute path>, "ledger_id": <frozen ID>, "cap_micro_usd": <frozen cap>}` |
+| Public package | `budget_wheel: {"name": <wheel basename>, "byte_sha256": <wheel hash>}` |
+| Reviewed support | The fields below, with each artifact also declared to the command runner |
+
+`support` binds `runtime_files_sha256`, `pricing_sha256`,
+`capability_sha256`, and the same `provider`, `model`, `backend`,
+`reasoning_enabled`, `account_scope`, and `credential_sha256`. Its nonempty
+`artifacts` list contains basename/byte-hash pairs. It lists the permitted
+`conditions` and reviewed `framing_tokens` and `permitted_history_tokens`
+bounds. The input fit check includes packet UTF-8 bytes as a conservative token
+upper bound **only when its semantics are independently verified**, plus
+native framing, schemas, permitted history and the requested output allowance.
+A published context size by itself is not input-fit proof.
+
+The following support conclusions must all be true and backed by the declared
+reviewed artifacts: `personal_key_ownership_verified`,
+`same_credential_native_execution_verified`,
+`native_control_enforcement_verified`,
+`provider_routing_and_price_caps_verified`,
+`byte_token_upper_bound_verified`, and `all_non_token_fees_excluded`.
+These flags validate the linkage to reviewed proof; setting them to true does
+not manufacture that proof. Missing framing/fee evidence remains a blocker.
+The native configuration and its provider price ceilings must be covered by
+those artifacts. Requested reasoning is route-bound, but this probe does not
+claim observed effective reasoning.
+
+Declare the probe as the `script`, the interpreter as `executable`, the private
+config as `runtime_lock`, and `probe_common.py`, the pinned public-package
+wheel and every support artifact as `dependency` files in the existing
+admission command specification. Its argv is the absolute interpreter, probe
+and config paths. Use only the declared credential environment name and an
+adequate bounded command timeout for three 15-second HTTP operations. The
+runner remaps the config argument into its private file snapshot. Wheel and
+support names are resolved relative to that snapshotted config. The probe
+checks the wheel's bytes before adding that exact snapshot archive to its
+import path, then calls the existing
+`SharedSpendingLedger.inspect_readiness` API. It rejects an ambient package
+import, a missing/drifted ledger or dependency, and unsupported ledger state;
+there is no alternate SQL implementation or ledger initialization.
+
+The route must bind canonical pricing/entitlement/capability **state** hashes,
+the command identity, request-budget mechanism and exact separate operator
+authorization. Raw official-document hashes belong in the corresponding
+mechanism/support evidence rather than being substituted for canonical
+admission state hashes. Keep the existing shared spending policy and ledger
+path across canaries and execution. The probe does not reserve, settle,
+reconcile or allocate candidate attempts. Admission is a time-bound
+observation; execution must still refresh admission and atomically reserve
+before each segment.
