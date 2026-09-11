@@ -414,6 +414,9 @@ def _child_env(max_output_tokens: int) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key in allowed}
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+    # Native refusal fallback must stop instead of sending to a different model.
+    # Keep the runtime guard in addition to settings, whose precedence can vary.
+    env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
     # Claude's native limit is an environment control.  The version probe
     # cannot attest that a particular CLI build honored it, so receipts retain
     # that distinction as configured rather than observed.
@@ -782,7 +785,8 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
             "-p",
             "--restricted",
             "--settings",
-            canonical({"claudeMdExcludes": ["**"], "disableAllHooks": True}),
+            canonical({"claudeMdExcludes": ["**"], "disableAllHooks": True,
+                       "switchModelsOnFlag": False, "availableModels": [checked["model"]]}),
             "--setting-sources",
             "",
             "--tools",

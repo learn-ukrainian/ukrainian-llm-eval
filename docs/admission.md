@@ -213,6 +213,26 @@ The implementation does not depend on or copy those integrations. Google's
 [userinfo endpoint](https://accounts.google.com/.well-known/openid-configuration)
 only proves identity; it does not prove entitlement, capacity or billing controls.
 
+### Claude exact-model refusal controls
+
+The Claude adapter sets `switchModelsOnFlag: false`, pins `availableModels` to
+its exact configured model, and explicitly sets
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` in the child environment. A native
+classifier refusal remains a failed attempt; it never becomes a successful
+receipt by substituting a model. The runtime guard complements the settings
+because managed settings can take precedence over command-line settings.
+See the native [automatic fallback](https://code.claude.com/docs/en/model-config#automatic-model-fallback)
+and [switching controls](https://code.claude.com/docs/en/model-config#ask-before-switching).
+
+Bind installed-runtime source inspection and all six synthetic refusal controls
+(low/medium/high × closed-book/Sources) to the support artifact hashes. Each
+control must record the runtime and adapter hashes, actual request models,
+request count, and preserved terminal failure. Run controls with synthetic
+local transport, never a candidate inference request. These receipts prove the
+observed refusal path only: they do not establish subscription capacity or
+exclude unrelated billing routes. If effective policy defeats the controls or
+its behavior cannot be established, leave admission unready.
+
 ### Frozen input and support evidence
 
 The input is a declared operator configuration, not a new public admission
