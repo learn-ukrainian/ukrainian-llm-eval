@@ -401,8 +401,8 @@ permanent readiness.
 ## Personal metered Gemma through native OpenCode
 
 `tools/admission/gemma_probe.py` implements admission-result.v1 for the selected
-`google/gemma-4-31b-it` OpenRouter route, exact `venice/bf16` backend and `Venice`
-provider. It supports the native reasoning off/on configurations with null
+`google/gemma-4-31b-it` OpenRouter route, using the exact `novita/bf16` /
+`Novita` or historical `venice/bf16` / `Venice` backend/provider pair. It supports the native reasoning off/on configurations with null
 `effort`. It does not launch OpenCode or send completions, and cannot turn a
 successful diagnostic canary into admission. The selected backend's current
 published limit must cover every requested suite limit; a published 8192-token
@@ -447,11 +447,22 @@ are not automatically insufficient. Because this is a metered route,
 `credit_available_micro_usd` remains null in the admission result; no provider
 balance is printed in its output.
 
+The selected endpoint must explicitly report `quantization: "bf16"`. Missing,
+unknown, or other precision values fail admission, even when the backend tag
+ends in `/bf16`. Provider/model mismatches also fail; these two exact route pairs
+do not enable automatic fallback. Novita's approved metadata reports a 262,144
+combined window, 131,072 maximum completion tokens, and USD 0.14/M input and
+0.40/M output. These values are frozen configuration inputs checked against
+live metadata, not defaults that override reviewed native limits. Reserving the
+full 131,072 output headroom leaves at most 131,072 input tokens; a lower native
+ceiling can require a smaller net input bound. Initial framing/history proof,
+fee controls, funding and the shared cap remain separate requirements.
+
 Supply a private frozen configuration with these groups:
 
 | Group | Required inputs |
 | --- | --- |
-| Route | `provider: "openrouter"`, the exact `model`, `effort: null`, `backend: "venice/bf16"`, `expected_provider_name: "Venice"`, boolean `reasoning_enabled`, `account_scope: "personal_provider_user"` |
+| Route | `provider: "openrouter"`, the exact `model`, `effort: null`, `backend: "novita/bf16"` with `expected_provider_name: "Novita"`, or historical `backend: "venice/bf16"` with `expected_provider_name: "Venice"`, boolean `reasoning_enabled`, `account_scope: "personal_provider_user"` |
 | Credential | `key_env`, `credential_sha256`; no token in the file |
 | Native runtime | `binary` and `runtime_files` with absolute paths and byte hashes, as for the native subscription probe |
 | Frozen states | V1 `pricing`, `entitlement`, and `capability` objects with the exact fields accepted by `validate_admission_result`; the full `maximum_segment_micro_usd` |
