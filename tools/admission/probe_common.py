@@ -291,5 +291,7 @@ def provider_json(url, token, *, body=None, headers=None):
 def available_percent(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         fail("quota_unknown")
-    if not 0 <= value < 100:
+    if value < 0:
+        fail("quota_unknown")
+    if value >= 100:
         fail("quota_exhausted")

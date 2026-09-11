@@ -18,6 +18,18 @@ probe = importlib.import_module("native_probe")
 agy = importlib.import_module("native_agy_status")
 
 
+@pytest.mark.parametrize("value", [-1, -0.01])
+def test_negative_usage_is_unknown(value):
+    with pytest.raises(common.ProbeError, match="^quota_unknown$"):
+        common.available_percent(value)
+
+
+@pytest.mark.parametrize("value", [100, 101])
+def test_usage_at_or_above_limit_is_exhausted(value):
+    with pytest.raises(common.ProbeError, match="^quota_exhausted$"):
+        common.available_percent(value)
+
+
 def request():
     value = {"schema": "ukrainian-llm-eval.admission-request.v1", "nonce": "a" * 32,
              "requested_at": common.utcnow(), "route_sha256": "b" * 64, "model": "gpt-6-astra",
