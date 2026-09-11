@@ -216,13 +216,27 @@ class Process:
 
     def close(self):
         try:
-            os.killpg(self.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        self.process.wait(timeout=5)
-        self.selector.close()
-        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
-            stream.close()
+            # Reap helpers that finished naturally before signalling. Their
+            # process-group identity must not be used after they are reaped.
+            try:
+                self.process.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # A concurrent natural exit may finish cleanup; permission
+                    # failure is never silently accepted while a child lives.
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        fail("native_cleanup_failed")
+                self.process.wait(timeout=5)
+        finally:
+            self.selector.close()
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                stream.close()
 
 
 def native_json(argv, env):
