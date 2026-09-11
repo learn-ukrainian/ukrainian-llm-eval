@@ -46,7 +46,9 @@ def config():
 
 
 def support():
-    return {"conditions": ["closed_book", "sources"], "framing_tokens": 50, "permitted_history_tokens": 200}
+    return {"conditions": ["closed_book", "sources"], "framing_tokens": 50, "initial_history_tokens": 200,
+            "initial_history_verified": True, "context_window_tokens": 1600,
+            "output_headroom_tokens": 400, "output_headroom_verified": True}
 
 
 def observation():
@@ -277,11 +279,63 @@ def test_supported_capacity_not_requested_capacity(field):
         probe.build_result(req, cfg, observation(), support())
 
 
-def test_fit_includes_framing_and_history():
+def test_initial_fit_includes_framing_and_history():
     req, cfg = request(), config()
     cfg["capability"]["context_input_tokens"] = 101  # packet alone fits; full input does not
     with pytest.raises(common.ProbeError, match="input_does_not_fit"):
         probe.build_result(req, cfg, observation(), support())
+
+
+@pytest.mark.parametrize("framing,history,expected", [(50, 200, 350), (250, 0, 350), (50, 0, 150)])
+def test_initial_input_sum_and_no_double_output_subtraction(framing, history, expected):
+    req, cfg, supp = request(), config(), support()
+    supp.update(framing_tokens=framing, initial_history_tokens=history)
+    cfg["capability"]["context_input_tokens"] = expected
+    supp["context_window_tokens"] = expected + supp["output_headroom_tokens"]
+    result = probe.build_result(req, cfg, observation(), supp)
+    assert result["capability"]["observed"]["required_input_tokens"] == expected
+    assert result["capability"]["observed"]["input_fits"] is True
+
+
+@pytest.mark.parametrize("field", ["framing_tokens", "initial_history_tokens"])
+def test_initial_framing_or_history_overflow(field):
+    req, cfg, supp = request(), config(), support()
+    supp[field] = 1000
+    with pytest.raises(common.ProbeError, match="input_does_not_fit"):
+        probe.build_result(req, cfg, observation(), supp)
+
+
+@pytest.mark.parametrize("field", ["initial_history_verified", "output_headroom_verified"])
+@pytest.mark.parametrize("value", [None, False, 1])
+def test_zero_initial_history_and_output_headroom_need_explicit_review(field, value):
+    req, cfg, supp = request(), config(), support()
+    supp.update(initial_history_tokens=0)
+    supp[field] = value
+    with pytest.raises(common.ProbeError, match="support_proof_unavailable"):
+        probe.build_result(req, cfg, observation(), supp)
+
+
+@pytest.mark.parametrize("window,headroom", [(1600, 399), (1200, 400), (400, 400), (300, 400)])
+def test_output_headroom_must_leave_verified_net_input(window, headroom):
+    req, cfg, supp = request(), config(), support()
+    supp.update(context_window_tokens=window, output_headroom_tokens=headroom)
+    with pytest.raises(common.ProbeError, match="output_headroom_invalid"):
+        probe.build_result(req, cfg, observation(), supp)
+
+
+@pytest.mark.parametrize("field", ["context_window_tokens", "output_headroom_tokens", "initial_history_tokens"])
+def test_initial_capacity_rejects_missing_source_bound(field):
+    supp = support()
+    del supp[field]
+    with pytest.raises(common.ProbeError):
+        probe.build_result(request(), config(), observation(), supp)
+
+
+def test_old_future_history_contract_cannot_silently_be_reinterpreted():
+    supp = support()
+    supp["permitted_history_tokens"] = supp.pop("initial_history_tokens")
+    with pytest.raises(common.ProbeError, match="legacy_history_bound_rejected"):
+        probe.build_result(request(), config(), observation(), supp)
 
 
 def test_no_fabricated_expiry_or_wrong_account():

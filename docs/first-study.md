@@ -19,9 +19,14 @@ count is not a request count or cost estimate.
 
 Limits are common within a suite. They are concrete review inputs, not claims
 that every native provider enforces the requested output cap. The AGY adapter
-reports its effective output cap as unknown. Admission must account for actual
-native limits and complete tool history; a small synthetic answer or prompt
-byte length does not prove provider token fit for the largest document.
+reports its effective output cap as unknown. Native admission `input_fits`
+covers the complete initial request: the full prompt, native/system/developer/tool-schema/setup framing, and any included
+initial history. Available input capacity must already reserve verified output
+headroom. Zero initial history requires reviewed evidence, not merely a fresh
+process. A small synthetic answer or prompt byte length alone does not prove
+initial fit for the largest document. Later tool-context failures are retained;
+initial fit guarantees neither compaction nor successful completion. Existing
+tool limits and request-budget enforcement remain unchanged.
 Requested effort is not equal computation across providers, and unreported
 effective model/effort stays unknown.
 

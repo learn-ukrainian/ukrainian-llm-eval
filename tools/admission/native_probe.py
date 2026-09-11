@@ -120,10 +120,32 @@ def support_for(config, base):
     # additional-charge path, not just the presence of a setting in JSON.
     for key in ("current_subscription_endpoint_verified", "all_additional_charge_paths_excluded",
                 "api_credentials_excluded", "native_control_enforcement_verified",
-                "capacity_source_verified", "byte_token_upper_bound_verified"):
+                "capacity_source_verified", "byte_token_upper_bound_verified",
+                "initial_history_verified", "output_headroom_verified"):
         if support.get(key) is not True:
             fail("support_proof_unavailable")
+    initial_capacity(config["capability"], support)
     return support
+
+
+def initial_capacity(capability, support):
+    """Validate reviewed initial history and combined-window/output semantics."""
+    if "permitted_history_tokens" in support:
+        fail("legacy_history_bound_rejected")
+    if (support.get("initial_history_verified") is not True
+            or support.get("output_headroom_verified") is not True):
+        fail("support_proof_unavailable")
+    history = integer(support.get("initial_history_tokens"))
+    framing = integer(support.get("framing_tokens"), 1)
+    window = integer(support.get("context_window_tokens"), 1)
+    headroom = integer(support.get("output_headroom_tokens"), 1)
+    available_input = integer(capability["context_input_tokens"], 1)
+    # Headroom is source-reviewed maximum runtime output, not a request cap.
+    # context_input_tokens is already net; never subtract headroom from it.
+    if (headroom < integer(capability["max_output_tokens"], 1)
+            or headroom >= window or available_input > window - headroom):
+        fail("output_headroom_invalid")
+    return framing, history, available_input
 
 
 def build_result(request, config, observation, support):
@@ -165,12 +187,11 @@ def build_result(request, config, observation, support):
     for field in ("max_output_tokens", "max_tool_calls", "timeout_seconds"):
         if integer(capability[field]) < requirements[field]:
             fail("capacity_insufficient")
-    # The reviewed framing bound includes system/developer messages, schema,
-    # native framing and permitted reference history; it is not packet bytes
-    # alone, requested context, or a claim of an exact provider tokenizer.
-    required_input = (requirements["input_utf8_bytes"] + integer(support["framing_tokens"], 1)
-                      + integer(support["permitted_history_tokens"]))
-    if required_input > min(integer(capability["context_input_tokens"], 1), requirements["max_total_input_tokens"]):
+    # Initial request only: full prompt bytes plus disjoint reviewed framing
+    # and actual initial history. Later tool turns retain their own failures.
+    framing, history, available_input = initial_capacity(capability, support)
+    required_input = requirements["input_utf8_bytes"] + framing + history
+    if required_input > min(available_input, requirements["max_total_input_tokens"]):
         fail("input_does_not_fit")
     if pricing["currency"] != "USD":
         fail("pricing_unverified")

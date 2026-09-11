@@ -277,11 +277,27 @@ schema. It contains:
 - The support record requires explicit reviewed conclusions:
   `current_subscription_endpoint_verified`,
   `all_additional_charge_paths_excluded`, `api_credentials_excluded`,
-  `native_control_enforcement_verified`, `capacity_source_verified`, and
-  `byte_token_upper_bound_verified`, all boolean true. `framing_tokens` is a
-  positive reviewed upper bound for all native/system/schema framing;
-  `permitted_history_tokens` is a nonnegative bound covering the allowed tool
-  history for the frozen policy and limits.
+  `native_control_enforcement_verified`, `capacity_source_verified`,
+  `byte_token_upper_bound_verified`, `initial_history_verified`, and
+  `output_headroom_verified`, all boolean true and backed by the frozen
+  reviewed artifacts. `framing_tokens` is a positive reviewed upper bound for
+  all native/system/developer/tool-schema/setup framing;
+  `initial_history_tokens` is a nonnegative bound covering only history actually
+  included in the initial request, including restored, preloaded or setup
+  messages. Explicit reviewed evidence must substantiate the bound; zero does
+  not follow merely from a fresh process. The previous private
+  `permitted_history_tokens` field is rejected rather than reinterpreted.
+- `context_window_tokens` is the source-reviewed combined input/output window;
+  `output_headroom_tokens` is positive, source-reviewed safe output headroom.
+  It must cover at least capability `max_output_tokens`, but that inequality
+  alone is not proof. When native output enforcement is unknown, reserve the
+  actual runtime/model maximum output allowance or otherwise proven safe
+  headroom, never merely the requested suite output cap. Available input must
+  satisfy `0 < context_input_tokens <= context_window_tokens - output_headroom_tokens`.
+  This collector currently represents combined-window evidence only. A source
+  documenting net input capacity separately cannot be relabeled as a combined
+  window; that evidence representation remains unsupported, which does not
+  establish provider incapacity.
 
 These declarations are **not proof by themselves**. The independent review
 must inspect the referenced bytes and demonstrate that the exact model/runtime
@@ -295,10 +311,18 @@ within the existing trusted-command contract; it is not a certificate scheme.
 
 Supported capacity must come from reviewed model/runtime evidence, never from
 requested segment limits. Effective output enforcement and effective effort may
-remain unknown in the existing adapter receipts. Fit uses packet UTF-8 bytes
-plus reviewed framing and allowed-history bounds, comparing the sum with both
-supported input capacity and the segment's input reservation. It does not call
-that an exact tokenizer. Zero incremental cost is emitted only after fresh
+remain unknown in the existing adapter receipts. The native `input_fits`
+observation concerns the complete initial request.
+It uses the complete prompt UTF-8 byte upper bound plus reviewed native, system,
+developer, tool/schema and setup framing, and actual included initial history.
+These components must not overlap. The sum is compared with supported available
+input capacity and the segment's input reservation. `context_input_tokens` is
+available input after verified output headroom has already been reserved;
+output is not subtracted again during this comparison. Requested context or
+output settings are not evidence of supported capacity. This is a conservative
+bound, not an exact tokenizer count. Later tool-context failures remain retained
+failures; initial fit guarantees neither compaction nor successful completion.
+Tool limits, budget enforcement and public metrics are unchanged. Zero incremental cost is emitted only after fresh
 subscription checks and the reviewed complete no-additional-charge controls;
 the ordinary pricing arithmetic still supplies the conservative segment quote.
 
