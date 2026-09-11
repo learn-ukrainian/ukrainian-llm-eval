@@ -21,6 +21,7 @@ from ukrainian_llm_eval.segmentation import derive_segment_plan
 @pytest.mark.parametrize("filename", [
     "codex_catalog.py", "codex_reference.py", "codex_reference_bridge.py", "codex_reference_controls.py",
     "native_agy.py", "agy_hook.py", "native_opencode.py", "opencode_gateway.py",
+    "opencode_batch.py",
 ])
 def test_native_control_change_invalidates_frozen_research_before_execution(monkeypatch, tmp_path, filename):
     packets, plans, manifest, plan, configs = inputs()

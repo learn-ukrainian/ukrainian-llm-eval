@@ -511,17 +511,10 @@ def reassemble_cell(plan: dict[str, Any], segment_results: Any) -> dict[str, Any
     return reassembled
 
 
-def reassemble_responses(plan: dict[str, Any], segment_results: Any) -> dict[str, Any]:
-    """Compatibility alias for callers naming the returned object directly."""
-
-    return reassemble_cell(plan, segment_results)
-
-
 __all__ = [
     "SEGMENT_PLAN_SCHEMA",
     "derive_segment_packet",
     "derive_segment_plan",
     "reassemble_cell",
-    "reassemble_responses",
     "validate_segment_plan",
 ]

@@ -5,11 +5,27 @@ configuration matrix and concrete common limits for review. It is a preparation
 input, not a `plan-research` specification or an admission certificate. It
 contains no invented pricing, entitlement, provider-probe or authorization digests.
 
-There are eleven configurations: Astra, Fable and Gemini at low/medium/high,
-and Gemma with reasoning off/on. Each has both conditions and three repeats on
-each complete suite: **198 cells and 35,178 segment sessions**. Tool rounds and
-native auxiliary requests can produce additional model requests; this session
-count is not a request count or cost estimate.
+The executable inventory has eleven configurations: Astra, Fable and Gemini at
+low/medium/high, and Gemma with reasoning off/on. Each has both conditions and
+three repeats on each complete suite: **198 cells and 35,178 segment sessions**.
+Tool rounds and native auxiliary requests can produce additional model requests;
+this session count is not a request count or cost estimate.
+
+**Grok-4.7** is reserved for the study once that model is released. It is not an
+executable configuration today. **Grok-4.6 must not be substituted.** Until a
+native package adapter and admission bindings exist for 4.7, those cells remain
+pending/excluded with an explicit reason.
+
+Candidate harness map (package adapters only; Learn Ukrainian headless `ask-*`
+CLIs are operator/worker seats, not candidate runners):
+
+| LLM | Package adapter | Route |
+| --- | --- | --- |
+| GPT-6 Astra | `codex` | Codex subscription |
+| Claude Fable 5.1 | `claude` | Claude CLI subscription |
+| Gemini 3.8 Flash | `agy` | AGY subscription |
+| Gemma 4 31B | `opencode` | OpenCode → OpenRouter |
+| Grok-4.7 | native (TBD at release) | Native Grok CLI when 4.7 ships |
 
 Both Gemma configurations select `google/gemma-4-31b-it:free` through
 OpenRouter's `google-ai-studio` backend, using native OpenCode. The operator

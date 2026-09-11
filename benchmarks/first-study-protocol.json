@@ -10,6 +10,21 @@
     "closed-book",
     "sources"
   ],
+  "reserved_models": {
+    "grok-4.7": {
+      "adapter": "native-tbd",
+      "admission": "blocked_until_model_release",
+      "effort": "tbd_at_release",
+      "model": "grok-4.7",
+      "notes": "Reserved for the study when Grok-4.7 is released. Grok-4.6 must not be substituted. No package adapter exists until a follow-up binds the native CLI, effort levels and admission probes.",
+      "provider": "managed:grok-subscription-tbd",
+      "substitute_forbidden": [
+        "grok-4.6",
+        "openrouter/x-ai/grok-4.6",
+        "xai/grok-4.6"
+      ]
+    }
+  },
   "configs": {
     "astra-high": {
       "adapter": "codex",
@@ -344,7 +359,7 @@
       ]
     }
   },
-  "configuration_status": "prepared for review; concrete common suite limits must be covered by route admission and installed controls",
+  "configuration_status": "prepared for review; concrete common suite limits must be covered by route admission and installed controls; grok-4.7 reserved until model release and must not be substituted with grok-4.6",
   "failure": "preserve every attempt; no retry, answer repair or best-repeat selection; failed segment stops its cell; incomplete cells receive no primary score",
   "integrity_stop": "identity, tools, implementation, session, admission or spending drift stops the experiment",
   "ordering": "existing canonical scheduler; paired condition order counterbalanced across repeats",
