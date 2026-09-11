@@ -82,7 +82,7 @@ def normalize(account_reply, usage, catalog, model, effort, quota_key):
             fail("model_quota_unknown")
         if model in mapped:
             selected.append((key, bucket))
-    for key, quota in selected:
+    for _key, quota in selected:
         if quota.get("planType") != account["planType"]:
             fail("subscription_identity_mismatch")
         if quota.get("rateLimitReachedType") is not None or quota.get("spendControlReached") not in (None, False):
@@ -90,10 +90,7 @@ def normalize(account_reply, usage, catalog, model, effort, quota_key):
         credits = quota.get("credits") or {}
         if not isinstance(credits, dict):
             fail("paid_fallback_unknown")
-        if key == "codex":
-            if credits.get("hasCredits") is not False or credits.get("unlimited") is not False:
-                fail("paid_fallback_unknown")
-        elif credits.get("hasCredits") is True or credits.get("unlimited") is True:
+        if credits.get("hasCredits") is not False or credits.get("unlimited") is not False:
             fail("paid_fallback_unknown")
         windows = [quota.get("primary"), quota.get("secondary")]
         if not any(isinstance(window, dict) for window in windows):

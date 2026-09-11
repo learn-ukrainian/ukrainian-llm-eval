@@ -820,6 +820,7 @@ def test_codex_known_other_catalog_bindings_can_exclude_other_model_limits():
     assert codex.normalize(*values, "gpt-6-astra", "medium", "codex")
     values[1]["rateLimitsByLimitId"]["reserve"]["normalModelSlug"] = "gpt-6-astra"
     values[1]["rateLimitsByLimitId"]["reserve"]["planType"] = "pro"
+    values[1]["rateLimitsByLimitId"]["reserve"]["credits"] = {"hasCredits": False, "unlimited": False}
     with pytest.raises(common.ProbeError, match="quota_exhausted"):
         codex.normalize(*values, "gpt-6-astra", "medium", "codex")
 
@@ -846,3 +847,38 @@ def test_codex_positive_extra_does_not_override_ordinary_exhaustion():
     values[1]["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = 100
     with pytest.raises(common.ProbeError, match="quota_exhausted"):
         codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+
+@pytest.mark.parametrize("field", ["hasCredits", "unlimited"])
+@pytest.mark.parametrize("value", ["missing", None, True, 0, 1, "false", "true", {}, []])
+def test_codex_selected_extra_requires_explicit_false_credit_flags(field, value):
+    values = codex_values()
+    extra = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    extra["limitName"] = "gpt-6-astra"
+    if value == "missing":
+        del extra["credits"][field]
+    else:
+        extra["credits"][field] = value
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    with pytest.raises(common.ProbeError, match="paid_fallback_unknown"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+@pytest.mark.parametrize("credits", [None, {}, True, False, []])
+def test_codex_selected_extra_rejects_unknown_credit_record(credits):
+    values = codex_values()
+    extra = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    extra.update(limitName="gpt-6-astra", credits=credits)
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    with pytest.raises(common.ProbeError, match="paid_fallback_unknown"):
+        codex.normalize(*values, "gpt-6-astra", "medium", "codex")
+
+
+def test_codex_selected_extra_accepts_both_explicit_false_credit_flags():
+    values = codex_values()
+    extra = copy.deepcopy(values[1]["rateLimitsByLimitId"]["codex"])
+    extra.update(limitName="gpt-6-astra", credits={"hasCredits": False, "unlimited": False})
+    values[1]["rateLimitsByLimitId"]["extra"] = extra
+    assert codex.normalize(*values, "gpt-6-astra", "medium", "codex") == common.digest(
+        {"provider": "openai-chatgpt", "account_id": "synthetic-account"})
