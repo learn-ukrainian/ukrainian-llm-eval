@@ -57,7 +57,16 @@ amd64 emulation or a verified Linux scoring host. Image inspection alone is
 insufficient: execute the scorer and parity checks. Do not alter the scorer or
 substitute a metric to accommodate a host that cannot execute that architecture.
 
-Once admitted, use [run-research](research-execution.md), preserve every attempt,
+Before any scored request, run the admission-only `check-research` command
+documented in [research execution](research-execution.md). For the complete
+matrix, its 198 fresh representative probes cover 35,178 structurally validated
+segment bindings. It preserves failed probes and inspects the existing shared
+ledger without allocating scored attempts or reservations. Those observations
+expire with their underlying evidence; they are not execution authorization,
+and each launched segment must refresh admission. Stop after this observation
+when the operator has authorized launch preparation only.
+
+When scored execution is separately authorized, use [run-research](research-execution.md), preserve every attempt,
 and score complete cells using the separate offline custody map. The
 [results document](results.md) tracks coverage, failures and paired results.
 The [release procedure](releasing.md) still requires tested public artifacts

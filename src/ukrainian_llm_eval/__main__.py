@@ -57,40 +57,45 @@ def parser() -> argparse.ArgumentParser:
     research_plan = commands.add_parser("plan-research", help="Freeze experiment and exact conservative reservations; no provider calls")
     for name in ("specification", "manifest", "execution-plan"):
         research_plan.add_argument("--" + name, type=Path, required=True)
-    research_run = commands.add_parser(
-        "run-research",
-        help="Execute a frozen research plan with explicitly supplied runtime inputs and admission commands",
-    )
-    research_run.add_argument("--inputs", "--runtime-inputs", dest="inputs", type=Path, required=True,
-                              help="JSON map of packet, segment-plan and route-config files; never includes keys")
-    for name in ("manifest", "execution-plan", "execution-root"):
-        research_run.add_argument("--" + name, type=Path, required=True)
-    research_run.add_argument(
-        "--admission-specs", "--admission-commands", dest="admission_specs", type=Path, required=True,
-        help="JSON route map to trusted admission-command specification files",
-    )
-    research_run.add_argument(
-        "--operator-authorizations", "--authorizations", dest="operator_authorizations", type=Path, required=True,
-        help="JSON route map to separate operator authorization files",
-    )
-    research_run.add_argument(
-        "--request-budgets", type=Path,
-        help="Route map to frozen request-budget mechanisms and trusted local counter commands; required by paid/credit routes",
-    )
-    research_run.add_argument(
-        "--shared-spending-ledger", type=Path,
-        help="Absolute SQLite path outside execution roots; reuse for all canaries and runs sharing the spending cap",
-    )
-    research_run.add_argument(
-        "--sources-urls", "--sources-routes", dest="sources_urls", type=Path,
-        help="Optional JSON route-to-URL map; values may be env:NAME references",
-    )
-    research_run.add_argument(
-        "--sources-url-env", action="append", default=[], metavar="ROUTE=ENV",
-        help="Resolve a Sources URL from an environment variable (repeat; ENV alone applies to every Sources route)",
-    )
-    research_run.add_argument("--resume", action="store_true",
-                              help="Resume the frozen root without retrying started segments")
+    for command in ("run-research", "check-research"):
+        research_run = commands.add_parser(command, help=(
+            "Execute a frozen research plan" if command == "run-research" else
+            "Observe actual-plan admission only; candidate execution is unreachable"
+        ))
+        research_run.add_argument("--inputs", "--runtime-inputs", dest="inputs", type=Path, required=True,
+                                  help="JSON map of packet, segment-plan and route-config files; never includes keys")
+        for name in ("manifest", "execution-plan", "execution-root"):
+            research_run.add_argument("--" + name, type=Path, required=True)
+        research_run.add_argument(
+            "--admission-specs", "--admission-commands", dest="admission_specs", type=Path, required=True,
+            help="JSON route map to trusted admission-command specification files",
+        )
+        research_run.add_argument(
+            "--operator-authorizations", "--authorizations", dest="operator_authorizations", type=Path, required=True,
+            help="JSON route map to separate operator authorization files",
+        )
+        research_run.add_argument(
+            "--request-budgets", type=Path,
+            help="Route map to frozen request-budget mechanisms and trusted local counter commands; required by paid/credit routes",
+        )
+        research_run.add_argument(
+            "--shared-spending-ledger", type=Path,
+            help="Absolute SQLite path outside execution roots; reuse for all canaries and runs sharing the spending cap",
+        )
+        research_run.add_argument(
+            "--sources-urls", "--sources-routes", dest="sources_urls", type=Path,
+            help="Optional JSON route-to-URL map; values may be env:NAME references",
+        )
+        research_run.add_argument(
+            "--sources-url-env", action="append", default=[], metavar="ROUTE=ENV",
+            help="Resolve a Sources URL from an environment variable (repeat; ENV alone applies to every Sources route)",
+        )
+        if command == "run-research":
+            research_run.add_argument("--resume", action="store_true",
+                                      help="Resume without retrying started segments")
+        else:
+            research_run.add_argument("--evidence-root", type=Path, required=True,
+                                      help="New private observation directory, separate from execution storage")
     research_score = commands.add_parser("score-research", help="Verify sealed full-cell evidence and score offline")
     for name in ("inputs", "manifest", "execution-plan", "execution-root", "scorer-bindings", "output"):
         research_score.add_argument("--" + name, type=Path, required=True)
@@ -355,7 +360,7 @@ def execute(args: argparse.Namespace) -> int:
         print(json.dumps({"cells": len(plan["cells"]), "reservation_total_micro_usd": plan["reservation_total_micro_usd"],
                           "experiment_manifest_sha256": manifest["experiment_manifest_sha256"],
                           "execution_plan_sha256": plan["execution_plan_sha256"], "execution_admitted": False}))
-    elif args.command == "run-research":
+    elif args.command in {"run-research", "check-research"}:
         if args.shared_spending_ledger is not None and not args.shared_spending_ledger.is_absolute():
             raise ExamError("shared spending ledger path must be absolute")
         runtime = _research_runtime_inputs(args.inputs)
@@ -394,6 +399,16 @@ def execute(args: argparse.Namespace) -> int:
         )
         controller = CommandAdmissionController(specs, authorizations)
         budget_controller = RequestBudgetController(budget_specs, shared_ledger_path=args.shared_spending_ledger)
+        if args.command == "check-research":
+            from .readiness import check_research
+
+            observation = check_research(
+                runtime["packets"], runtime["segment_plans"], manifest, plan, runtime["configs"],
+                args.execution_root, evidence_root=args.evidence_root, admission_probe=controller,
+                request_budget_controller=budget_controller, sources_urls=sources_urls,
+            )
+            print(json.dumps(observation, ensure_ascii=False), flush=True)
+            return 0 if observation["status"] == "ok" else 2
         failed = False
         for progress in run_research(
             runtime["packets"], runtime["segment_plans"], manifest, plan, runtime["configs"],
