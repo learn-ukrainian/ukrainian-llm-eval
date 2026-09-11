@@ -27,7 +27,7 @@ from probe_common import (
 )
 
 
-def collect(config):
+def collect(config, requested_at=None):
     provider = config["provider"]
     if provider == "codex":
         values = codex_status.collect(config)
@@ -36,8 +36,8 @@ def collect(config):
         values = subscription_status.collect_claude(config)
         identity = subscription_status.normalize_claude(*values[:-1], config["model"])
     elif provider == "agy":
-        values = subscription_status.collect_agy(config)
-        identity = subscription_status.normalize_agy(*values[:-1], config["model"])
+        values = subscription_status.collect_agy(config, requested_at=requested_at)
+        identity = subscription_status.normalize_agy(*values[:-1], config["model"], config["effort"])
     else:
         fail("provider_unsupported")
     return {"account_sha256": identity, "status_observed_at": values[-1]}
@@ -77,13 +77,12 @@ def inspect_subscription(config, diagnostics=None):
             "extra_usage_explicitly_disabled": (usage.get("extra_usage") or {}).get("is_enabled") is False,
             "quota_windows_present": all(isinstance(usage.get(key), dict) for key in ("five_hour", "seven_day"))}
     if config["provider"] == "agy":
-        identity, plan, models, quota, project, observed = subscription_status.collect_agy(config, diagnostics)
-        selected = (models.get("models") or {}).get(config["model"])
-        return {"admission": False, "observed_at": observed,
-            "subject_present": bool(identity.get("sub")), "project_present": bool(project),
-            "current_standard_tier": (plan.get("currentTier") or {}).get("id") == "standard-tier",
-            "plan_info_present": bool(plan.get("planInfo")), "selected_model_present": isinstance(selected, dict),
-            "selected_quota_present": any(item.get("modelId") == config["model"] for item in quota.get("buckets", []))}
+        identity, status, quota, observed = subscription_status.collect_agy(config, diagnostics)
+        account = subscription_status.normalize_agy(identity, status, quota, config["model"], config["effort"])
+        return {"admission": False, "observed_at": observed, "account_sha256": account,
+                "owned_fresh_native_status": True, "selected_model": config["model"],
+                "selected_effort": config["effort"], "selected_quota_available": True,
+                "current_user_tier": status["userStatus"]["userTier"]["id"]}
     fail("provider_unsupported")
 
 
@@ -236,7 +235,7 @@ def main():
             # Reject drift before authenticated calls, then recheck at output.
             if request["model"] != config["model"] or request["effort"] != config["effort"]:
                 fail("request_route_mismatch")
-            result = build_result(request, config, collect(config), support)
+            result = build_result(request, config, collect(config, request["requested_at"]), support)
         if verified_runtime(config) != identity:
             fail("runtime_identity_mismatch")
         sys.stdout.buffer.write(canonical(result) + b"\n")

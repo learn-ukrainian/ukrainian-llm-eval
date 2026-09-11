@@ -245,9 +245,6 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 ENDPOINTS = {
     "https://api.anthropic.com/api/oauth/usage": "GET",
     "https://api.anthropic.com/api/oauth/profile": "GET",
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": "POST",
-    "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels": "POST",
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota": "POST",
     "https://openidconnect.googleapis.com/v1/userinfo": "GET",
 }
 

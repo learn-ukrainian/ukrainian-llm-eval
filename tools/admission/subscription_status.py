@@ -1,10 +1,11 @@
 """Authenticated Claude and Antigravity status, without refresh or onboarding."""
+import math
 import os
 
+import native_agy_status
 from probe_common import available_percent, child_env, digest, fail, native_json, provider_json, text, utcnow
 
 CLAUDE = "https://api.anthropic.com/api/oauth/"
-AGY = "https://cloudcode-pa.googleapis.com/v1internal:"
 USERINFO = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
@@ -96,44 +97,69 @@ def normalize_claude(auth, profile, usage, model):
     return digest({"provider": "anthropic-claude", "account_id": account_id, "organization_id": org_id})
 
 
-def collect_agy(config, diagnostics=None):
-    token = bearer()  # One credential instance for identity, plan, model and quota.
-    identity = status_read("identity", USERINFO, token, diagnostics)
-    plan = status_read("plan", AGY + "loadCodeAssist", token, diagnostics, body={"metadata": {
-        "ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
-    project = plan.get("cloudaicompanionProject")
-    if isinstance(project, dict):
-        project = project.get("id") or project.get("projectId")
-    project = text(project)
-    models = status_read("models", AGY + "fetchAvailableModels", token, diagnostics, body={"project": project})
-    quota = status_read("quota", AGY + "retrieveUserQuota", token, diagnostics, body={"project": project})
-    return identity, plan, models, quota, project, utcnow()
+def collect_agy(config, diagnostics=None, *, requested_at=None):
+    token = bearer()
+    return native_agy_status.collect(config, token,
+        lambda selected: status_read("identity", USERINFO, selected, diagnostics),
+        requested_at or utcnow(), diagnostics)
 
 
-def normalize_agy(identity, plan, models, quota, project, model):
-    subject = text(identity.get("sub"))
-    text(project)
-    observed_project = plan.get("cloudaicompanionProject")
-    if isinstance(observed_project, dict):
-        observed_project = observed_project.get("id") or observed_project.get("projectId")
-    if observed_project != project:
-        fail("subscription_identity_mismatch")
-    # allowedTiers and paidTier are onboarding choices, never current proof.
-    tier = (plan.get("currentTier") or {}).get("id")
-    if tier != "standard-tier":
+AGY_MODELS = {
+    "low": ("gemini-3.8-flash-low", "MODEL_PLACEHOLDER_M320", "Gemini 3.8 Flash (Low)"),
+    "medium": ("gemini-3.8-flash-medium", "MODEL_PLACEHOLDER_M319", "Gemini 3.8 Flash (Medium)"),
+    "high": ("gemini-3.8-flash-high", "MODEL_PLACEHOLDER_M318", "Gemini 3.8 Flash (High)"),
+}
+
+
+def remaining_fraction(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0 < value <= 1):
+        fail("model_quota_unknown")
+
+
+def normalize_agy(identity, status, quota, model, effort):
+    if not all(isinstance(value, dict) for value in (identity, status, quota)):
         fail("subscription_unknown")
-    model_info = (models.get("models") or {}).get(model)
-    if not isinstance(model_info, dict):
+    subject = text(identity.get("sub"))
+    email = text(identity.get("email"))
+    user = status.get("userStatus")
+    if not isinstance(user, dict) or identity.get("email_verified") is not True or user.get("email") != email:
+        fail("subscription_identity_mismatch")
+    # userTier is authoritative; legacy planInfo Pro and onboarding choices are not.
+    if not isinstance(user.get("userTier"), dict) or user["userTier"].get("id") != "g1-ultra-lite-tier":
+        fail("subscription_unknown")
+    selected = AGY_MODELS.get(effort)
+    if selected is None or model != selected[0]:
         fail("model_unavailable")
-    fraction = (model_info.get("quotaInfo") or {}).get("remainingFraction")
-    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0 < fraction <= 1:
+    model_data = user.get("cascadeModelConfigData")
+    models = model_data.get("clientModelConfigs") if isinstance(model_data, dict) else None
+    if not isinstance(models, list):
+        fail("model_unavailable")
+    matches = []
+    for row in models:
+        if not isinstance(row, dict) or not isinstance(row.get("modelOrAlias"), dict):
+            fail("model_unavailable")
+        enum = row["modelOrAlias"].get("model")
+        if enum == selected[1] or row.get("label") == selected[2]:
+            if enum != selected[1] or row.get("label") != selected[2]:
+                fail("model_unavailable")
+            matches.append(row)
+    if len(matches) != 1 or not isinstance(matches[0].get("quotaInfo"), dict):
         fail("model_quota_unknown")
-    matching = [bucket for bucket in quota.get("buckets", []) if bucket.get("modelId") == model]
-    if not matching:
+    remaining_fraction(matches[0]["quotaInfo"].get("remainingFraction"))
+    response = quota.get("response")
+    groups = response.get("groups") if isinstance(response, dict) else None
+    if not isinstance(groups, list) or any(not isinstance(group, dict) for group in groups):
         fail("model_quota_unknown")
-    for bucket in matching:
-        fraction = bucket.get("remainingFraction")
-        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0 < fraction <= 1:
+    matching = [group for group in groups if group.get("displayName") == "Gemini Models"]
+    if len(matching) != 1 or not isinstance(matching[0].get("buckets"), list):
+        fail("model_quota_unknown")
+    found = set()
+    for bucket in matching[0]["buckets"]:
+        if not isinstance(bucket, dict) or bucket.get("bucketId") not in {"gemini-weekly", "gemini-5h"}:
             fail("model_quota_unknown")
-    return digest({"provider": "google-antigravity", "issuer": "https://accounts.google.com",
-                   "subject": subject, "project_id": project})
+        remaining_fraction(bucket.get("remainingFraction"))
+        found.add(bucket["bucketId"])
+    if found != {"gemini-weekly", "gemini-5h"}:
+        fail("model_quota_unknown")
+    return digest({"provider": "google-antigravity", "issuer": "https://accounts.google.com", "subject": subject})

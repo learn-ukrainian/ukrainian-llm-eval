@@ -154,9 +154,9 @@ tokenizer; route-specific mechanism evidence remains an inaugural-run gate.
 Codex/Astra, Claude/Fable and Antigravity/Gemini, at low, medium and high effort.
 It implements the existing request-v1/result-v2 contracts; it does not run a
 candidate, onboard an account, request token refresh, or discover credentials. Copy
-these four source files from the reviewed checkout when assembling a command
+these five source files from the reviewed checkout when assembling a command
 spec; they are operator tools, not dependencies of the installed evaluator.
-Declare `native_probe.py` as the script, the other three Python files as
+Declare `native_probe.py` as the script, the other four Python files as
 `dependency`, and the frozen input JSON as `runtime_lock`. Pass its absolute
 path as argv[2]. Declare each evidence artifact described below as another
 `dependency`; the command runner snapshots them with unchanged basenames.
@@ -174,7 +174,7 @@ admission evidence retention still belongs to `invoke_validated_admission`.
 | --- | --- | --- |
 | Codex | Initialized native app-server `account/read` with `refreshToken:false`, `account/rateLimits/read`, `model/list` | Non-ChatGPT/unknown plan; unavailable included-usage permission; missing backend account ID; unknown/enabled credits; missing selected quota bucket or model/effort |
 | Claude | Native `auth status --json`; authenticated OAuth profile and usage using the same explicit bearer | Unsupported or inactive personal Max profile; profile/native account mismatch; extra usage not explicitly false; missing, ambiguous or exhausted global/Fable quota |
-| Antigravity | Google userinfo; same-bearer `loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuota` | Missing subject/project; missing current paid tier; onboarding tiers alone; absent/exhausted exact-model quota |
+| Antigravity | Same-token Google userinfo; fresh owned native `RetrieveUserQuotaSummary` and `GetUserStatus` | Unverified principal; unsupported current user tier; wrong exact model/enum; missing or exhausted model/group quotas |
 
 Codex requires an explicitly provisioned `CODEX_HOME`. Use the evaluator's fresh
 isolated native home containing only the existing selected account's auth and
@@ -191,12 +191,41 @@ through the command spec's `env_names`. Claude also requires `USER` for its
 existing native Keychain principal lookup; this does not enable ambient API keys. The operator supplies the existing token
 from the *same native account provisioning used by the adapter*. Do not put it
 in argv, JSON, an evidence artifact or a committed file. The probe never reads a
-credential store, changes accounts, refreshes or persists credentials. Claude
+unselected credential store, changes accounts, or requests token refresh. Claude
 native status also needs its existing native authentication context; profile
 account UUID and organization UUID are hashed after correlation with native
-email/org identity. Antigravity hashes Google's returned subject plus the
-same-bearer observed project ID and canonical provider/issuer. Email and decoded
+email/org identity. Antigravity hashes Google's verified returned subject plus
+the canonical provider/issuer. Email and decoded
 unsigned JWT claims cannot replace verified Google subject identity.
+
+Antigravity additionally requires the explicit private `native_home` in frozen
+input. Only its known `.gemini/antigravity-cli/antigravity-oauth-token` file is
+read, with ownership/permission checks and exact access-token equality to the
+selected bearer. Its supported consumer credential shape is copied into a fresh
+private home after removing `refresh_token`; expiry must exceed the complete
+collector deadline plus margin. The original is preserved. No ambient plan
+cache, sessions, settings, environment API credentials or proxies are imported.
+Bind installed evidence that this access-token-only shape works and no fallback
+auth/refresh source is consulted; post-run hash checks alone do not prove that.
+
+Each validated request precedes a new owned native bootstrap with no prompt.
+This fresh, cache-free bootstrap supplies current-plan evidence; an RPC timestamp
+alone does not establish plan freshness or subscription expiry. Only the live
+child's verified loopback listeners are considered, preserving IPv4/IPv6 family.
+The collector sends HTTPS JSON/Connect status calls, quota `forceRefresh: true`
+first, with bounded time/output and cleanup/reaping on failure. Self-signed TLS
+is accepted solely for the owned loopback endpoint. Native runtime and both
+original/copied credential bytes are checked for drift. Include the installed
+native executable, `/usr/sbin/lsof`, `/usr/bin/git` and collector sources in the
+reviewed runtime dependencies.
+
+The supported current `userTier.id` is `g1-ultra-lite-tier`; legacy `planInfo`
+labels cannot override it. Exact reviewed Gemini 3.8 Flash low/medium/high
+aliases must match fresh model enums M320/M319/M318 (provider prefix
+`MODEL_PLACEHOLDER_`) and their exact labels. Selected model quota and both
+`gemini-weekly` and `gemini-5h` group windows must remain positive. These checks
+do not establish separate capacity or no-additional-charge support conclusions.
+The obsolete remote Code Assist probes are removed from the endpoint allowlist.
 
 HTTP is restricted to fixed HTTPS status endpoints. Environment proxies and
 redirects are disabled, response size and socket time are bounded, and nonzero
@@ -208,7 +237,7 @@ auth/network behavior must be inspected, and expired provisioning may fail.
 
 Protocol prior art was checked against the installed Codex generated app-server
 schemas and the pinned [Claude OAuth status fetcher](https://github.com/steipete/CodexBar/blob/518743e2d73/Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthUsageFetcher.swift)
-and [Antigravity status fetcher](https://github.com/steipete/CodexBar/blob/518743e2d73/Sources/CodexBarCore/Providers/Antigravity/AntigravityRemoteUsageFetcher.swift).
+and [Antigravity native status probe](https://github.com/steipete/CodexBar/blob/518743e2d73/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift).
 The implementation does not depend on or copy those integrations. Google's
 [userinfo endpoint](https://accounts.google.com/.well-known/openid-configuration)
 only proves identity; it does not prove entitlement, capacity or billing controls.

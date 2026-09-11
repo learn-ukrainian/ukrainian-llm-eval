@@ -15,6 +15,7 @@ common = importlib.import_module("probe_common")
 codex = importlib.import_module("codex_status")
 subscriptions = importlib.import_module("subscription_status")
 probe = importlib.import_module("native_probe")
+agy = importlib.import_module("native_agy_status")
 
 
 def request():
@@ -77,10 +78,15 @@ def claude_values():
 
 
 def agy_values():
-    return ({"sub": "synthetic-subject"},
-        {"currentTier": {"id": "standard-tier"}, "cloudaicompanionProject": "synthetic-project"},
-        {"models": {"gemini-3.1-pro": {"quotaInfo": {"remainingFraction": 0.5}}}},
-        {"buckets": [{"modelId": "gemini-3.1-pro", "remainingFraction": 0.5}]}, "synthetic-project")
+    return ({"sub": "synthetic-subject", "email": "synthetic@example.invalid", "email_verified": True},
+        {"userStatus": {"email": "synthetic@example.invalid", "userTier": {"id": "g1-ultra-lite-tier"},
+            "planStatus": {"planInfo": {"planName": "Pro"}},
+            "cascadeModelConfigData": {"clientModelConfigs": [
+                {"modelOrAlias": {"model": enum}, "label": label, "quotaInfo": {"remainingFraction": 0.17}}
+                for _, enum, label in subscriptions.AGY_MODELS.values()]}}},
+        {"response": {"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "remainingFraction": 0.9},
+            {"bucketId": "gemini-5h", "remainingFraction": 0.17}]}]}})
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
@@ -196,33 +202,48 @@ def test_claude_observed_global_and_family_shape_with_inactive_windows():
         subscriptions.normalize_claude(*values, "claude-fable-5")
 
 
-def test_agy_same_bearer_subject_and_project_binding():
-    result = subscriptions.normalize_agy(*agy_values(), "gemini-3.1-pro")
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_agy_same_verified_principal_and_exact_fresh_model(effort):
+    result = subscriptions.normalize_agy(*agy_values(), "gemini-3.8-flash-" + effort, effort)
     assert result == common.digest({"provider": "google-antigravity", "issuer": "https://accounts.google.com",
-                                   "subject": "synthetic-subject", "project_id": "synthetic-project"})
+                                   "subject": "synthetic-subject"})
+
+
+@pytest.mark.parametrize("field,value", [("sub", None), ("email_verified", False), ("email", "other@example.invalid")])
+def test_agy_identity_cannot_be_inferred(field, value):
     values = agy_values()
-    values[0].pop("sub")
-    values[0]["email"] = "not-an-identity@example.invalid"
+    values[0][field] = value
     with pytest.raises(common.ProbeError):
-        subscriptions.normalize_agy(*values, "gemini-3.1-pro")
+        subscriptions.normalize_agy(*values, "gemini-3.8-flash-low", "low")
 
 
 @pytest.mark.parametrize("tier", [{}, {"id": "free-tier"}, {"id": "unknown"}])
-def test_agy_onboarding_tiers_never_establish_current_subscription(tier):
+def test_agy_legacy_plan_never_establishes_current_subscription(tier):
     values = agy_values()
-    values[1]["currentTier"] = tier
-    values[1]["paidTier"] = {"id": "standard-tier"}
-    values[1]["allowedTiers"] = [{"id": "standard-tier"}]
+    values[1]["userStatus"]["userTier"] = tier
     with pytest.raises(common.ProbeError, match="subscription_unknown"):
-        subscriptions.normalize_agy(*values, "gemini-3.1-pro")
+        subscriptions.normalize_agy(*values, "gemini-3.8-flash-low", "low")
 
 
 @pytest.mark.parametrize("fraction", [None, False, 0, -1, 1.1, float("nan")])
-def test_agy_model_quota_requires_fresh_concrete_capacity(fraction):
+@pytest.mark.parametrize("window", [0, 1])
+def test_agy_all_group_windows_require_quota(fraction, window):
     values = agy_values()
-    values[3]["buckets"][0]["remainingFraction"] = fraction
+    values[2]["response"]["groups"][0]["buckets"][window]["remainingFraction"] = fraction
     with pytest.raises(common.ProbeError, match="model_quota_unknown"):
-        subscriptions.normalize_agy(*values, "gemini-3.1-pro")
+        subscriptions.normalize_agy(*values, "gemini-3.8-flash-low", "low")
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda v: v[1]["userStatus"]["cascadeModelConfigData"]["clientModelConfigs"][0]["modelOrAlias"].update(model="wrong"),
+    lambda v: v[1]["userStatus"]["cascadeModelConfigData"]["clientModelConfigs"][0]["quotaInfo"].update(remainingFraction=0),
+    lambda v: v[2]["response"]["groups"][0].update(buckets=[]),
+])
+def test_agy_unknown_mapping_or_model_quota_fails(mutation):
+    values = agy_values()
+    mutation(values)
+    with pytest.raises(common.ProbeError):
+        subscriptions.normalize_agy(*values, "gemini-3.8-flash-low", "low")
 
 
 def test_v2_output_is_accepted_by_existing_strict_controller():
@@ -495,7 +516,7 @@ def test_complete_probe_from_verified_snapshot(tmp_path, monkeypatch):
     files = [(executable, "executable"), (PROBES / "native_probe.py", "script"), (input_path, "runtime_lock"),
              (artifact, "dependency")]
     files.extend((PROBES / name, "dependency") for name in
-                 ("probe_common.py", "codex_status.py", "subscription_status.py"))
+                 ("probe_common.py", "codex_status.py", "subscription_status.py", "native_agy_status.py"))
     spec = {"schema": "ukrainian-llm-eval.admission-command.v1", "runtime": "python-script-v1",
             "argv": [str(executable), str(PROBES / "native_probe.py"), str(input_path)],
             "declared_files": [{"path": str(path), "byte_sha256": common.file_hash(path), "role": role}
@@ -512,23 +533,21 @@ def test_complete_probe_from_verified_snapshot(tmp_path, monkeypatch):
     assert b"synthetic-review" not in result["stdout"]
 
 
-def test_http_same_bearer_and_fixed_status_sequence(monkeypatch):
+def test_http_same_bearer_then_owned_native_status(monkeypatch):
     calls = []
     values = agy_values()
-    replies = {subscriptions.USERINFO: values[0], subscriptions.AGY + "loadCodeAssist": values[1],
-               subscriptions.AGY + "fetchAvailableModels": values[2], subscriptions.AGY + "retrieveUserQuota": values[3]}
-
     def fetch(url, token, **kwargs):
-        calls.append((url, token, kwargs))
-        return replies[url]
-
+        calls.append((url, token))
+        return values[0]
+    def owned(config, token, reader, requested_at, diagnostics):
+        assert token == "synthetic-secret"
+        assert common.timestamp(requested_at) <= common.timestamp(common.utcnow())
+        return reader(token), values[1], values[2], common.utcnow()
     monkeypatch.setenv("ADMISSION_BEARER_TOKEN", "synthetic-secret")
     monkeypatch.setattr(subscriptions, "provider_json", fetch)
-    result = subscriptions.collect_agy({})
-    assert result[:5] == values
-    assert {token for _, token, _ in calls} == {"synthetic-secret"}
-    assert [url for url, _, _ in calls] == list(replies)
-    assert calls[-1][2] == {"body": {"project": "synthetic-project"}}
+    monkeypatch.setattr(agy, "collect", owned)
+    assert subscriptions.collect_agy({})[:3] == values
+    assert calls == [(subscriptions.USERINFO, "synthetic-secret")]
 
 
 def test_native_diagnostic_redacts_error_text_and_unknown_method():
@@ -565,5 +584,157 @@ def test_status_stage_survives_failure_without_endpoint_or_secret(monkeypatch):
     monkeypatch.setenv("ADMISSION_BEARER_TOKEN", "synthetic-secret")
     monkeypatch.setattr(subscriptions, "provider_json", lambda *a, **k: common.fail("provider_http_401"))
     with pytest.raises(common.ProbeError, match="provider_http_401"):
-        subscriptions.collect_agy({}, diagnostics)
+        subscriptions.status_read("identity", subscriptions.USERINFO, "synthetic-secret", diagnostics)
     assert diagnostics == [{"stage": "identity", "state": "started"}]
+
+
+
+def agy_provision_fixture(tmp_path):
+    home = tmp_path / "provisioned"
+    home.mkdir(mode=0o700)
+    (home / ".gemini").mkdir(mode=0o700)
+    path = home / agy.AUTH_PATH
+    path.parent.mkdir(mode=0o700)
+    path.write_bytes(common.canonical({"auth_method": "consumer", "token": {
+        "access_token": "synthetic-access", "refresh_token": "synthetic-refresh",
+        "expiry": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "token_type": "Bearer"}}))
+    path.chmod(0o600)
+    binary = tmp_path / "native"
+    binary.write_text("synthetic-runtime")
+    return {"native_home": str(home), "binary": str(binary)}, path
+
+
+def test_agy_provision_strips_refresh_and_preserves_original(tmp_path, monkeypatch):
+    cfg, source = agy_provision_fixture(tmp_path)
+    original = source.read_bytes()
+    target_home = tmp_path / "isolated"
+    target_home.mkdir()
+    _, _, target, _ = agy.provision(cfg, "synthetic-access", target_home)
+    assert "refresh_token" not in common.parse(target.read_bytes())["token"]
+    assert source.read_bytes() == original
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "ambient")
+    monkeypatch.setenv("ADMISSION_BEARER_TOKEN", "synthetic-access")
+    monkeypatch.setenv("HTTPS_PROXY", "ambient")
+    env = agy.environment(target_home)
+    assert env["HOME"] == str(target_home)
+    assert not {"GOOGLE_APPLICATION_CREDENTIALS", "ADMISSION_BEARER_TOKEN", "HTTPS_PROXY"} & env.keys()
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda v: v["token"].update(access_token="other"),
+    lambda v: v["token"].update(expiry="2000-01-01T00:00:00Z"),
+    lambda v: v["token"].update(expiry=None),
+    lambda v: v["token"].update(unknown_auth="unknown"),
+    lambda v: v.update(auth_method="unknown"),
+])
+def test_agy_provision_rejects_stale_or_unsupported_credentials(tmp_path, mutation):
+    cfg, source = agy_provision_fixture(tmp_path)
+    value = common.parse(source.read_bytes())
+    mutation(value)
+    source.write_bytes(common.canonical(value))
+    with pytest.raises(common.ProbeError):
+        agy.provision(cfg, "synthetic-access", tmp_path / "isolated")
+
+
+@pytest.mark.parametrize("drift", [None, "credential", "runtime", "timeout"])
+def test_agy_owned_collection_reaps_and_rejects_drift(tmp_path, monkeypatch, drift):
+    cfg, _source = agy_provision_fixture(tmp_path)
+    values = agy_values()
+    state = {"closed": False, "calls": []}
+    class Child:
+        def __init__(self, binary, home, workspace, deadline):
+            state["home"] = home
+            assert set(common.parse((home / agy.AUTH_PATH).read_bytes())["token"]) == {"access_token", "expiry", "token_type"}
+        def remaining(self):
+            if drift == "timeout":
+                common.fail("native_timeout")
+        def owned(self): pass
+        def drain(self, wait=0): pass
+        def ports(self): return {("127.0.0.1", 12345)}
+        def rpc(self, endpoint, method, body):
+            state["calls"].append((method, body))
+            if method == "RetrieveUserQuotaSummary": return values[2]
+            if drift == "credential": (state["home"] / agy.AUTH_PATH).write_text("changed")
+            if drift == "runtime": Path(cfg["binary"]).write_text("changed")
+            return values[1]
+        def close(self): state["closed"] = True
+    monkeypatch.setattr(agy, "OwnedNative", Child)
+    if drift:
+        with pytest.raises(common.ProbeError):
+            agy.collect(cfg, "synthetic-access", lambda _: values[0], common.utcnow())
+    else:
+        result = agy.collect(cfg, "synthetic-access", lambda _: values[0], common.utcnow())
+        assert result[:3] == values
+        assert state["calls"][0] == ("RetrieveUserQuotaSummary", {"forceRefresh": True})
+        assert state["calls"][1][0] == "GetUserStatus"
+    assert state["closed"]
+    assert not state["home"].exists()
+
+
+def test_agy_real_child_timeout_is_reaped(tmp_path):
+    import time
+    child_script = tmp_path / "sleep-native"
+    child_script.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    child_script.chmod(0o700)
+    child = agy.OwnedNative(str(child_script), tmp_path, tmp_path, time.monotonic() - 1)
+    try:
+        with pytest.raises(common.ProbeError, match="native_timeout"):
+            child.remaining()
+    finally:
+        child.close()
+    assert child.process.poll() is not None
+
+
+def test_agy_ports_only_owned_loopback_and_correct_ipv6(monkeypatch):
+    import io
+    from types import SimpleNamespace
+    child = object.__new__(agy.OwnedNative)
+    child.process = SimpleNamespace(pid=123)
+    child.env = {}
+    child.owned = lambda: None
+    child.remaining = lambda: 5
+    class Listing:
+        def __init__(self, argv, **kwargs):
+            assert argv[argv.index("-p") + 1] == "123"
+            self.process = SimpleNamespace(stdin=io.BytesIO())
+        def chunks(self): return [b"p123\nn127.0.0.1:12\nn[::1]:13\nn*:14\nn192.0.2.1:15\n"]
+        def close(self): pass
+    monkeypatch.setattr(agy, "Process", Listing)
+    assert child.ports() == {("127.0.0.1", 12), ("[::1]", 13)}
+
+
+def test_agy_rpc_requires_current_owned_endpoint_and_allowlisted_method():
+    child = object.__new__(agy.OwnedNative)
+    child.ports = lambda: {("127.0.0.1", 12)}
+    for endpoint, method in [(("127.0.0.1", 13), "GetUserStatus"), (("127.0.0.1", 12), "RefreshToken")]:
+        with pytest.raises(common.ProbeError, match="native_endpoint_rejected"):
+            child.rpc(endpoint, method, {})
+
+
+def test_agy_rpc_disables_proxy_and_rejects_redirect_response(monkeypatch):
+    import io
+    import urllib.request
+    child = object.__new__(agy.OwnedNative)
+    child.ports = lambda: {("[::1]", 12)}
+    child.owned = lambda: None
+    child.drain = lambda: None
+    child.remaining = lambda: 5
+    class Response(io.BytesIO):
+        status = 200
+        def __init__(self, body):
+            super().__init__(body)
+            self.headers = {}
+        def geturl(self): return "https://example.invalid/redirect"
+    class Opener:
+        def open(self, request, **kwargs):
+            assert request.full_url.startswith("https://[::1]:12/")
+            assert request.get_header("Connect-protocol-version") == "1"
+            assert request.get_header("Authorization") is None
+            return Response(b"{}")
+    def opener(*handlers):
+        assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies == {} for h in handlers)
+        assert any(isinstance(h, common.NoRedirect) for h in handlers)
+        return Opener()
+    monkeypatch.setattr(agy.urllib.request, "build_opener", opener)
+    with pytest.raises(common.ProbeError, match="native_response_rejected"):
+        child.rpc(("[::1]", 12), "GetUserStatus", {})
