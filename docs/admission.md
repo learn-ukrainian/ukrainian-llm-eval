@@ -444,11 +444,28 @@ Supply a private frozen configuration with these groups:
 `capability_sha256`, and the same `provider`, `model`, `backend`,
 `reasoning_enabled`, `account_scope`, and `credential_sha256`. Its nonempty
 `artifacts` list contains basename/byte-hash pairs. It lists the permitted
-`conditions` and reviewed `framing_tokens` and `permitted_history_tokens`
-bounds. The input fit check includes packet UTF-8 bytes as a conservative token
-upper bound **only when its semantics are independently verified**, plus
-native framing, schemas, permitted history and the requested output allowance.
-A published context size by itself is not input-fit proof.
+`conditions`, positive `framing_tokens`, nonnegative `initial_history_tokens`,
+positive `context_window_tokens`, and positive `output_headroom_tokens`.
+`initial_history_verified` and `output_headroom_verified` must both be boolean
+true. The initial request includes packet UTF-8 bytes (a conservative token
+upper bound only when independently verified), native/system/developer framing,
+tool schemas, setup messages, and any restored or preloaded history. Zero
+initial history requires explicit evidence; a fresh process alone is insufficient.
+The legacy `permitted_history_tokens` field is rejected.
+
+`context_window_tokens` is the reviewed combined input/output window and must
+match the selected provider's live window; the reviewed native runtime must
+support that window or the net input capability must reserve the same output
+headroom against its lower safe ceiling.
+`output_headroom_tokens` covers the source-reviewed maximum runtime output,
+including unknown effective output through a proven safe maximum, and must be
+at least the capability's output maximum. `capability.context_input_tokens` is
+already net of this headroom and cannot exceed the combined window minus
+headroom. The fit check compares complete initial input against this net capacity
+and the cumulative input budget, without subtracting output twice. A published
+context size by itself is not input-fit proof. Later tool requests remain subject
+to the existing per-request and cumulative budgets. Changed private support and
+capability files require refreshed hashes and reviewed evidence.
 
 The following support conclusions must all be true and backed by the declared
 reviewed artifacts: `personal_key_ownership_verified`,

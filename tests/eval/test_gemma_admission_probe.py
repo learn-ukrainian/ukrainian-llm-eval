@@ -39,7 +39,7 @@ def request():
 
 
 def config():
-    return {'provider': 'openrouter', 'model': probe.MODEL, 'effort': None,
+    return {'support': support(), 'provider': 'openrouter', 'model': probe.MODEL, 'effort': None,
             'backend': probe.BACKEND, 'expected_provider_name': 'Venice', 'reasoning_enabled': False,
             'account_scope': 'personal_provider_user', 'key_env': 'SYNTHETIC_GEMMA_KEY',
             'credential_sha256': hashlib.sha256(TOKEN.encode()).hexdigest(),
@@ -51,12 +51,14 @@ def config():
                             'zero_incremental': False,
                             'valid_until': (datetime.now(UTC) + timedelta(days=1)).isoformat()},
             'capability': {'route_sha256': 'b' * 64, 'model': probe.MODEL, 'effort': None,
-                           'context_input_tokens': 256_000, 'max_output_tokens': 8192,
+                           'context_input_tokens': 247_808, 'max_output_tokens': 8192,
                            'max_tool_calls': 20, 'timeout_seconds': 600, 'tool_policy_sha256': 'd' * 64}}
 
 
 def support():
-    return {'conditions': ['closed_book', 'sources'], 'framing_tokens': 1000, 'permitted_history_tokens': 1000}
+    return {'conditions': ['closed_book', 'sources'], 'framing_tokens': 1000, 'initial_history_tokens': 1000,
+            'initial_history_verified': True, 'output_headroom_verified': True,
+            'context_window_tokens': 256_000, 'output_headroom_tokens': 8192}
 
 
 def responses():
@@ -441,8 +443,58 @@ def test_support_must_bind_selected_reasoning_mode(tmp_path, monkeypatch):
         probe.support_for(cfg, tmp_path)
 
 
-def test_input_bound_includes_requested_output():
+def test_input_bound_reserves_runtime_output_headroom():
     req, cfg, proof = request(), config(), support()
-    proof['permitted_history_tokens'] = 253_000
+    proof['initial_history_tokens'] = 247_000
     with pytest.raises(common.ProbeError, match='input_does_not_fit'):
         probe.requirements_for(req, cfg, proof)
+
+
+def test_initial_input_exact_net_boundary_does_not_subtract_output_twice():
+    req, cfg, proof = request(), config(), support()
+    proof['initial_history_tokens'] = 246_708
+    assert probe.requirements_for(req, cfg, proof)[1] == 247_808
+    proof['initial_history_tokens'] += 1
+    with pytest.raises(common.ProbeError, match='input_does_not_fit'):
+        probe.requirements_for(req, cfg, proof)
+
+
+@pytest.mark.parametrize('field', ['initial_history_verified', 'output_headroom_verified'])
+@pytest.mark.parametrize('value', [None, False, 1])
+def test_initial_capacity_requires_explicit_proof_even_for_zero_history(field, value):
+    proof = support()
+    proof.update(initial_history_tokens=0)
+    proof[field] = value
+    with pytest.raises(common.ProbeError, match='support_proof_unavailable'):
+        probe.requirements_for(request(), config(), proof)
+
+
+@pytest.mark.parametrize('field', ['initial_history_tokens', 'framing_tokens',
+                                  'context_window_tokens', 'output_headroom_tokens'])
+def test_initial_capacity_requires_each_bound(field):
+    proof = support()
+    del proof[field]
+    with pytest.raises(common.ProbeError):
+        probe.requirements_for(request(), config(), proof)
+
+
+@pytest.mark.parametrize('window,headroom', [(256_000, 4096), (8192, 8192), (255_999, 8192)])
+def test_initial_capacity_rejects_unsafe_headroom(window, headroom):
+    proof = support()
+    proof.update(context_window_tokens=window, output_headroom_tokens=headroom)
+    with pytest.raises(common.ProbeError, match='output_headroom_invalid'):
+        probe.requirements_for(request(), config(), proof)
+
+
+def test_legacy_history_budget_is_rejected():
+    proof = support()
+    proof['permitted_history_tokens'] = 0
+    with pytest.raises(common.ProbeError, match='legacy_history_bound_rejected'):
+        probe.requirements_for(request(), config(), proof)
+
+
+def test_initial_input_also_fits_cumulative_billing_budget():
+    req = request()
+    req['requirements']['max_total_input_tokens'] = 2099
+    with pytest.raises(common.ProbeError, match='input_does_not_fit'):
+        probe.requirements_for(rehash(req), config(), support())

@@ -160,11 +160,33 @@ def support_for(config, base):
         local_dependency(base, artifact)
     for claim in ("personal_key_ownership_verified", "same_credential_native_execution_verified",
                   "native_control_enforcement_verified", "provider_routing_and_price_caps_verified",
-                  "byte_token_upper_bound_verified", "all_non_token_fees_excluded"):
+                  "byte_token_upper_bound_verified", "all_non_token_fees_excluded",
+                  "initial_history_verified", "output_headroom_verified"):
         if support.get(claim) is not True:
             fail("support_proof_unavailable")
+    initial_capacity(config["capability"], support)
     local_dependency(base, config["budget_wheel"])
     return support
+
+
+def initial_capacity(capability, support):
+    """Validate reviewed initial history and combined-window/output semantics."""
+    if "permitted_history_tokens" in support:
+        fail("legacy_history_bound_rejected")
+    if (support.get("initial_history_verified") is not True
+            or support.get("output_headroom_verified") is not True):
+        fail("support_proof_unavailable")
+    history = integer(support.get("initial_history_tokens"))
+    framing = integer(support.get("framing_tokens"), 1)
+    window = integer(support.get("context_window_tokens"), 1)
+    headroom = integer(support.get("output_headroom_tokens"), 1)
+    available_input = integer(capability["context_input_tokens"], 1)
+    # Headroom is source-reviewed maximum runtime output, not a request cap.
+    # context_input_tokens is already net; never subtract headroom from it.
+    if (headroom < integer(capability["max_output_tokens"], 1)
+            or headroom >= window or available_input > window - headroom):
+        fail("output_headroom_invalid")
+    return framing, history, available_input
 
 
 def requirements_for(request, config, support):
@@ -196,10 +218,9 @@ def requirements_for(request, config, support):
     for field in ("max_output_tokens", "max_tool_calls", "timeout_seconds"):
         if integer(capability[field], 1) < requirements[field]:
             fail("capacity_insufficient")
-    required_input = (requirements["input_utf8_bytes"] + integer(support["framing_tokens"], 1)
-                      + integer(support["permitted_history_tokens"]))
-    if (required_input + requirements["max_output_tokens"] > integer(capability["context_input_tokens"], 1)
-            or required_input > requirements["max_total_input_tokens"]):
+    framing, history, available_input = initial_capacity(capability, support)
+    required_input = requirements["input_utf8_bytes"] + framing + history
+    if required_input > min(available_input, requirements["max_total_input_tokens"]):
         fail("input_does_not_fit")
     if pricing["currency"] != "USD" or pricing["tool_round_micro_usd"] != 0:
         fail("pricing_unverified")
@@ -285,7 +306,7 @@ def collect(config):
         fail("provider_backend_identity_mismatch")
     if type(endpoint.get("status")) is not int or endpoint["status"] != 0:
         fail("provider_backend_unhealthy")
-    if (endpoint.get("context_length") != config["capability"]["context_input_tokens"]
+    if (endpoint.get("context_length") != integer(config["support"].get("context_window_tokens"), 1)
             or endpoint.get("max_completion_tokens") != config["capability"]["max_output_tokens"]):
         fail("provider_capacity_drift")
     prompt_maximum = endpoint.get("max_prompt_tokens")
