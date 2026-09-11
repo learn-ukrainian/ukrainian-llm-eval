@@ -22,10 +22,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from . import adapters
+from . import adapters, opencode_batch
 from .opencode_gateway import OpenCodeGateway
 
 _ENV = frozenset({"PATH", "USER", "LOGNAME", "TMPDIR", "SHELL", "TERM", "LANG", "LC_ALL",
@@ -46,8 +47,27 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     checked = adapters.validate_config(checked)
     if checked["provider"] != "openrouter" or not isinstance(checked.get("openrouter"), dict):
         raise adapters.AdapterError("OpenCode requires explicit OpenRouter routing")
-    if checked["model"] != "google/gemma-4-31b-it" or checked["effort"] is not None:
+    if checked["model"] not in {"google/gemma-4-31b-it", "google/gemma-4-31b-it:free", opencode_batch.MODEL} or checked["effort"] is not None:
         raise adapters.AdapterError("OpenCode route supports Gemma reasoning off/on without named effort")
+    if checked["model"] == "google/gemma-4-31b-it:free":
+        routing = checked["openrouter"]
+        if (routing["provider_endpoint"] != "google-ai-studio"
+                or routing["expected_provider_name"] != "Google AI Studio"
+                or "max_price" not in routing
+                or any(Decimal(value) != 0 for value in routing["max_price"].values())):
+            raise adapters.AdapterError("OpenCode free route requires exact Google provider and zero price ceilings")
+        if checked["max_output_tokens"] > 32768:
+            raise adapters.AdapterError("OpenCode free route output exceeds provider capacity")
+    if checked["model"] == opencode_batch.MODEL:
+        routing = checked["openrouter"]
+        ceilings = {"prompt": Decimal("0.39"), "completion": Decimal("0.97"), "request": Decimal(0)}
+        if (routing["provider_endpoint"] != "together"
+                or routing["expected_provider_name"] != opencode_batch.PROVIDER
+                or "max_price" not in routing
+                or any(Decimal(routing["max_price"][name]) > cap for name, cap in ceilings.items())):
+            raise adapters.AdapterError("OpenCode batch route requires Together and bounded price ceilings")
+        if checked["max_output_tokens"] > 235929:
+            raise adapters.AdapterError("OpenCode batch output exceeds provider capacity")
     if not checked.get("key_env"):
         raise adapters.AdapterError("OpenCode provider key environment is required")
     checked.pop("http_response_format")
@@ -67,6 +87,7 @@ def child_env(home: Path, config_path: Path) -> dict[str, str]:
 
 def native_config(config: Mapping[str, Any], condition: str, gateway: OpenCodeGateway) -> dict[str, Any]:
     model = "openrouter/" + config["model"]
+    context_limit = 256000 if config["model"] == "google/gemma-4-31b-it" else 262144
     permissions = {"*": "deny", "StructuredOutput": "allow", **{name: "allow" for name in sorted(gateway.allowed)}}
     routing = config["openrouter"]
     provider = {"only": [routing["provider_endpoint"]], "allow_fallbacks": False, "require_parameters": True}
@@ -83,7 +104,7 @@ def native_config(config: Mapping[str, Any], condition: str, gateway: OpenCodeGa
         "provider": {"openrouter": {"options": {"apiKey": gateway.token,
                                                 "baseURL": gateway.url + "/api/v1"},
                                     "models": {config["model"]: {
-                                        "limit": {"context": 256000, "output": config["max_output_tokens"]},
+                                        "limit": {"context": context_limit, "output": config["max_output_tokens"]},
                                         "options": {"reasoning": {"enabled": routing["reasoning_enabled"]},
                                                     "provider": provider}}}}},
     }
@@ -296,7 +317,8 @@ def run_opencode(packet: Mapping[str, Any], config: Mapping[str, Any], condition
                 raise adapters.AdapterError("OpenCode final response differs from provider")
             return {"responses": responses, "identity": {
                 "adapter": "opencode", "harness": "opencode-cli", "provider": "openrouter", "model": checked["model"],
-                "session_id": session, "requested_model": checked["model"], "effective_model": checked["model"],
+                "session_id": session, "requested_model": checked["model"],
+                "effective_model": opencode_batch.BASE_MODEL if checked["model"] == opencode_batch.MODEL else checked["model"],
                 "requested_effort": None, "effective_effort": "unknown", "cli_version": version,
                 "binary_sha256": binary_hash, "tool_schema_sha256": adapters.digest(sorted(gateway.allowed)),
                 "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,

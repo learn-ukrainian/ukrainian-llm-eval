@@ -400,69 +400,48 @@ permanent readiness.
 
 ## Personal metered Gemma through native OpenCode
 
-`tools/admission/gemma_probe.py` implements admission-result.v1 for the selected
-`google/gemma-4-31b-it` OpenRouter route, using the exact `novita/bf16` /
-`Novita` or historical `venice/bf16` / `Venice` backend/provider pair. It supports the native reasoning off/on configurations with null
-`effort`. It does not launch OpenCode or send completions, and cannot turn a
-successful diagnostic canary into admission. The selected backend's current
-published limit must cover every requested suite limit; a published 8192-token
-maximum rejects a 16384-token request without reducing that request or changing
-backend.
+`tools/admission/gemma_probe.py` implements admission-result.v1 for the
+selected `google/gemma-4-31b-it:free` / `google-ai-studio` / `Google AI Studio`
+route and the original paid model's Novita/BF16 and Venice/BF16 routes. Native
+reasoning is off/on with null `effort`. The probe uses read-only provider GETs;
+it does not launch OpenCode or send completions. A successful diagnostic canary
+does not itself grant admission.
 
-The probe uses three bounded, current read-only GETs with verified TLS, no
-redirects or environment proxies, and no credential refresh:
+The free route authenticates the selected ordinary personal key with
+`/api/v1/key` and reads the exact free model's public `/endpoints` metadata
+without credentials. It requires zero input/output prices and a zero segment
+reservation. Free-tier keys are eligible, and no credits endpoint or positive
+funding balance is required. Shared-ledger commitments and the existing cap
+remain intact. The paid routes additionally read `/api/v1/credits` and require
+funds to cover the next reservation plus all unresolved commitments.
 
-- `/api/v1/key` on `openrouter.ai` authenticates the exact selected ordinary key;
-- `/api/v1/credits` on that host obtains `total_credits` and `total_usage` using
-  the same key; permission denial rejects admission without seeking a
-  management key;
-- `/api/v1/models/google/gemma-4-31b-it/endpoints` checks the exact backend,
-  model, availability, context/output capacity, supported controls and prices.
-  This public request receives no credential.
+All requests use verified TLS, bounded responses and no redirects, environment
+proxies or credential refresh. The frozen `credential_sha256` binds the exact
+UTF-8 token and `key_env` names its sole environment input. Neither token nor
+fingerprint is an account identity. The personal account digest uses the
+authenticated OpenRouter `creator_user_id`; unknown identity, management or
+provisioning keys remain rejected. This interpretation does not establish an
+organization billing pool.
 
-The frozen `credential_sha256` is SHA-256 of the exact UTF-8 token, and
-`key_env` names its sole environment input. Neither token nor fingerprint is
-used as an account identity. For a reviewed **personal** key,
-`account_sha256` is the canonical digest of
-`{"provider":"openrouter","creator_user_id":<authenticated subject>}`.
-It identifies the returned provider user, not an organization billing pool.
-The probe rejects management/provisioning/free-tier keys, unknown identity and
-other billing kinds. This personal metered interpretation must not be reused
-for organization accounts or existing-credit aggregation.
+V1 `valid_until` remains bounded by provider-reported key expiry and any earlier
+known access expiry. Missing or expired expiry rejects this admission form;
+it must not be fabricated from a successful canary. Free quota availability is
+also not guaranteed by public endpoint metadata.
 
-V1 `valid_until` is a restrictive latest-use bound no later than the actual
-provider-reported key expiry and any earlier known access expiry. A missing or
-expired key expiry rejects admission. A future expiry does not establish
-current eligibility: current funds, finite key limits, route health and all
-other gates must also pass. It is not a subscription-expiry claim.
-
-The probe requires available provider funds (and `limit_remaining` when a
-finite key limit applies) to cover the full frozen
-`maximum_segment_micro_usd` plus **all** unresolved shared new-spend
-commitments. Including old commitments with unknown account identities is
-conservative. Decimal monetary inputs are retained exactly and available
-funds are rounded down to integer micro-USD. The independent shared cap must
-also cover the next full reservation. Funds below the entire experiment cap
-are not automatically insufficient. Because this is a metered route,
-`credit_available_micro_usd` remains null in the admission result; no provider
-balance is printed in its output.
-
-The selected endpoint must explicitly report `quantization: "bf16"`. Missing,
-unknown, or other precision values fail admission, even when the backend tag
-ends in `/bf16`. Provider/model mismatches also fail; these two exact route pairs
-do not enable automatic fallback. Novita's approved metadata reports a 262,144
-combined window, 131,072 maximum completion tokens, and USD 0.14/M input and
-0.40/M output. These values are frozen configuration inputs checked against
-live metadata, not defaults that override reviewed native limits. Reserving the
-full 131,072 output headroom leaves at most 131,072 input tokens; a lower native
-ceiling can require a smaller net input bound. Initial framing/history proof,
-fee controls, funding and the shared cap remain separate requirements.
+The selected free route accepts unknown precision as approved by the operator.
+It requires tools, tool choice, reasoning and output-token controls because
+OpenCode uses a `StructuredOutput` tool, not JSON-schema `response_format`.
+Paid BF16 routes still require explicit `quantization: "bf16"`. Exact model,
+provider, current health, capacity and price checks apply to every route; no
+route enables automatic fallback. Published output capacity must cover the
+requested suite limit without reducing it. Initial framing/history proof and
+fresh runtime bindings remain separate requirements.
 
 Supply a private frozen configuration with these groups:
 
 | Group | Required inputs |
 | --- | --- |
-| Route | `provider: "openrouter"`, the exact `model`, `effort: null`, `backend: "novita/bf16"` with `expected_provider_name: "Novita"`, or historical `backend: "venice/bf16"` with `expected_provider_name: "Venice"`, boolean `reasoning_enabled`, `account_scope: "personal_provider_user"` |
+| Route | `provider: "openrouter"`, the exact `model`, `effort: null`, `backend: "google-ai-studio"` with `expected_provider_name: "Google AI Studio"` for the free model, or paid `backend: "novita/bf16"` with `expected_provider_name: "Novita"`, or historical `backend: "venice/bf16"` with `expected_provider_name: "Venice"`, boolean `reasoning_enabled`, `account_scope: "personal_provider_user"` |
 | Credential | `key_env`, `credential_sha256`; no token in the file |
 | Native runtime | `binary` and `runtime_files` with absolute paths and byte hashes, as for the native subscription probe |
 | Frozen states | V1 `pricing`, `entitlement`, and `capability` objects with the exact fields accepted by `validate_admission_result`; the full `maximum_segment_micro_usd` |

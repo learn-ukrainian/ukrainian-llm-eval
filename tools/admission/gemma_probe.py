@@ -1,8 +1,8 @@
-"""Read-only OpenRouter admission for the selected personal metered Gemma route.
+"""Read-only OpenRouter admission for selected personal Gemma routes.
 
 The authenticated creator user is not an organization billing pool. Provider
-funds support current eligibility; the independent shared ledger bounds new
-spend. This collector neither reserves funds nor sends candidate requests.
+funds support paid-route eligibility; the zero-priced Google route still checks
+key identity and validity. The independent shared ledger bounds new spend. This collector neither reserves funds nor sends candidate requests.
 """
 from __future__ import annotations
 
@@ -35,11 +35,31 @@ from probe_common import (
 )
 
 MODEL = "google/gemma-4-31b-it"
+FREE_MODEL = MODEL + ":free"
+FREE_BACKEND = "google-ai-studio"
+FREE_PROVIDER = "Google AI Studio"
 BACKEND = "venice/bf16"
 BACKEND_PROVIDERS = ((BACKEND, "Venice"), ("novita/bf16", "Novita"))
 KEY_URL = "https://openrouter.ai/api/v1/key"
 CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 MODEL_URL = "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it/endpoints"
+FREE_MODEL_URL = "https://openrouter.ai/api/v1/models/google/gemma-4-31b-it:free/endpoints"
+
+
+def free_route(config):
+    return (config["provider"], config["model"], config["backend"], config["expected_provider_name"]) == (
+        "openrouter", FREE_MODEL, FREE_BACKEND, FREE_PROVIDER)
+
+
+def check_route(config):
+    if not free_route(config) and not (config["provider"] == "openrouter"
+            and config["model"] == MODEL
+            and (config["backend"], config["expected_provider_name"]) in BACKEND_PROVIDERS):
+        fail("unsupported_route")
+    if free_route(config) and (config["maximum_segment_micro_usd"] != 0 or any(
+            config["pricing"][name] != 0 for name in ("input_micro_usd_per_million_tokens",
+                "output_micro_usd_per_million_tokens", "tool_round_micro_usd"))):
+        fail("free_route_price_policy_invalid")
 
 
 def sha(value):
@@ -65,7 +85,7 @@ def validate_request(request):
     age = (datetime.now(UTC) - timestamp(request["requested_at"])).total_seconds()
     if not 0 <= age <= 300:
         fail("stale_request")
-    if request["model"] != MODEL or request["effort"] is not None:
+    if request["model"] not in {MODEL, FREE_MODEL} or request["effort"] is not None:
         fail("request_route_mismatch")
     if request["condition"] not in {"closed_book", "sources"}:
         fail("condition_unsupported")
@@ -82,9 +102,9 @@ def validate_request(request):
 
 def provider_json(url, token=None):
     """Exact GET allowlist, no proxies/redirects/refresh, bounded decimal JSON."""
-    if url not in {KEY_URL, CREDITS_URL, MODEL_URL}:
+    if url not in {KEY_URL, CREDITS_URL, MODEL_URL, FREE_MODEL_URL}:
         fail("provider_endpoint_rejected")
-    if (url == MODEL_URL) != (token is None):
+    if (url in {MODEL_URL, FREE_MODEL_URL}) != (token is None):
         fail("provider_credential_scope_rejected")
     headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
     if token is not None:
@@ -141,9 +161,9 @@ def local_dependency(base, declaration):
 
 
 def support_for(config, base):
+    check_route(config)
     support = config["support"]
-    if (config["provider"] != "openrouter" or config["model"] != MODEL or config["effort"] is not None
-            or (config["backend"], config["expected_provider_name"]) not in BACKEND_PROVIDERS
+    if (config["effort"] is not None
             or type(config["reasoning_enabled"]) is not bool
             or config["account_scope"] != "personal_provider_user"):
         fail("unsupported_route")
@@ -192,6 +212,9 @@ def initial_capacity(capability, support):
 
 def requirements_for(request, config, support):
     validate_request(request)
+    check_route(config)
+    if request["model"] != config["model"]:
+        fail("request_route_mismatch")
     if request["condition"] not in support["conditions"]:
         fail("condition_unsupported")
     pricing, entitlement, capability = (config[name] for name in ("pricing", "entitlement", "capability"))
@@ -211,7 +234,7 @@ def requirements_for(request, config, support):
     if (entitlement["billing_kind"] != "metered" or entitlement["zero_incremental"] is not False
             or timestamp(entitlement["valid_until"]) <= datetime.now(UTC)):
         fail("entitlement_state_invalid")
-    if capability["model"] != MODEL or capability["effort"] is not None:
+    if capability["model"] != config["model"] or capability["effort"] is not None:
         fail("capability_route_mismatch")
     requirements = request["requirements"]
     if capability["tool_policy_sha256"] != requirements["tool_policy_sha256"]:
@@ -228,7 +251,7 @@ def requirements_for(request, config, support):
     cost = sum((integer(pricing[rate]) * requirements[tokens] + 999_999) // 1_000_000
                for rate, tokens in (("input_micro_usd_per_million_tokens", "max_total_input_tokens"),
                                     ("output_micro_usd_per_million_tokens", "max_total_output_tokens")))
-    maximum = integer(config["maximum_segment_micro_usd"], 1)
+    maximum = integer(config["maximum_segment_micro_usd"], 0 if free_route(config) else 1)
     if cost > maximum:
         fail("segment_cost_exceeds_frozen_maximum")
     return maximum, required_input
@@ -261,6 +284,8 @@ def read_commitments(config, base):
 
 
 def collect(config):
+    check_route(config)
+    free = free_route(config)
     env_name = config["key_env"]
     if not isinstance(env_name, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", env_name) is None:
         fail("credential_input_invalid")
@@ -268,12 +293,13 @@ def collect(config):
     if hashlib.sha256(token.encode()).hexdigest() != config["credential_sha256"]:
         fail("credential_identity_mismatch")
     key = provider_json(KEY_URL, token)
-    funds = provider_json(CREDITS_URL, token)
-    models = provider_json(MODEL_URL)
+    funds = None if free else provider_json(CREDITS_URL, token)
+    models = provider_json(FREE_MODEL_URL if free else MODEL_URL)
     account = digest({"provider": "openrouter", "creator_user_id": text(key.get("creator_user_id"))})
     if account != config["entitlement"]["account_sha256"]:
         fail("provider_user_identity_mismatch")
-    if key.get("is_free_tier") is not False or key.get("is_management_key") is not False:
+    if (type(key.get("is_free_tier")) is not bool or (not free and key["is_free_tier"])
+            or key.get("is_management_key") is not False):
         fail("metered_key_status_unverified")
     if key.get("is_provisioning_key") is not False:
         fail("metered_key_status_unverified")
@@ -282,7 +308,8 @@ def collect(config):
         fail("key_expiry_invalid")
     # Round the difference, not each component: flooring usage could invent a
     # spendable micro-dollar when fractional charges straddle the boundary.
-    available = int(((amount(funds.get("total_credits")) - amount(funds.get("total_usage")))
+    # Zero is a spend bound for the free route, not a claim about account funds.
+    available = 0 if free else int(((amount(funds.get("total_credits")) - amount(funds.get("total_usage")))
                      * 1_000_000).to_integral_value(rounding=ROUND_FLOOR))
     if "limit" not in key or "limit_remaining" not in key:
         fail("key_limit_unknown")
@@ -294,7 +321,7 @@ def collect(config):
         available = min(available, micro_usd(remaining))
     elif key.get("limit_remaining") is not None:
         fail("key_limit_invalid")
-    if models.get("id") != MODEL:
+    if models.get("id") != config["model"]:
         fail("provider_model_identity_mismatch")
     endpoints = models.get("endpoints")
     if not isinstance(endpoints, list):
@@ -303,9 +330,9 @@ def collect(config):
     if len(selected) != 1:
         fail("provider_backend_unavailable")
     endpoint = selected[0]
-    if endpoint.get("model_id") != MODEL or endpoint.get("provider_name") != config["expected_provider_name"]:
+    if endpoint.get("model_id") != config["model"] or endpoint.get("provider_name") != config["expected_provider_name"]:
         fail("provider_backend_identity_mismatch")
-    if endpoint.get("quantization") != "bf16":
+    if not free and endpoint.get("quantization") != "bf16":
         fail("provider_precision_unverified")
     if type(endpoint.get("status")) is not int or endpoint["status"] != 0:
         fail("provider_backend_unhealthy")
@@ -316,7 +343,9 @@ def collect(config):
     if prompt_maximum is not None and integer(prompt_maximum, 1) < config["capability"]["context_input_tokens"]:
         fail("provider_input_capacity_requires_review")
     parameters = endpoint.get("supported_parameters")
-    if not isinstance(parameters, list) or not {"tools", "structured_outputs", "reasoning", "max_tokens"} <= set(parameters):
+    required_parameters = {"tools", "tool_choice", "reasoning", "max_tokens"} if free else {
+        "tools", "structured_outputs", "reasoning", "max_tokens"}
+    if not isinstance(parameters, list) or not required_parameters <= set(parameters):
         fail("provider_capability_unavailable")
     prices = endpoint.get("pricing")
     if not isinstance(prices, dict) or set(prices) - {"prompt", "completion", "input_cache_read", "discount", "request"}:
@@ -342,7 +371,7 @@ def build_result(request, config, support, observation, snapshot):
     if observation["account_sha256"] != config["entitlement"]["account_sha256"]:
         fail("provider_user_identity_mismatch")
     unresolved = integer(snapshot["unresolved_new_spend_micro_usd"])
-    if (observation["available_micro_usd"] < maximum + unresolved
+    if ((not free_route(config) and observation["available_micro_usd"] < maximum + unresolved)
             or integer(snapshot["remaining_new_spend_micro_usd"]) < maximum):
         fail("next_reservation_unfunded")
 

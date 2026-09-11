@@ -580,3 +580,129 @@ def test_support_accepts_only_exact_approved_backend_provider_pairs(tmp_path, mo
     else:
         with pytest.raises(common.ProbeError, match='unsupported_route'):
             probe.support_for(cfg, tmp_path)
+
+
+def free_fixture():
+    cfg, data = config(), responses()
+    cfg.update(model=probe.FREE_MODEL, backend=probe.FREE_BACKEND,
+               expected_provider_name=probe.FREE_PROVIDER, maximum_segment_micro_usd=0)
+    cfg['pricing'].update(input_micro_usd_per_million_tokens=0, output_micro_usd_per_million_tokens=0)
+    cfg['capability'].update(model=probe.FREE_MODEL, context_input_tokens=229376, max_output_tokens=32768)
+    cfg['support'].update(context_window_tokens=262144, output_headroom_tokens=32768)
+    metadata = data.pop(probe.MODEL_URL)
+    metadata['id'] = probe.FREE_MODEL
+    endpoint = metadata['endpoints'][0]
+    endpoint.update(tag=probe.FREE_BACKEND, model_id=probe.FREE_MODEL, provider_name=probe.FREE_PROVIDER,
+                    context_length=262144, max_completion_tokens=32768,
+                    supported_parameters=['tools', 'tool_choice', 'reasoning', 'max_tokens', 'response_format'],
+                    pricing={'prompt': '0', 'completion': '0', 'request': '0'})
+    endpoint.pop('quantization')
+    data[probe.FREE_MODEL_URL] = metadata
+    data[probe.KEY_URL]['is_free_tier'] = True
+    data.pop(probe.CREDITS_URL)
+    return cfg, data
+
+
+def install_free_responses(monkeypatch, data):
+    calls = []
+    def provider_json(url, token=None):
+        assert token == (None if url == probe.FREE_MODEL_URL else TOKEN)
+        calls.append(url)
+        return copy.deepcopy(data[url])
+    monkeypatch.setenv('SYNTHETIC_GEMMA_KEY', TOKEN)
+    monkeypatch.setattr(probe, 'provider_json', provider_json)
+    return calls
+
+
+def test_free_route_needs_no_paid_tier_funds_or_structured_outputs(monkeypatch):
+    cfg, data = free_fixture()
+    calls = install_free_responses(monkeypatch, data)
+    req = request()
+    req['model'] = probe.FREE_MODEL
+    result = probe.build_result(rehash(req), cfg, cfg['support'], probe.collect(cfg),
+                                {'unresolved_new_spend_micro_usd': 111, 'remaining_new_spend_micro_usd': 0})
+    assert calls == [probe.KEY_URL, probe.FREE_MODEL_URL]
+    assert result['pricing']['observed']['incremental_segment_cost_micro_usd'] == 0
+    assert TOKEN not in common.canonical(result).decode()
+
+
+@pytest.mark.parametrize('field,value', [('model_id', probe.MODEL), ('provider_name', 'Venice'),
+    ('tag', 'venice/bf16'), ('supported_parameters', ['tools', 'reasoning', 'max_tokens']),
+    ('context_length', 256000), ('max_completion_tokens', 8192)])
+def test_free_endpoint_drift_fails(monkeypatch, field, value):
+    cfg, data = free_fixture()
+    data[probe.FREE_MODEL_URL]['endpoints'][0][field] = value
+    install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('field', ['prompt', 'completion', 'request'])
+def test_free_remote_price_increase_rejected(monkeypatch, field):
+    cfg, data = free_fixture()
+    data[probe.FREE_MODEL_URL]['endpoints'][0]['pricing'][field] = '0.00000001'
+    install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('field,value', [('model', probe.MODEL), ('backend', 'novita/bf16'),
+    ('expected_provider_name', 'Novita'), ('provider', 'google')])
+def test_free_config_tuple_drift_fails_before_credentials(monkeypatch, field, value):
+    cfg, data = free_fixture()
+    cfg[field] = value
+    calls = install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError, match='unsupported_route'):
+        probe.collect(cfg)
+    assert calls == []
+
+
+@pytest.mark.parametrize('field', ['input_micro_usd_per_million_tokens', 'output_micro_usd_per_million_tokens',
+                                  'tool_round_micro_usd'])
+def test_free_local_price_increase_rejected(monkeypatch, field):
+    cfg, data = free_fixture()
+    cfg['pricing'][field] = 1
+    calls = install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError, match='free_route_price_policy_invalid'):
+        probe.collect(cfg)
+    assert calls == []
+
+
+@pytest.mark.parametrize('field,value', [('creator_user_id', 'other'), ('is_free_tier', None),
+    ('is_management_key', True), ('is_provisioning_key', True), ('expires_at', None),
+    ('expires_at', '2000-01-01T00:00:00+00:00')])
+def test_free_route_preserves_key_identity_and_validity(monkeypatch, field, value):
+    cfg, data = free_fixture()
+    data[probe.KEY_URL][field] = value
+    install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError):
+        probe.collect(cfg)
+
+
+@pytest.mark.parametrize('url,token', [(probe.FREE_MODEL_URL, TOKEN), (probe.MODEL_URL, TOKEN),
+    (probe.KEY_URL, None), ('https://openrouter.ai/api/v1/models/google/gemma-4-31b-it:batch/endpoints', None)])
+def test_metadata_credentials_and_unapproved_url_rejected(url, token):
+    with pytest.raises(common.ProbeError):
+        probe.provider_json(url, token)
+
+
+def test_free_request_cannot_authorize_paid_config():
+    req = request()
+    req['model'] = probe.FREE_MODEL
+    with pytest.raises(common.ProbeError, match='request_route_mismatch'):
+        probe.requirements_for(rehash(req), config(), support())
+
+
+def test_free_metadata_accepts_absent_request_price(monkeypatch):
+    cfg, data = free_fixture()
+    del data[probe.FREE_MODEL_URL]['endpoints'][0]['pricing']['request']
+    install_free_responses(monkeypatch, data)
+    assert probe.collect(cfg)['available_micro_usd'] == 0
+
+
+def test_free_model_metadata_identity_drift_rejected(monkeypatch):
+    cfg, data = free_fixture()
+    data[probe.FREE_MODEL_URL]['id'] = probe.MODEL
+    install_free_responses(monkeypatch, data)
+    with pytest.raises(common.ProbeError, match='provider_model_identity_mismatch'):
+        probe.collect(cfg)

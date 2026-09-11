@@ -1,6 +1,7 @@
 # Gemma through native OpenCode
 
-The `opencode` adapter evaluates `google/gemma-4-31b-it` through OpenCode's
+The `opencode` adapter evaluates `google/gemma-4-31b-it:free` (and the original
+`google/gemma-4-31b-it` route and the conditional `:batch` variant) through OpenCode's
 OpenRouter provider. Reasoning is explicitly off or on; `effort` is null.
 A direct `chat-http` run is a different harness and does not establish this
 route's readiness.
@@ -45,7 +46,7 @@ remain distinct: the latter is unknown without provider attestation.
   "schema": "zno-nmt.config.v1",
   "adapter": "opencode",
   "opencode_bin": "opencode",
-  "model": "google/gemma-4-31b-it",
+  "model": "google/gemma-4-31b-it:free",
   "provider": "openrouter",
   "effort": null,
   "timeout_seconds": 90,
@@ -57,17 +58,20 @@ remain distinct: the latter is unknown without provider attestation.
   "endpoint_env": "EVAL_OPENROUTER_ENDPOINT",
   "key_env": "EVAL_OPENROUTER_KEY",
   "openrouter": {
-    "provider_endpoint": "venice/bf16",
-    "expected_provider_name": "Venice",
+    "provider_endpoint": "google-ai-studio",
+    "expected_provider_name": "Google AI Studio",
     "reasoning_enabled": false,
-    "max_price": {"prompt": "0.12", "completion": "0.36", "request": "0"}
+    "max_price": {"prompt": "0", "completion": "0", "request": "0"}
   }
 }
 ```
 
 Endpoint/key environment values are private runtime inputs. Verify current
 endpoint availability and price ceilings before freezing a study. The sample
-is not an entitlement, pricing guarantee or permission to spend.
+is not an entitlement, pricing guarantee or permission to spend. The selected
+free route permits unknown precision and requires zero price ceilings. Native
+structured answers use the `StructuredOutput` tool; the provider must support
+tools and tool choice, but need not advertise JSON-schema `response_format`.
 
 Use the ordinary study execution path with a validated request-budget
 mechanism and spending authorization. Native OpenCode supports the same
@@ -96,3 +100,37 @@ separate requirements before scored exams.
 Configuration references: [OpenCode agents](https://opencode.ai/docs/agents/),
 [OpenCode configuration](https://opencode.ai/docs/config/),
 [OpenCode structured output API](https://opencode.ai/docs/sdk/#structured-output).
+
+## Conditional batch transport
+
+The operator-selected fallback uses `google/gemma-4-31b-it:batch` with the
+`together` backend and expected provider `Together`. Its configured ceilings
+are $0.39/M input, $0.97/M output and zero per-request fees. Precision is
+unknown. Free-route failures remain separate retained attempts.
+
+OpenCode continues to construct each request, execute permitted Sources tools
+and produce its final `StructuredOutput`. The gateway submits a singleton
+batch for each model round. It records the native request, transformed batch
+child and wire-envelope hashes, and commits the child request to the existing
+budget controller before submitting it. The wire model uses the base slug consistently at batch and child level,
+following the [documented request shape](https://openrouter.ai/docs/batch-quickstart).
+The batch transport is explicit; a free request never silently switches to it.
+
+The gateway polls only the returned batch ID within the original attempt
+deadline. OpenRouter's 24-hour batch window does not extend a suite timeout.
+A timeout or uncertain submission retains the commitment; it does not trigger
+a second submission or turn a late answer into a successful attempt.
+
+A returned result must match the one submitted request, actual model and
+provider, and original output schema. Batch-level usage is counted once for
+the singleton. Missing identity is not replaced with the configured provider.
+BYOK batches are not supported by this OpenRouter-only spending contract:
+OpenRouter's reported charge excludes the provider's direct invoice. Establish
+that no applicable provider key is connected before a paid batch proof.
+
+Live batch compatibility and admission remain separate from offline transport
+tests. A successful batch-list request only proves access to that endpoint.
+
+The current admission probe covers the free and original synchronous routes.
+Batch study admission needs its own reviewed binding; a free-route admission
+receipt cannot authorize batch execution.

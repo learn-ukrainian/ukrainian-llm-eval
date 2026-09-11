@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import time
+import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -100,6 +101,24 @@ def test_response_identity_drift_is_not_released(monkeypatch):
     provider(monkeypatch, [stream(provider="Other")])
     with gateway() as g, pytest.raises(adapters.AdapterError, match="identity drift"):
         g.completion(payload(g))
+
+
+def test_provider_http_failure_preserves_bounded_private_diagnostic(monkeypatch):
+    events = []
+    calls = []
+
+    def send(request, **_kwargs):
+        calls.append(request)
+        raise urllib.error.HTTPError(request.full_url, 429, "provider limit", {}, io.BytesIO(b"x" * 9000))
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: SimpleNamespace(open=send))
+    with (gateway(evidence=lambda kind, value: events.append((kind, value))) as g,
+          pytest.raises(adapters.AdapterError, match="provider HTTP request failed") as failure):
+        g.completion(payload(g))
+    assert len(calls) == 1
+    assert events[-1] == ("opencode_provider_http_error", {"status": 429, "body": "x" * 8192})
+    assert "parent-secret" not in json.dumps(events)
+    assert "provider.invalid" not in str(failure.value)
 
 
 def test_forbidden_provider_tool_is_not_released(monkeypatch):
@@ -277,3 +296,56 @@ def test_structured_schema_drift_stops_before_spend(monkeypatch):
         with pytest.raises(adapters.AdapterError, match="schema drift"):
             g.completion(payload(g))
     assert not seen
+
+
+def free_config():
+    cfg = config()
+    cfg['model'] += ':free'
+    cfg['openrouter'].update(provider_endpoint='google-ai-studio', expected_provider_name='Google AI Studio',
+                             max_price={'prompt': '0', 'completion': '0', 'request': '0'})
+    return cfg
+
+
+def test_native_free_config_pins_provider_zero_prices_and_context():
+    cfg = native.validate_config(free_config())
+    with gateway() as g:
+        value = native.native_config(cfg, 'closed-book', g)
+    model = value['provider']['openrouter']['models'][cfg['model']]
+    assert value['model'] == 'openrouter/google/gemma-4-31b-it:free'
+    assert model['limit'] == {'context': 262144, 'output': 4096}
+    assert model['options']['provider'] == {'only': ['google-ai-studio'], 'allow_fallbacks': False,
+        'require_parameters': True, 'max_price': {'prompt': '0', 'completion': '0', 'request': '0'}}
+
+
+@pytest.mark.parametrize('field,value', [('provider_endpoint', 'novita/bf16'),
+    ('expected_provider_name', 'Novita'), ('max_price', {'prompt': '0.1', 'completion': '0', 'request': '0'}),
+    ('max_price', {'prompt': '0', 'completion': '0.1', 'request': '0'}),
+    ('max_price', {'prompt': '0', 'completion': '0', 'request': '0.1'}), ('max_price', None)])
+def test_native_free_config_rejects_paid_escape(field, value):
+    cfg = free_config()
+    if value is None:
+        cfg['openrouter'].pop(field)
+    else:
+        cfg['openrouter'][field] = value
+    with pytest.raises(adapters.AdapterError):
+        native.validate_config(cfg)
+
+
+def test_native_free_output_capacity_bound():
+    cfg = free_config()
+    cfg['max_output_tokens'] = 32769
+    with pytest.raises(adapters.AdapterError, match='capacity'):
+        native.validate_config(cfg)
+
+
+@pytest.mark.parametrize('model,provider_name', [('google/gemma-4-31b-it', 'Google AI Studio'),
+    ('google/gemma-4-31b-it:free', 'Novita')])
+def test_native_free_stream_identity_drift_rejected(monkeypatch, model, provider_name):
+    provider(monkeypatch, [stream(model=model, provider=provider_name)])
+    cfg = native.validate_config(free_config())
+    with OpenCodeGateway(cfg, 'closed-book', endpoint='https://provider.invalid/chat', key='synthetic',
+                         sources_url=None, evidence=None, request_budget=None, deadline=time.monotonic() + 15) as g:
+        body = payload(g)
+        body['provider'].update(only=['google-ai-studio'], max_price=cfg['openrouter']['max_price'])
+        with pytest.raises(adapters.AdapterError, match='identity drift'):
+            g.completion(body)
