@@ -125,6 +125,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         from .native_opencode import validate_config as validate_opencode_config
 
         return validate_opencode_config(config)
+    if adapter == "agy":
+        from .native_agy import validate_config as validate_agy_config
+
+        return validate_agy_config(config)
     if adapter == "kimi":
         from .native_kimi import validate_config as validate_kimi_config
 
@@ -259,6 +263,11 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         from .native_opencode import preflight as opencode_preflight
 
         return opencode_preflight(checked, condition, sources_url)
+    if checked["adapter"] == "agy":
+        from .native_agy import preflight as agy_preflight
+
+        return agy_preflight(checked, condition, sources_url,
+                             private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_AGY_PROVISIONING_DIR"))
     if checked["adapter"] == "kimi":
         from .native_kimi import preflight as kimi_preflight
 
