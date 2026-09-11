@@ -20,7 +20,7 @@ def research_implementation_sha256():
     names = (
         "adapters.py", "runner.py", "mcp_proxy.py", "execution.py", "scheduling.py", "segmentation.py",
         "admission.py", "admission_command.py", "request_budget.py", "spending_ledger.py",
-        "benchmark_manifest.py", "core.py",
+        "benchmark_manifest.py", "core.py", "readiness.py", "__main__.py",
         "evidence.py", "gec.py",
         "native_kimi.py", "native_codex.py", "responses_http.py", "candidate_outcome.py",
         "codex_catalog.py", "codex_reference.py", "codex_reference_bridge.py", "codex_reference_controls.py",
@@ -239,22 +239,12 @@ def run_pair(packet, config, root: Path, *, sources_url=None, resume=False):
                 return
 
 
-def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
-                 admission_probe, request_budget_controller=None, sources_urls=None, resume=False):
-    """Run the complete frozen experiment, retaining every started reservation.
-
-    ``admission_probe`` implements the trusted controller protocol, including
-    whole-schedule preparation and fresh per-segment evidence. A manifest hash
-    alone is not proof of current authorization or cost.
-    The experiment-wide POSIX lock covers admission, allocation and execution.
-    """
-    from .adapters import build_prompt
-    from .admission import admission_composite_sha256, build_admission_request, verify_admission_evidence
+def validate_research_runtime(packets, segment_plans, manifest, plan, configs, root: Path, *,
+                              admission_probe, request_budget_controller=None, sources_urls=None):
+    """Validate complete frozen inputs without allocating or invoking candidates."""
     from .benchmark_manifest import validate_execution_plan
-    from .request_budget import request_budget_attempt_id, verify_request_budget_evidence
-    from .runner import _comparison, _validated_packet
-    from .segmentation import derive_segment_packet, reassemble_cell, validate_segment_plan
-    from .spending_ledger import SpendingCapExceeded
+    from .runner import _validated_packet
+    from .segmentation import validate_segment_plan
 
     validate_execution_plan(manifest, plan)
     if not callable(admission_probe) or not callable(getattr(admission_probe, "prepare", None)):
@@ -299,6 +289,31 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
         if not callable(validate_root):
             raise ExamError("sequential spending controller cannot validate its execution root")
         validate_root(root)
+    return suites, routes, budgeted_routes
+
+
+def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
+                 admission_probe, request_budget_controller=None, sources_urls=None, resume=False):
+    """Run the complete frozen experiment, retaining every started reservation.
+
+    ``admission_probe`` implements the trusted controller protocol, including
+    whole-schedule preparation and fresh per-segment evidence. A manifest hash
+    alone is not proof of current authorization or cost.
+    The experiment-wide POSIX lock covers admission, allocation and execution.
+    """
+    from .adapters import build_prompt
+    from .admission import admission_composite_sha256, build_admission_request, verify_admission_evidence
+    from .request_budget import request_budget_attempt_id, verify_request_budget_evidence
+    from .runner import _comparison
+    from .segmentation import derive_segment_packet, reassemble_cell
+    from .spending_ledger import SpendingCapExceeded
+
+    suites, routes, budgeted_routes = validate_research_runtime(
+        packets, segment_plans, manifest, plan, configs, root,
+        admission_probe=admission_probe, request_budget_controller=request_budget_controller,
+        sources_urls=sources_urls,
+    )
+    sources_urls = sources_urls or {}
     if root.is_symlink():
         raise ExamError("research directory must not be a symlink")
     root.mkdir(mode=0o700, parents=True, exist_ok=resume)

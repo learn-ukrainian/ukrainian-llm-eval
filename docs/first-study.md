@@ -19,9 +19,14 @@ count is not a request count or cost estimate.
 
 Limits are common within a suite. They are concrete review inputs, not claims
 that every native provider enforces the requested output cap. The AGY adapter
-reports its effective output cap as unknown. Admission must account for actual
-native limits and complete tool history; a small synthetic answer or prompt
-byte length does not prove provider token fit for the largest document.
+reports its effective output cap as unknown. Native admission `input_fits`
+covers the complete initial request: the full prompt, native/system/developer/tool-schema/setup framing, and any included
+initial history. Available input capacity must already reserve verified output
+headroom. Zero initial history requires reviewed evidence, not merely a fresh
+process. A small synthetic answer or prompt byte length alone does not prove
+initial fit for the largest document. Later tool-context failures are retained;
+initial fit guarantees neither compaction nor successful completion. Existing
+tool limits and request-budget enforcement remain unchanged.
 Requested effort is not equal computation across providers, and unreported
 effective model/effort stays unknown.
 
@@ -57,7 +62,16 @@ amd64 emulation or a verified Linux scoring host. Image inspection alone is
 insufficient: execute the scorer and parity checks. Do not alter the scorer or
 substitute a metric to accommodate a host that cannot execute that architecture.
 
-Once admitted, use [run-research](research-execution.md), preserve every attempt,
+Before any scored request, run the admission-only `check-research` command
+documented in [research execution](research-execution.md). For the complete
+matrix, its 198 fresh representative probes cover 35,178 structurally validated
+segment bindings. It preserves failed probes and inspects the existing shared
+ledger without allocating scored attempts or reservations. Those observations
+expire with their underlying evidence; they are not execution authorization,
+and each launched segment must refresh admission. Stop after this observation
+when the operator has authorized launch preparation only.
+
+When scored execution is separately authorized, use [run-research](research-execution.md), preserve every attempt,
 and score complete cells using the separate offline custody map. The
 [results document](results.md) tracks coverage, failures and paired results.
 The [release procedure](releasing.md) still requires tested public artifacts

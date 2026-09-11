@@ -55,7 +55,9 @@ support; every segment still requires a fresh nonce-bound admission result.
 
 Metered and existing-credit routes additionally require an explicit
 request-budget map. Its route files freeze the provider counting and output
-semantics plus a trusted local counter command. See
+semantics. V1 uses a trusted exact counter command; V2 uses a pinned
+provider-documented input upper bound; V3 adds the explicitly authorized
+conservative final-usage settlement contract. See
 [request-level budget control](request-budget.md). A verified-subscription
 route may omit the mechanism by freezing `request_budget_mechanism_sha256` as
 `null`; this discloses that exact request-level cost proof is unavailable.
@@ -108,7 +110,55 @@ This command is an implementation interface and does not by itself establish
 that a provider route is eligible for the public experiment. Before a public
 run, verify the exact model/effort inventory, live route claims, spending
 authorization, installed behavior, independent review, and release gates.
-Request-level enforcement is implemented, but no bundled mechanism claims a
-real provider tokenizer or framing contract. Each inaugural paid route still
-needs a provider-specific counter and semantics receipt before the CLI can be
-used to claim that route is ready.
+Each paid route needs the evidence required by its frozen request-budget
+version: V1 exact counting, V2 provider-documented bounds and authoritative
+account charges, or V3 provider-documented bounds and authorized conservative
+final-usage settlement. An exact tokenizer is not a universal requirement.
+Requested limits and byte counts are not observed enforcement or token-fit proof.
+
+## Admission-only launch observation
+
+Use `check-research` to inspect the actual frozen plan before scored execution.
+It accepts the same runtime, admission, authorization, budget and Sources maps
+as `run-research`, plus a new private observation directory:
+
+```sh
+ukrainian-llm-eval check-research \
+  --inputs runtime-inputs.json \
+  --manifest experiment.json \
+  --execution-plan execution-plan.json \
+  --execution-root private-research-run \
+  --evidence-root private-launch-observation-001 \
+  --admission-specs admission-specs.json \
+  --operator-authorizations authorizations.json \
+  --request-budgets request-budgets.json \
+  --shared-spending-ledger /absolute/private/shared-budget.sqlite \
+  --sources-url-env my-route=SOURCES_MCP_URL
+```
+
+This command cannot execute candidates and has no execution or ledger-reset
+switch. It validates complete maps, all segment bindings, and suite-derived
+configurations before issuing one fresh nonce-bound representative probe for
+each cell, including each repeat. The representative is the largest UTF-8
+prompt in that cell: a conservative byte-size profile, not a token-count
+guarantee. `structural_segments` counts validated bindings;
+`representative_probes` counts actual admission attempts. These are distinct
+denominators. Admission commands receive only counts and identities, never
+question text or grading keys.
+
+The existing shared ledger must be supplied for sequential spending. Inspection
+retains prior commitments and checks the next worst-case segment capacity; it
+does not demand funding for the entire matrix. No scored attempt IDs, request
+budget evidence, or reservations are allocated. Existing execution files and
+ledger state are read without interrupted-attempt recovery. A retained stop is
+a failure, not an instruction to reset the run. Unsupported legacy evidence
+inspection fails explicitly.
+
+Immutable observation and admission receipts use the existing evidence store
+under the new observation directory. Failed probes remain, and remaining cells
+are still checked. Exit 0 means all representative observations passed at the
+recorded times; exit 2 means invalid inputs or failed observations.
+`execution_admitted` is always false: this is no permanent admission certificate.
+`run-research` still requires fresh admission at each segment, and a later
+budget-cap stop remains possible. Preserve observations privately and review
+them before sharing.

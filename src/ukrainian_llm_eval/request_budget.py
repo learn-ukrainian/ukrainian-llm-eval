@@ -1102,10 +1102,10 @@ class RequestBudgetController:
                 ):
                     raise ExamError("route input billing bound is below documented provider-context commitment")
                 if any(
-                    suite["limits"]["max_output_tokens"] != output["max_tokens_per_request"]
+                    suite["limits"]["max_output_tokens"] > output["max_tokens_per_request"]
                     for suite in manifest["suites"]
                 ):
-                    raise ExamError("provider output bound differs from frozen suite output parameter")
+                    raise ExamError("frozen suite output parameter exceeds provider output bound")
                 if mechanism["pricing_evidence_sha256"] != route["pricing_evidence_sha256"]:
                     raise ExamError("provider-bound pricing evidence drift")
                 if (
@@ -1200,6 +1200,64 @@ class RequestBudgetController:
                 for segment in cell.get("segments", []):
                     if segment.get("reserved_micro_usd") != expected_reservation:
                         raise ExamError("execution-plan reservation differs from request-budget maximum charge")
+
+    def inspect_readiness(self, root: Path) -> dict[str, Any]:
+        """Inspect prepared commitments without binding or recovering any attempts."""
+
+        if not self._routes:
+            raise ExamError("request-budget controller is not prepared")
+        self.validate_execution_root(root)
+        if self._spending_policy is not None:
+            from .spending_ledger import SharedSpendingLedger, SpendingLedgerError
+
+            try:
+                return SharedSpendingLedger.inspect_readiness(
+                    self._shared_ledger_path,
+                    ledger_id=self._spending_policy["ledger_id"],
+                    cap_micro_usd=self._spending_policy["authorized_cap_micro_usd"],
+                )
+            except SpendingLedgerError as exc:
+                raise ExamError(str(exc)) from exc
+        evidence_path = Path(root) / "request-budget-evidence"
+        if evidence_path.exists() or evidence_path.is_symlink():
+            # EvidenceStore verification may repair pending finalization. Do not
+            # hide legacy commitments or invoke that mutating path at admission.
+            raise ExamError("read-only inspection of retained legacy request budgets is unsupported")
+        return {
+            "remaining_new_spend_micro_usd": None, "credit_commitments_micro_usd": {},
+            "reservation_count": 0, "reservations_sha256": digest([]),
+        }
+
+    def check_readiness_capacity(
+        self, route: Mapping[str, Any], receipt: Mapping[str, Any], snapshot: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Check the next worst case against the observation, without reserving it.
+
+        This is ephemeral admission evidence, not a guarantee against concurrent
+        spending; execution still reserves atomically immediately before use.
+        """
+
+        if self._routes.get(route.get("route_id")) != route:
+            raise ExamError("request-budget readiness route identity drift")
+        kind = route["billing"]["kind"]
+        if kind not in {"metered", "existing_credit"}:
+            return {"maximum_micro_usd": 0, "remaining_micro_usd": None}
+        maximum = _maximum_segment_charge(route["billing"])
+        account = receipt.get("account_sha256")
+        if not isinstance(account, str) or _SHA256_RE.fullmatch(account) is None:
+            raise ExamError("request-budget admission lacks account identity")
+        if kind == "existing_credit":
+            credit = receipt.get("credit_available_micro_usd")
+            if type(credit) is not int or credit < 0:
+                raise ExamError("request-budget admission lacks existing-credit balance")
+            remaining = credit - snapshot["credit_commitments_micro_usd"].get(account, 0)
+        else:
+            if receipt.get("credit_available_micro_usd") is not None:
+                raise ExamError("metered request budget must not claim a credit balance")
+            remaining = snapshot["remaining_new_spend_micro_usd"]
+        if remaining is not None and maximum > remaining:
+            raise ExamError("next worst-case reservation exceeds remaining budget capacity")
+        return {"maximum_micro_usd": maximum, "remaining_micro_usd": remaining}
 
     def bind(self, root: Path) -> None:
         self.validate_execution_root(root)

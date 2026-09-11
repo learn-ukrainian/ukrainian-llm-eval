@@ -221,8 +221,38 @@ def test_claude_empty_builtins_and_model_drift_is_rejected(monkeypatch: pytest.M
     assert observed["argv"][observed["argv"].index("--tools") + 1] == ""
     assert "--strict-mcp-config" in observed["argv"]
     assert observed["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "100"
+    assert observed["env"]["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] == "1"
+    settings = json.loads(observed["argv"][observed["argv"].index("--settings") + 1])
+    assert settings["switchModelsOnFlag"] is False
+    assert settings["availableModels"] == [config["model"]]
     assert "CLAUDE_CODE_SIMPLE" not in observed["env"]
     assert "secret-never-in-prompt" not in observed["input"]
+
+
+@pytest.mark.parametrize("condition", ["closed-book", "sources"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_claude_refusal_keeps_failure_and_exact_model_controls(monkeypatch, condition, effort) -> None:
+    config = _config(adapter="claude", model="claude-fable-5-1", effort=effort)
+    del config["endpoint_env"]
+    del config["key_env"]
+    monkeypatch.setattr(adapters, "_claude_capabilities", lambda *_args, **_kwargs: ("claude-fixture", "fixture"))
+    calls = []
+
+    def refuse(argv, **kwargs):
+        calls.append(argv)
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert settings["switchModelsOnFlag"] is False
+        assert settings["availableModels"] == [config["model"]]
+        assert kwargs["env"]["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] == "1"
+        assert argv[argv.index("--effort") + 1] == effort
+        return subprocess.CompletedProcess(argv, 1, stdout="Synthetic classifier refusal", stderr="")
+
+    monkeypatch.setattr(adapters, "_run_claude_process", refuse)
+    with pytest.raises(adapters.AdapterError, match="CLI invocation failed"):
+        adapters.run_claude(_packet(), config, condition,
+                            sources_url="https://sources.invalid/mcp" if condition == "sources" else None,
+                            prompt="synthetic control")
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("sessions", [(None, None), ("first", None), ("first", "second")])
@@ -243,9 +273,11 @@ def test_claude_native_session_does_not_invent_fresh_identity() -> None:
 def test_claude_child_env_keeps_local_keychain_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USER", "fixture-user")
     monkeypatch.setenv("LOGNAME", "fixture-login")
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "0")
     environment = adapters._child_env(100)
     assert environment["USER"] == "fixture-user"
     assert environment["LOGNAME"] == "fixture-login"
+    assert environment["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] == "1"
     assert "CLAUDE_CODE_SIMPLE" not in environment
 
 

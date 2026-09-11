@@ -6,15 +6,15 @@ Updated: 11 September 2026. Owner: the evaluator release lead. Tracking: [report
 
 - **The primary scored study has not started. There is no ranked leaderboard yet.** Pre-exam synthetic checks establish execution behavior, not Ukrainian proficiency.
 - First round: GPT-6 Astra, Claude Fable 5.1 and Gemini 3.8 Flash at low/medium/high; Gemma 4 31B through native OpenCode and its OpenRouter provider. Gemma's current catalog has reasoning off/on, not named effort levels; those two modes are the recommended comparison, pending final run-manifest confirmation. No xhigh/max/ultra in this round.
-- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The following live-canary observations are from 6 September; fresh local controls on 11 September are recorded below, and do not renew live admission. The restricted native Codex policy in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) now passes local isolation controls and six live synthetic canaries; independent review and formal study admission remain pending. Gemini now passes six native AGY canaries, and Gemma passes four native OpenCode canaries; the draft implementations and formal study admission still need independent review. Admission failures are not zero scores.
+- Every selected model must pass synthetic readiness checks in both closed-book and controlled Sources modes before any scored exam starts. The following live-canary observations are from 6 September; local controls on 11 September do not renew live admission. The adapter implementations were independently reviewed and merged in [PR #36](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/36). Their six Codex, six Gemini and four Gemma live canaries remain historical evidence. Current formal study admission is still pending under [launch readiness #37](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/37). Admission failures are not zero scores.
 - Fable 5.1 has passed six live synthetic canaries: low/medium/high in both conditions, with matching observed model identity and one reference call in each Sources case. Effective effort remains unreported, and these canaries do not complete benchmark admission.
-- The requested native routes now pass: Gemma **4/4** through OpenCode/OpenRouter and Gemini **6/6** through AGY, including one completed lookup in every Sources case. Earlier direct-HTTP Gemma failures and native transport failures remain preserved. Conservative total Gemma charges across all attempts are **$0.005214**; no scored exams started.
+- Historical native canaries passed: Gemma **4/4** through OpenCode/OpenRouter and Gemini **6/6** through AGY, including one completed lookup in every Sources case. Earlier direct-HTTP Gemma failures and native transport failures remain preserved. The charge total reported with those canaries was **$0.005214**; it is not a current ledger balance. No scored exams started.
 - One earlier whole-paper Claude pilot improved from 32/35 to 35/35 with Sources. It is **not** the primary protocol, a result for Fable 5.1, or evidence that reference-assisted training will improve a model.
 - The parallel training-data workflow needs to know both where references help and where they introduce mistakes. We will report paired gains/losses, retrieval behavior, unresolved uncertainty, and evidence-linked data priorities. Exam keys and held-out evaluation examples must stay outside training-data generation.
 
-## Integrated preparation for review — 11 September 2026
+## Integrated implementation and launch preparation — 11 September 2026
 
-[Draft PR #36](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/36) combines the six outstanding implementation/report branches into one reviewable tree. The operator will arrange Gemini's whole-codebase review. No independent verdict or merge is claimed by this preparation.
+[PR #36](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/36) merged the six implementation/report branches after green CI and an independent native Claude Sonnet 5 review of exact head `5b0a08c26827447b694d3646392c3a070dd0b380`. The [attributed review summary](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/36#issuecomment-5633380669) records its scope and limitations. This was a source-aware code review; the separate local controls below establish observed execution behavior. The superseded PRs are closed with their branches and evidence preserved.
 
 The integrated code passes **599 tests** and Ruff. Research identity now includes every newly integrated native adapter and tool-control module; eight mutation checks reject a changed implementation before execution. The explicit V2 live-subscription admission form preserves unknown expiry and requires fresh active status with disabled paid fallback, while V1 retains its expiry requirement. Its tests establish validation behavior, not live provider entitlement.
 
@@ -24,6 +24,10 @@ All **206** preserved source-preparation files matched their archive checksums. 
 
 Linux CI passed the pinned scorer build and all six parity cases. Local Docker image inspection succeeded, but executing its amd64 Python returned `exec format error` on this arm64 host. The image was not altered; local scoring requires working emulation or a verified Linux host. Prior source/scorer evidence and the failed local check remain preserved.
 
+[PR #38](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/38) adds admission-only launch checks and provider status collectors. These changes need their own final exact-head review. Read-only native status diagnostics have observed the selected subscription accounts and available quota; diagnostic observations are not nonce-bound admission receipts. Complete reviewed framing/capacity evidence and fresh command bindings remain necessary before the 198-cell readiness check can pass.
+
+The selected Gemma `venice/bf16` endpoint currently reports an 8,192-token completion maximum, below the frozen GEC requirement of 16,384. No cap reduction, backend substitution or scored evaluation has been made. The evaluator lead owns the remaining readiness work, including an explicit operator decision on that conflict and restoration of the pinned local scorer. The current operator goal stops before Ukrainian scored execution; results and release remain later work.
+
 ## Leaderboards
 
 Report suites separately; do not combine points, accuracy and correction F0.5 into a single language score. Each completed configuration has three independent repeats. Show every repeat plus its descriptive mean and range; a three-run spread alone is not a population confidence interval. Effort labels are provider-specific and do not represent equal computation across models.
@@ -32,17 +36,17 @@ Within each suite, rank complete comparable results separately for closed-book a
 
 | Configuration | Closed-book | With Sources | Current status |
 | --- | --- | --- | --- |
-| GPT-6 Astra — low | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
-| GPT-6 Astra — medium | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
-| GPT-6 Astra — high | Live synthetic passed; identity unknown | Live synthetic passed; identity unknown | Draft implementation; independent review pending |
+| GPT-6 Astra — low | Historical synthetic passed; identity unknown | Historical synthetic passed; identity unknown | Merged implementation; current admission pending |
+| GPT-6 Astra — medium | Historical synthetic passed; identity unknown | Historical synthetic passed; identity unknown | Merged implementation; current admission pending |
+| GPT-6 Astra — high | Historical synthetic passed; identity unknown | Historical synthetic passed; identity unknown | Merged implementation; current admission pending |
 | Claude Fable 5.1 — low | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — medium | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
 | Claude Fable 5.1 — high | Live synthetic canary passed | Live synthetic canary passed | Model identity matched; effective effort unknown; admission pending |
-| Gemini 3.8 Flash — low | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
-| Gemini 3.8 Flash — medium | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
-| Gemini 3.8 Flash — high | Native AGY synthetic passed | Native AGY synthetic passed | Draft implementation; effective effort/cap unknown; review pending |
-| Gemma 4 31B — reasoning off | Native OpenCode synthetic passed | Native OpenCode synthetic passed | Model/provider matched; draft implementation and review pending |
-| Gemma 4 31B — reasoning on | Native OpenCode synthetic passed | Native OpenCode synthetic passed | Model/provider matched; draft implementation and review pending |
+| Gemini 3.8 Flash — low | Historical AGY synthetic passed | Historical AGY synthetic passed | Merged implementation; effective effort/cap unknown; admission pending |
+| Gemini 3.8 Flash — medium | Historical AGY synthetic passed | Historical AGY synthetic passed | Merged implementation; effective effort/cap unknown; admission pending |
+| Gemini 3.8 Flash — high | Historical AGY synthetic passed | Historical AGY synthetic passed | Merged implementation; effective effort/cap unknown; admission pending |
+| Gemma 4 31B — reasoning off | Historical OpenCode synthetic passed | Historical OpenCode synthetic passed | Merged implementation; GEC capacity decision and admission pending |
+| Gemma 4 31B — reasoning on | Historical OpenCode synthetic passed | Historical OpenCode synthetic passed | Merged implementation; GEC capacity decision and admission pending |
 
 ### NMT Ukrainian language
 
@@ -69,6 +73,8 @@ Denominator: **2,696 sentences in 166 documents**, using both reference annotato
 | All planned configurations | Not ranked | Not ranked | Not measured | 0 completed primary repeats | None yet |
 
 ## Native Codex execution controls
+
+The sections below retain the dated engineering observations and their original implementation/review state. The current merge and readiness disposition is recorded above; historical pending-review statements do not describe the current PR queue.
 
 The subsequent restricted-catalog implementation at source head `9b37fd1` in [draft PR #27](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/27) passes **27/27 local synthetic control cases**: nine cases at each requested low/medium/high effort, using all 13 permitted live Sources tool schemas. These controls were repeated from a clean wheel installation. Successful cases also check that an explicit final-output file separates the final answer from progress messages. No provider inference occurs in that local matrix.
 

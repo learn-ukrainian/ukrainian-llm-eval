@@ -78,6 +78,15 @@ billing totals must cover every permitted request and output, including tool
 rounds, full-rate cache treatment, fees, and integer rounding. Missing final
 account-charge evidence leaves the full segment reservation unresolved.
 
+For versions 2 and 3, the mechanism's output maximum is an upper bound across
+suites. Each suite may request a smaller limit, but a suite above that maximum
+is rejected during preparation. The exact suite limit still controls the
+outgoing output parameter and every observed reasoning-inclusive output count.
+Using a smaller limit does not reduce the frozen whole-segment reservation or
+change settlement and evidence verification. The bound must come from actual
+provider evidence; accepting mixed suite limits does not establish that a
+provider supports the larger requested value.
+
 ## Conservative final-usage settlement
 
 The broader spending-policy.v2 also accepts authoritative-charge v2 request
