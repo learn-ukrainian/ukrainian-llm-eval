@@ -15,6 +15,7 @@ from .core import ExamError, _duplicate_rejecting_pairs, _reject_json_constant, 
 
 REQUEST_SCHEMA = "ukrainian-llm-eval.admission-request.v1"
 RESULT_SCHEMA = "ukrainian-llm-eval.admission-result.v1"
+LIVE_SUBSCRIPTION_RESULT_SCHEMA = "ukrainian-llm-eval.admission-result.v2"
 LEGACY_OPERATOR_AUTHORIZATION_SCHEMA = "ukrainian-llm-eval.operator-authorization.v1"
 SEQUENTIAL_OPERATOR_AUTHORIZATION_SCHEMA = "ukrainian-llm-eval.operator-authorization.v2"
 
@@ -137,7 +138,8 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
     if request.get("request_sha256") != digest({k: v for k, v in request.items() if k != "request_sha256"}):
         raise ExamError("admission request hash mismatch")
     _exact(result, {"schema", "nonce", "request_sha256", "observed_at", "pricing", "entitlement", "capability"}, "result")
-    if result["schema"] != RESULT_SCHEMA or result["nonce"] != request["nonce"] or result["request_sha256"] != request["request_sha256"]:
+    live_subscription = result["schema"] == LIVE_SUBSCRIPTION_RESULT_SCHEMA
+    if result["schema"] not in (RESULT_SCHEMA, LIVE_SUBSCRIPTION_RESULT_SCHEMA) or result["nonce"] != request["nonce"] or result["request_sha256"] != request["request_sha256"]:
         raise ExamError("admission request/nonce binding mismatch")
     requested, observed = _time(request["requested_at"]), _time(result["observed_at"])
     clock = clock.astimezone(UTC)
@@ -147,9 +149,13 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
                              {"route_sha256", "currency", "input_micro_usd_per_million_tokens",
                               "output_micro_usd_per_million_tokens", "tool_round_micro_usd"},
                              {"conservative_segment_cost_micro_usd", "incremental_segment_cost_micro_usd"}, "pricing")
+    entitlement_fields = {"route_sha256", "account_sha256", "billing_kind", "zero_incremental", "valid_until"}
+    account_fields = {"eligible", "credit_available_micro_usd"}
+    if live_subscription:
+        entitlement_fields.add("verification")
+        account_fields.update({"subscription_status", "paid_fallback_enabled", "status_observed_at"})
     entitlement, account = _record(result["entitlement"], route["entitlement_evidence_sha256"],
-                                   {"route_sha256", "account_sha256", "billing_kind", "zero_incremental", "valid_until"},
-                                   {"eligible", "credit_available_micro_usd"}, "entitlement")
+                                   entitlement_fields, account_fields, "entitlement")
     capability, health = _record(result["capability"], route["capability_evidence_sha256"],
                                  {"route_sha256", "model", "effort", "context_input_tokens", "max_output_tokens",
                                   "max_tool_calls", "timeout_seconds", "tool_policy_sha256"},
@@ -173,7 +179,18 @@ def validate_admission_result(result, request, route, config, *, reserved_micro_
     _sha(entitlement["account_sha256"])
     if entitlement["billing_kind"] != billing["kind"] or type(entitlement["zero_incremental"]) is not bool:
         raise ExamError("admission billing state drift")
-    if _time(entitlement["valid_until"]) <= clock or account["eligible"] is not True:
+    if live_subscription:
+        if (billing["kind"] != "verified_subscription" or entitlement["verification"] != "live_subscription"
+                or account["subscription_status"] != "active" or account["paid_fallback_enabled"] is not False):
+            raise ExamError("admission requires active subscription with paid fallback disabled")
+        status_observed = _time(account["status_observed_at"])
+        if not requested <= status_observed <= observed:
+            raise ExamError("admission subscription status was not freshly observed for this request")
+    # A nullable provider expiry is an explicit v2-only contract. Quota resets,
+    # credential expiry and local observation TTLs are not subscription expiry.
+    if (entitlement["valid_until"] is not None or not live_subscription) and _time(entitlement["valid_until"]) <= clock:
+        raise ExamError("admission entitlement expired or ineligible")
+    if account["eligible"] is not True:
         raise ExamError("admission entitlement expired or ineligible")
     if billing["kind"] == "metered":
         if entitlement["zero_incremental"] or incremental != charge or account["credit_available_micro_usd"] is not None:

@@ -5,6 +5,7 @@ import pytest
 from test_admission_command import _command_spec, _fixture
 
 from ukrainian_llm_eval.admission import (
+    LIVE_SUBSCRIPTION_RESULT_SCHEMA,
     RESULT_SCHEMA,
     build_admission_request,
     invoke_validated_admission,
@@ -113,12 +114,81 @@ def test_credit_balance_can_change_without_state_drift_but_must_cover_charge():
         validate_admission_result(result, request, route, config, **kwargs)
 
 
+def live_subscription_inputs():
+    result, request, route, config, kwargs = inputs("verified_subscription")
+    result["schema"] = LIVE_SUBSCRIPTION_RESULT_SCHEMA
+    state = result["entitlement"]["state"]
+    state.update(valid_until=None, verification="live_subscription")
+    result["entitlement"]["state_sha256"] = route["entitlement_evidence_sha256"] = digest(state)
+    result["entitlement"]["observed"].update(
+        subscription_status="active", paid_fallback_enabled=False, status_observed_at=result["observed_at"]
+    )
+    return result, request, route, config, kwargs
+
+
+@pytest.mark.parametrize("known_expiry", [False, True])
+def test_live_subscription_expiry_is_explicit_without_inventing_a_future_date(known_expiry):
+    result, request, route, config, kwargs = live_subscription_inputs()
+    if known_expiry:
+        state = result["entitlement"]["state"]
+        state["valid_until"] = (kwargs["now"] + timedelta(hours=1)).isoformat()
+        result["entitlement"]["state_sha256"] = route["entitlement_evidence_sha256"] = digest(state)
+    receipt = validate_admission_result(result, request, route, config, **kwargs)
+    assert receipt["result_sha256"] == digest(result)
+    assert receipt["incremental_segment_cost_micro_usd"] == 0
+    assert (result["entitlement"]["state"]["valid_until"] is None) == (not known_expiry)
+
+
+@pytest.mark.parametrize("change", [
+    "inactive", "unknown", "ineligible", "fallback", "fallback_unknown", "fallback_zero",
+    "old_status", "future_status", "stale_result", "expired", "wrong_verification", "account_drift",
+    "metered", "credit", "legacy_schema", "missing_status", "unauthorized", "nonce",
+])
+def test_live_subscription_never_turns_unknown_or_stale_entitlement_into_permission(change):
+    result, request, route, config, kwargs = live_subscription_inputs()
+    state = result["entitlement"]["state"]
+    live = result["entitlement"]["observed"]
+    if change == "inactive": live["subscription_status"] = "inactive"
+    elif change == "unknown": live["subscription_status"] = "unknown"
+    elif change == "ineligible": live["eligible"] = False
+    elif change == "fallback": live["paid_fallback_enabled"] = True
+    elif change == "fallback_unknown": live["paid_fallback_enabled"] = None
+    elif change == "fallback_zero": live["paid_fallback_enabled"] = 0
+    elif change == "old_status":
+        live["status_observed_at"] = (kwargs["now"] - timedelta(seconds=2)).isoformat()
+    elif change == "future_status": live["status_observed_at"] = kwargs["now"].isoformat()
+    elif change == "stale_result": kwargs["now"] += timedelta(seconds=40)
+    elif change in {"expired", "wrong_verification", "metered", "credit"}:
+        if change == "expired": state["valid_until"] = request["requested_at"]
+        elif change == "wrong_verification": state["verification"] = "quota_reset"
+        else:
+            state["billing_kind"] = route["billing"]["kind"] = "metered" if change == "metered" else "existing_credit"
+        result["entitlement"]["state_sha256"] = route["entitlement_evidence_sha256"] = digest(state)
+    elif change == "account_drift": state["account_sha256"] = "e" * 64
+    elif change == "legacy_schema": result["schema"] = RESULT_SCHEMA
+    elif change == "missing_status": live.pop("status_observed_at")
+    elif change == "unauthorized": kwargs["operator_authorization"]["route_sha256"] = "e" * 64
+    elif change == "nonce": result["nonce"] = "f" * 32
+    with pytest.raises(ExamError):
+        validate_admission_result(result, request, route, config, **kwargs)
+
+
+def test_legacy_subscription_still_requires_a_provider_expiry():
+    result, request, route, config, kwargs = inputs("verified_subscription")
+    state = result["entitlement"]["state"]
+    state["valid_until"] = None
+    result["entitlement"]["state_sha256"] = route["entitlement_evidence_sha256"] = digest(state)
+    with pytest.raises(ExamError, match="invalid admission timestamp"):
+        validate_admission_result(result, request, route, config, **kwargs)
+
+
 @pytest.mark.parametrize("valid", [True, False])
-def test_real_probe_pipeline_preserves_claims_or_only_safe_rejection_hashes(tmp_path, valid):
-    result, _, route, config, kwargs = inputs()
+@pytest.mark.parametrize("live_subscription", [True, False])
+def test_real_probe_pipeline_preserves_claims_or_only_safe_rejection_hashes(tmp_path, valid, live_subscription):
+    result, _, route, config, kwargs = live_subscription_inputs() if live_subscription else inputs()
     now = datetime.now(UTC)
     state = result["entitlement"]["state"]
-    state["valid_until"] = (now + timedelta(hours=1)).isoformat()
+    state["valid_until"] = None if live_subscription else (now + timedelta(hours=1)).isoformat()
     route["entitlement_evidence_sha256"] = result["entitlement"]["state_sha256"] = digest(state)
     request = build_admission_request(route, config, "sources", input_utf8_bytes=1000,
                                       tool_policy_sha256="c" * 64, composite_sha256="d" * 64, now=now)
@@ -126,6 +196,8 @@ def test_real_probe_pipeline_preserves_claims_or_only_safe_rejection_hashes(tmp_
     if valid:
         source += "result=json.loads(" + repr(json.dumps(result)) + ")\n"
         source += "result.update(nonce=request['nonce'], request_sha256=request['request_sha256'], observed_at=datetime.now(timezone.utc).isoformat())\nprint(json.dumps(result))\n"
+        if live_subscription:
+            source = source.replace("print(json.dumps(result))", "result['entitlement']['observed']['status_observed_at']=result['observed_at']\nprint(json.dumps(result))")
     else:
         source += "print('ADMISSION_PRIVATE_SENTINEL')\n"
     script, lock = _fixture(tmp_path, source)
