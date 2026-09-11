@@ -50,7 +50,9 @@ def provision(config, bearer, home):
         value = parse(source.read_bytes())
     except OSError:
         fail("auth_provisioning_unavailable")
-    if not isinstance(value, dict) or set(value) != {"auth_method", "token"} or value["auth_method"] != "consumer":
+    if (not isinstance(value, dict) or not {"auth_method", "token"} <= value.keys()
+            or set(value) - {"auth_method", "token", "id_token"} or value["auth_method"] != "consumer"
+            or ("id_token" in value and not isinstance(value["id_token"], str))):
         fail("auth_provisioning_invalid")
     token = value["token"]
     if (not isinstance(token, dict) or set(token) - {"access_token", "expiry", "refresh_token", "token_type"}
