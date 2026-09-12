@@ -216,6 +216,8 @@ def test_empty_closed_book_surface_and_extra_descriptor_rejection():
     summary = {"tool_surface_valid": True, "top_level_tool_count": 0, "additional_tool_namespaces": {}}
     assert surface_matches(summary, ["verify_word"], True)
     summary["additional_tool_namespaces"] = {"collaboration": ["spawn_agent"]}
+    assert surface_matches(summary, ["verify_word"], True)
+    summary["additional_tool_namespaces"] = {"collaboration": ["spawn_agent", "not_a_real_tool"]}
     assert not surface_matches(summary, ["verify_word"], True)
 
 
