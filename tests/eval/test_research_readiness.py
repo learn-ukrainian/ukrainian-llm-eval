@@ -264,3 +264,29 @@ def test_cli_existing_shared_ledger_is_unchanged_and_only_next_capacity_required
     assert not (tmp_path / "execution").exists()
     receipts = EvidenceStore(tmp_path / "observation/admission-evidence").verify_all()
     assert len(receipts) == 6
+
+
+def test_sources_url_scoped_to_sources_cells_and_reference_only_policy():
+    from ukrainian_llm_eval import readiness
+    from ukrainian_llm_eval.core import ExamError
+
+    urls = {"astra-low": SOURCES}
+    assert readiness._sources_url_for_condition(urls, "astra-low", "sources") == SOURCES
+    assert readiness._sources_url_for_condition(urls, "astra-low", "closed-book") is None
+    assert readiness._sources_url_for_condition({}, "astra-low", "sources") is None
+
+    codex_ref = {
+        "adapter": "codex",
+        "codex_tool_policy": "reference-only",
+        "tools": ["verify_word"],
+        "max_tool_calls": 1,
+    }
+    # Closed-book must not see the route Sources URL.
+    readiness._condition(codex_ref, "closed-book", None)
+    with pytest.raises(ExamError, match="closed-book does not accept a Sources URL"):
+        readiness._condition(codex_ref, "closed-book", SOURCES)
+    # Sources is allowed for reference-only once a URL and tools are present.
+    readiness._condition(codex_ref, "sources", SOURCES)
+    # Legacy non-reference Codex still rejects Sources entirely.
+    with pytest.raises(ExamError, match="unsupported until MCP isolation"):
+        readiness._condition({"adapter": "codex"}, "sources", SOURCES)

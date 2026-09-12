@@ -481,8 +481,11 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                         _immutable_json(root / "stop.json", stop)
                         yield {"status": "stopped", "reason": stop["reason"]}
                         return
+                    cell_sources = sources_urls.get(route_id) if cell["condition"] == "sources" else None
                     result, receipt = execute_attempt(segment, config, cell["condition"], root / "evidence",
-                                                       sources_url=sources_urls.get(route_id), attempt_id=attempt_id,
+                                                       sources_url=cell_sources,
+                                                       route_sources_url=sources_urls.get(route_id),
+                                                       attempt_id=attempt_id,
                                                        segment_context=context, request_budget=request_budget)
                 result = receipt["result"]
                 if route["request_budget_mechanism_sha256"] is not None:
