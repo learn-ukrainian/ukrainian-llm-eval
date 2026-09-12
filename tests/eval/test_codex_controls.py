@@ -93,6 +93,24 @@ def test_advertisement_rejects_unknown_or_missing_tools() -> None:
         },
     }
     assert codex_controls._advertisement_matches(case, with_async_and_collab)
+    with_multi_agent = {
+        **exact,
+        "additional_tool_namespaces": {
+            "functions": sorted(codex_controls._ALLOWED_FUNCTIONS),
+            "multi_agent_v1": ["spawn_agent", "close_agent", "send_input", "wait_agent"],
+        },
+    }
+    assert codex_controls._advertisement_matches(case, with_multi_agent)
+    assert not codex_controls._advertisement_matches(
+        case,
+        {
+            **exact,
+            "additional_tool_namespaces": {
+                "functions": sorted(codex_controls._REQUIRED_FUNCTIONS),
+                "multi_agent_v1": ["spawn_agent", "spawn_agent"],
+            },
+        },
+    )
     assert not codex_controls._advertisement_matches(
         case,
         {

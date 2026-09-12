@@ -219,6 +219,26 @@ def test_empty_closed_book_surface_and_extra_descriptor_rejection():
     assert surface_matches(summary, ["verify_word"], True)
     summary["additional_tool_namespaces"] = {"collaboration": ["spawn_agent", "not_a_real_tool"]}
     assert not surface_matches(summary, ["verify_word"], True)
+    summary["additional_tool_namespaces"] = {
+        "multi_agent_v1": ["spawn_agent", "close_agent", "send_input", "wait_agent"],
+    }
+    assert surface_matches(summary, ["verify_word"], True)
+    summary["additional_tool_namespaces"] = {
+        "multi_agent_v1": ["spawn_agent", "spawn_agent"],
+    }
+    assert not surface_matches(summary, ["verify_word"], True)
+    summary["additional_tool_namespaces"] = {
+        "multi_agent_v1": ["spawn_agent"],
+        "mcp__sources": ["verify_word"],
+    }
+    assert not surface_matches(summary, ["verify_word"], True)
+    summary["additional_tool_namespaces"] = {
+        "functions": ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"],
+        "mcp__sources": ["verify_word"],
+        "multi_agent_v2": ["spawn_agent"],
+        "collaboration": ["spawn_agent"],
+    }
+    assert surface_matches(summary, ["verify_word"], False)
 
 
 @pytest.mark.parametrize("answer", ['{"responses":{"opaque-1":"A"}}', 'Malformed final answer'])
