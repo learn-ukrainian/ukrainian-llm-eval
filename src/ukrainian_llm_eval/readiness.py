@@ -50,9 +50,14 @@ def _execution_snapshot(root, manifest, plan):
 def _condition(config, condition, sources_url):
     try:
         if config["adapter"] == "codex":
-            from .native_codex import _validate_condition
+            if config.get("codex_tool_policy") == "reference-only":
+                from .codex_reference import condition_policy
 
-            _validate_condition(condition, sources_url)
+                condition_policy(config, condition, sources_url)
+            else:
+                from .native_codex import _validate_condition
+
+                _validate_condition(condition, sources_url)
         elif config["adapter"] == "kimi":
             from .native_kimi import _validate_condition
 
@@ -61,6 +66,14 @@ def _condition(config, condition, sources_url):
             _condition_policy(config, condition, sources_url)
     except AdapterError as exc:
         raise ExamError(str(exc)) from exc
+
+
+def _sources_url_for_condition(sources_urls, route_id, condition):
+    """Route maps bind Sources identity; only sources cells may receive the URL."""
+
+    if condition == "sources":
+        return sources_urls.get(route_id)
+    return None
 
 
 def check_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
@@ -93,8 +106,9 @@ def check_research(packets, segment_plans, manifest, plan, configs, root: Path, 
     for cell in plan["cells"]:
         route, suite = routes[cell["route_id"]], suites[cell["suite_id"]]
         config = _research_config(configs[cell["route_id"]], suite, manifest["repeats"])
-        _condition(config, cell["condition"], sources_urls.get(cell["route_id"]))
-        if route_fingerprint(config, sources_urls.get(cell["route_id"])) != route["route_sha256"]:
+        route_sources = sources_urls.get(cell["route_id"])
+        _condition(config, cell["condition"], _sources_url_for_condition(sources_urls, cell["route_id"], cell["condition"]))
+        if route_fingerprint(config, route_sources) != route["route_sha256"]:
             raise ExamError("runtime endpoint drift")
         segmentation = segment_plans[cell["suite_id"]]
         segments = {item["segment_id"]: item for item in segmentation["segments"]}
