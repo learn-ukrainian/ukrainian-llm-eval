@@ -3,10 +3,28 @@ import math
 import os
 
 import native_agy_status
-from probe_common import available_percent, child_env, digest, fail, native_json, provider_json, text, utcnow
+from probe_common import (
+    available_percent,
+    child_env,
+    digest,
+    fail,
+    native_json,
+    provider_json,
+    provider_pace_after_admission,
+    text,
+    utcnow,
+)
 
 CLAUDE = "https://api.anthropic.com/api/oauth/"
 USERINFO = "https://openidconnect.googleapis.com/v1/userinfo"
+
+# Max-subscription Claude Code model ids → provider family quota display_name.
+# Never map these to Anthropic API keys; admission is subscription-native only.
+CLAUDE_SUBSCRIPTION_MODELS = {
+    "claude-fable-5-1": "Fable",
+    "claude-sonnet-5": "Sonnet",
+    "claude-opus-5": "Opus",
+}
 
 
 def bearer():
@@ -30,6 +48,8 @@ def collect_claude(config, diagnostics=None):
     auth = native_json([config["binary"], "auth", "status", "--json"], child_env())
     profile = status_read("profile", CLAUDE + "profile", token, diagnostics)
     usage = status_read("usage", CLAUDE + "usage", token, diagnostics, headers={"anthropic-beta": "oauth-2025-04-20"})
+    # Steady cadence across separate admission processes; avoid OAuth bursts.
+    provider_pace_after_admission()
     return auth, profile, usage, utcnow()
 
 
@@ -48,7 +68,8 @@ def normalize_claude(auth, profile, usage, model):
             or organization.get("billing_type") != "stripe_subscription"
             or organization.get("rate_limit_tier") != "default_claude_max_5x"):
         fail("subscription_unknown")
-    if model != "claude-fable-5-1":
+    family_name = CLAUDE_SUBSCRIPTION_MODELS.get(model)
+    if family_name is None:
         fail("model_quota_unknown")
     account_id = text(account.get("uuid"))
     org_id = text(organization.get("uuid"))
@@ -64,8 +85,8 @@ def normalize_claude(auth, profile, usage, model):
         fail("quota_unknown")
     for window in windows:
         available_percent(window.get("utilization"))
-    # Provider scope display_name=Fable denotes this exact selected model's
-    # family allowance. Unknown families/surfaces need reviewed mapping first.
+    # Provider scope display_name denotes this exact selected model's family
+    # allowance (Fable / Sonnet / Opus). Unknown families need review first.
     limits = usage.get("limits")
     if not isinstance(limits, list) or not limits:
         fail("model_quota_unknown")
@@ -86,8 +107,8 @@ def normalize_claude(auth, profile, usage, model):
             fail("model_quota_unknown")
         scoped_id = scoped_model.get("id")
         name = scoped_model.get("display_name")
-        if not ((scoped_id is None and name == "Fable")
-                or (scoped_id == model and name in (None, "Fable"))):
+        if not ((scoped_id is None and name == family_name)
+                or (scoped_id == model and name in (None, family_name))):
             fail("model_quota_unknown")
         family_found = True
         # is_active is a UI flag, not an exemption from a quota window.

@@ -204,6 +204,28 @@ def test_claude_family_allowance_does_not_override_exhausted_global_window(windo
         subscriptions.normalize_claude(*values, "claude-fable-5-1")
 
 
+@pytest.mark.parametrize("model,family", [
+    ("claude-fable-5-1", "Fable"),
+    ("claude-sonnet-5", "Sonnet"),
+    ("claude-opus-5", "Opus"),
+])
+def test_claude_subscription_families_bind(model, family):
+    values = claude_values()
+    values[2]["limits"] = [{"scope": {"model": {"id": None, "display_name": family}, "surface": None},
+                            "percent": 40, "is_active": True}]
+    assert subscriptions.normalize_claude(*values, model)
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-haiku-5")
+
+
+def test_claude_does_not_cross_substitute_families():
+    values = claude_values()  # Fable family limit
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-sonnet-5")
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-opus-5")
+
+
 def test_claude_observed_global_and_family_shape_with_inactive_windows():
     values = claude_values()
     values[2]["limits"][:0] = [{"scope": {}, "percent": 52, "is_active": False},
