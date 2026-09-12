@@ -86,10 +86,14 @@ def normalize_claude(auth, profile, usage, model):
     for window in windows:
         available_percent(window.get("utilization"))
     # Provider scope display_name denotes this exact selected model's family
-    # allowance (Fable / Sonnet / Opus). Unknown families need review first.
+    # allowance (Fable / Sonnet / Opus). Other known Max families may appear in
+    # the same usage document and must be excluded, not treated as this route.
+    # Unknown families/surfaces still fail closed.
     limits = usage.get("limits")
     if not isinstance(limits, list) or not limits:
         fail("model_quota_unknown")
+    known_families = set(CLAUDE_SUBSCRIPTION_MODELS.values())
+    known_ids = set(CLAUDE_SUBSCRIPTION_MODELS)
     family_found = False
     for limit in limits:
         if not isinstance(limit, dict):
@@ -107,12 +111,20 @@ def normalize_claude(auth, profile, usage, model):
             fail("model_quota_unknown")
         scoped_id = scoped_model.get("id")
         name = scoped_model.get("display_name")
-        if not ((scoped_id is None and name == family_name)
+        if ((scoped_id is None and name == family_name)
                 or (scoped_id == model and name in (None, family_name))):
-            fail("model_quota_unknown")
-        family_found = True
-        # is_active is a UI flag, not an exemption from a quota window.
-        available_percent(limit.get("percent"))
+            family_found = True
+            # is_active is a UI flag, not an exemption from a quota window.
+            available_percent(limit.get("percent"))
+            continue
+        if name in known_families and name != family_name:
+            continue
+        if scoped_id in known_ids and scoped_id != model:
+            expected = CLAUDE_SUBSCRIPTION_MODELS[scoped_id]
+            if name not in (None, expected):
+                fail("model_quota_unknown")
+            continue
+        fail("model_quota_unknown")
     if not family_found:
         fail("model_quota_unknown")
     return digest({"provider": "anthropic-claude", "account_id": account_id, "organization_id": org_id})

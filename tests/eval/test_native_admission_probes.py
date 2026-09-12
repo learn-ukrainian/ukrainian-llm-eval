@@ -226,6 +226,26 @@ def test_claude_does_not_cross_substitute_families():
         subscriptions.normalize_claude(*values, "claude-opus-5")
 
 
+def test_claude_known_other_family_windows_can_be_excluded():
+    values = claude_values()
+    values[2]["limits"] = [
+        {"scope": {}, "percent": 10, "is_active": True},
+        {"scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+         "percent": 90, "is_active": True},
+        {"scope": {"model": {"id": "claude-sonnet-5", "display_name": "Sonnet"}, "surface": None},
+         "percent": 40, "is_active": True},
+        {"scope": {"model": {"id": "claude-opus-5", "display_name": "Opus"}, "surface": None},
+         "percent": 100, "is_active": True},
+    ]
+    assert subscriptions.normalize_claude(*values, "claude-sonnet-5")
+    with pytest.raises(common.ProbeError, match="quota_exhausted"):
+        subscriptions.normalize_claude(*values, "claude-opus-5")
+    # Ambiguous other-id with wrong display name still fails closed.
+    values[2]["limits"][2]["scope"]["model"]["display_name"] = "Fable"
+    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-sonnet-5")
+
+
 def test_claude_observed_global_and_family_shape_with_inactive_windows():
     values = claude_values()
     values[2]["limits"][:0] = [{"scope": {}, "percent": 52, "is_active": False},
@@ -427,6 +447,27 @@ def test_missing_auth_and_secret_free_error(monkeypatch):
     with pytest.raises(common.ProbeError, match="^provider_status_unavailable$") as caught:
         common.provider_json(subscriptions.USERINFO, "synthetic-secret")
     assert "synthetic-secret" not in str(caught.value)
+
+
+def test_claude_oauth_429_fails_closed_after_backoff(monkeypatch, tmp_path):
+    monkeypatch.setattr(common, "_THROTTLE_PATH", str(tmp_path / "throttle"))
+    monkeypatch.setattr(common, "_THROTTLE_LOCK_PATH", str(tmp_path / "throttle.lock"))
+    monkeypatch.setattr(common, "_PROVIDER_MIN_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(common, "_PROVIDER_429_BACKOFF_SECONDS", (0, 0, 0, 0))
+    sleeps = []
+    monkeypatch.setattr(common.time, "sleep", lambda seconds: sleeps.append(seconds))
+    calls = {"n": 0}
+
+    def always_429(*_a, **_k):
+        calls["n"] += 1
+        raise common.urllib.error.HTTPError(
+            "https://api.anthropic.com/api/oauth/usage", 429, "Too Many", {}, None)
+
+    monkeypatch.setattr(common.urllib.request.OpenerDirector, "open", always_429)
+    with pytest.raises(common.ProbeError, match="^provider_http_429$"):
+        common.provider_json("https://api.anthropic.com/api/oauth/usage", "synthetic-secret")
+    assert calls["n"] == 1 + len(common._PROVIDER_429_BACKOFF_SECONDS)
+    assert sleeps == list(common._PROVIDER_429_BACKOFF_SECONDS)
 
 
 def test_environment_drops_paid_and_code_loading_paths(monkeypatch):
