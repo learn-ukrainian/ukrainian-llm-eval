@@ -65,7 +65,10 @@ string-distance metric.
 
 Use the same packet and model/effort settings for paired conditions, changing only
 the approved tool surface. Keep tool calls and responses as private run evidence.
-Exclude direct benchmark-answer or correction-example lookup. Live Sources may
+The shared Sources prompt treats reference-tool exercise as part of the condition
+(including MCP-under-test framing and a hard `verify_stress` trigger for
+наголос/stress items), not as optional convenience. Exclude direct
+benchmark-answer or correction-example lookup. Live Sources may
 still overlap with public questions; disclose this and record observed service
 identity without claiming a frozen corpus snapshot. Corpus publication and backups
 are separate work and are not prerequisites for this tool's optional MCP mode.

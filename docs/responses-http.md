@@ -68,7 +68,11 @@ as Responses `function` tools. A function name must be the corresponding
 controller calls the configured Sources MCP endpoint, records each attempted
 call and result privately, and includes the serialized result in the complete
 next `input` history. Failed calls count toward `max_tool_calls`; there is no
-fallback to web search or another tool surface.
+fallback to web search or another tool surface. The shared Sources prompt also
+states that this condition tests whether those reference tools work, that
+memory-only answers without a reference-tool call fail the Sources check, and
+that наголос/stress items must call `verify_stress` on every listed option word
+before selecting an answer.
 
 The adapter depends on the shared MCP allowlist and transport in
 `ukrainian_llm_eval.adapters`. It does not publish or snapshot the Sources
