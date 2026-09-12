@@ -23,12 +23,27 @@ _RESOURCE_TOOLS = ["list_mcp_resources", "list_mcp_resource_templates", "read_mc
 
 
 def surface_matches(summary: dict, tools: list[str], closed: bool) -> bool:
+    """Allow multi-agent collaboration ads; enforce reference/cheat allowlists only."""
+
     expected = {} if closed else {"functions": _RESOURCE_TOOLS, "mcp__sources": tools}
     namespaces = summary.get("additional_tool_namespaces")
-    return (summary.get("tool_surface_valid") is True and summary.get("top_level_tool_count") == 0
-            and isinstance(namespaces, dict) and set(namespaces) == set(expected)
-            and all(len(namespaces[key]) == len(names) and set(namespaces[key]) == set(names)
-                    for key, names in expected.items()))
+    if not (
+        summary.get("tool_surface_valid") is True
+        and summary.get("top_level_tool_count") == 0
+        and isinstance(namespaces, dict)
+    ):
+        return False
+    collaboration = namespaces.get("collaboration")
+    core = {key: value for key, value in namespaces.items() if key != "collaboration"}
+    if collaboration is not None:
+        if not isinstance(collaboration, list):
+            return False
+        names = set(collaboration)
+        if len(collaboration) != len(names) or not names <= codex_controls._ALLOWED_COLLABORATION:
+            return False
+    return set(core) == set(expected) and all(
+        len(core[key]) == len(names) and set(core[key]) == set(names) for key, names in expected.items()
+    )
 
 
 def _events(action, model, index):

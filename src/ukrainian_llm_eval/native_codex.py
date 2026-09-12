@@ -10,8 +10,9 @@ The legacy policy is closed-book only. The explicit reference-only policy
 supports paired conditions through a restricted catalog and reference controller.
 A control receipt is mandatory because feature flags describe a
 request, while a mock capture is needed to establish what visible handlers
-actually do.  Visible inert descriptors are acceptable; unknown or usable
-handlers are not.
+actually do.  Cheat surfaces (host exec, wait, human input) must be proved
+inert. Multi-agent / collaboration may be advertised and used; that is
+capability, not an exam cheat.
 """
 
 from __future__ import annotations
@@ -54,8 +55,10 @@ _MAX_OUTPUT_BYTES = 2_000_000
 _PROCESS_CLEANUP_SECONDS = 1
 _MAX_HELP_BYTES = 256_000
 _MAX_VERSION_BYTES = 16_384
+# Cheat / contamination surfaces only. Multi-agent and collaboration stay enabled
+# so capability measurement matches other routes (operator policy: #47).
 _DISABLED_FEATURES = (
-    "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2", "apps", "plugins",
+    "shell_tool", "unified_exec", "apps", "plugins",
     "remote_plugin", "browser_use", "browser_use_external", "computer_use", "view_image",
     "skill_search", "workspace_dependencies", "memories", "tool_suggest", "sleep_tool",
     "code_mode", "code_mode_host",
@@ -75,7 +78,7 @@ _REQUIRED_HELP_FLAGS = frozenset(
 )
 _INERT_HANDLER_NAMES = frozenset(
     {
-        "functions.exec", "functions.wait", "functions.request_user_input", "delegation",
+        "functions.exec", "functions.wait", "functions.request_user_input",
     }
 )
 _AUTH_KEYS = frozenset({"OPENAI_API_KEY", "auth_mode", "last_refresh", "tokens"})

@@ -35,7 +35,23 @@ _MAX_PROCESS_BYTES = 2 * 1024 * 1024
 _PROMPT = b"Return a short neutral acknowledgement."
 _SAFE_CHILD_ENV = frozenset({"PATH", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"})
 _CALL_ID = "call_isolation_probe"
-_EXPECTED_FUNCTIONS = frozenset({"exec", "wait", "request_user_input"})
+# Required cheat-surface tools that must still appear so inert proof applies.
+_REQUIRED_FUNCTIONS = frozenset({"exec", "wait", "request_user_input"})
+# Known non-cheat function ads that current CLI may include alongside cheats.
+_ALLOWED_FUNCTIONS = _REQUIRED_FUNCTIONS | frozenset({"request_user_input_async"})
+# Multi-agent orchestration is allowed; unknown collaboration names fail closed.
+_ALLOWED_COLLABORATION = frozenset(
+    {
+        "followup_task",
+        "interrupt_agent",
+        "list_agents",
+        "send_message",
+        "spawn_agent",
+        "wait_agent",
+    }
+)
+# Back-compat alias for tests that still import the old name.
+_EXPECTED_FUNCTIONS = _REQUIRED_FUNCTIONS
 _SYNTHETIC_PACKET = {
     "schema": "zno-nmt.questions.v1",
     "packet_sha256": "0" * 64,
@@ -59,13 +75,6 @@ _HANDLERS = (
             '{"questions":[{"id":"synthetic","header":"Synthetic","question":"Proceed?",'
             '"options":[{"label":"Continue","description":"Synthetic option"}]}]}'
         ),
-    ),
-    (
-        "delegation",
-        "collaboration",
-        "spawn_agent",
-        "custom",
-        '{"task_name":"synthetic","message":"synthetic"}',
     ),
 )
 
@@ -443,7 +452,7 @@ def _expected_output(case: _HandlerCase, outputs: list[dict[str, Any]]) -> bool:
             for text in texts
             if isinstance(text, str)
         )
-    return any(text.casefold().startswith("unsupported custom tool call:") for text in texts if isinstance(text, str))
+    return False
 
 
 def _advertisement_matches(case: _HandlerCase, first_request: Mapping[str, Any] | None) -> bool:
@@ -458,10 +467,25 @@ def _advertisement_matches(case: _HandlerCase, first_request: Mapping[str, Any] 
         or not isinstance(top_tools, list)
     ):
         return False
-    functions = namespaces.get("functions")
-    if top_tools or set(namespaces) != {"functions"} or not isinstance(functions, list):
+    if top_tools or set(namespaces) - {"functions", "collaboration"}:
         return False
-    return len(functions) == len(_EXPECTED_FUNCTIONS) and set(functions) == _EXPECTED_FUNCTIONS
+    functions = namespaces.get("functions")
+    if not isinstance(functions, list):
+        return False
+    function_names = set(functions)
+    if len(functions) != len(function_names):
+        return False
+    if not _REQUIRED_FUNCTIONS <= function_names <= _ALLOWED_FUNCTIONS:
+        return False
+    if "collaboration" not in namespaces:
+        return True
+    collaboration = namespaces.get("collaboration")
+    if not isinstance(collaboration, list):
+        return False
+    collaboration_names = set(collaboration)
+    if len(collaboration) != len(collaboration_names):
+        return False
+    return collaboration_names <= _ALLOWED_COLLABORATION
 
 
 def _loopback_overrides(base_url: str) -> tuple[str, ...]:

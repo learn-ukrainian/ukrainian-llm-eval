@@ -31,8 +31,9 @@ model, and changes only five tool fields: `tool_mode`, `multi_agent_version`,
 `supports_search_tool`. Model aliases, instructions, supported efforts, context
 limits and all other fields stay unchanged. The original entry, restricted
 entry and restriction policy are hashed into the evidence. Code Mode and its
-host remain disabled; asynchronous input, delegation, patching and tool search
-are absent from the verified surface.
+host remain disabled; human-input, patching and tool search stay off the verified
+cheat surface. Multi-agent / collaboration may still appear on the live CLI and
+is allowed for capability measurement.
 
 Closed-book advertises no tools. Sources advertises the configured reference
 tools plus three native resource helpers. The controller **rejects all resource
@@ -163,23 +164,25 @@ from the known `@openai/codex` package layout and hashes that executable too.
 Unknown wrappers and missing vendor binaries fail closed; the adapter never
 treats a wrapper hash as the runtime identity.
 
-For every visible descriptor
-(`functions.exec`, `functions.wait`, `functions.request_user_input`, and
-delegation), it must name a local mock-capture artifact, its SHA-256, and the
+For every cheat-surface descriptor
+(`functions.exec`, `functions.wait`, `functions.request_user_input`),
+it must name a local mock-capture artifact, its SHA-256, and the
 same request-shape hash. The adapter checks that each artifact still matches.
 The receipt is an **operator attestation** of handler effects, not independent
 proof produced by the adapter; its artifact binding prevents a later report
-swap. A descriptor is acceptable when the attestation says its hash-bound
-capture proved it inert. Any unknown or usable handler makes preflight fail.
+swap. A cheat descriptor is acceptable when the attestation says its hash-bound
+capture proved it inert. Multi-agent / collaboration tools may be advertised and
+used; they are not treated as cheats. Unknown cheat handlers still fail preflight.
 
 The reproducible local probe injects the exact fresh, noninteractive invocation
-shape into a loopback-only Responses fixture. The first request still advertises
-`functions.exec`, `functions.wait`, and `functions.request_user_input`, so the
-evidence is inert behavior rather than surface removal. A custom `exec` call
-and a schema-valid function-call `wait` both return the disabled code-mode-host
-diagnostic. A schema-valid input request returns unavailable in Default mode.
-The injected collaboration spawn call is neither advertised nor accepted.
-These results apply only to that exact fresh noninteractive CLI mode. They do
+shape into a loopback-only Responses fixture. The first request may advertise
+`functions.exec`, `functions.wait`, `functions.request_user_input`, optional
+`request_user_input_async`, and the collaboration multi-agent surface, so the
+evidence for cheats is inert behavior rather than surface removal. A custom
+`exec` call and a schema-valid function-call `wait` both return the disabled
+code-mode-host diagnostic. A schema-valid input request returns unavailable in
+Default mode. Collaboration / spawn_agent is allowed and is not required to be
+inert. These results apply only to that exact fresh noninteractive CLI mode. They do
 not establish behavior for interactive or Plan-mode hosts. The earlier
 permissive code-mode capture did not prove its synthetic file write, so it is
 not a positive control for successful tool execution.
@@ -207,13 +210,13 @@ mkdir -p .runtime
   --effort medium
 ```
 
-The command sends four synthetic tool requests: a `functions.exec` custom
-envelope, schema-valid `functions.wait` and `functions.request_user_input`
-function-call envelopes, and an unadvertised `collaboration.spawn_agent`
-custom envelope. It writes immutable per-handler captures, `report.json`, and
+The command sends three synthetic cheat-surface requests: a `functions.exec` custom
+envelope and schema-valid `functions.wait` and `functions.request_user_input`
+function-call envelopes. It writes immutable per-handler captures, `report.json`, and
 `closed-book-control.json`. It refuses to write the receipt unless the first
-request advertises the expected Functions tools, excludes delegation, and each
-second request contains the expected inert result. Failure captures and the
+request advertises the required Functions cheat tools (optional
+`request_user_input_async` and collaboration multi-agent ads are allowed), and each
+second request contains the expected inert cheat-handler result. Failure captures and the
 report remain available for diagnosis, but no receipt is created.
 
 The capture directory must remain in place: the receipt binds each external

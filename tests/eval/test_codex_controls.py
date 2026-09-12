@@ -82,19 +82,37 @@ def test_advertisement_rejects_unknown_or_missing_tools() -> None:
         "tool_surface_valid": True,
         "top_level_tool_count": 0,
         "top_level_tool_names": [],
-        "additional_tool_namespaces": {"functions": sorted(codex_controls._EXPECTED_FUNCTIONS)},
+        "additional_tool_namespaces": {"functions": sorted(codex_controls._REQUIRED_FUNCTIONS)},
     }
     assert codex_controls._advertisement_matches(case, exact)
+    with_async_and_collab = {
+        **exact,
+        "additional_tool_namespaces": {
+            "functions": sorted(codex_controls._ALLOWED_FUNCTIONS),
+            "collaboration": sorted(codex_controls._ALLOWED_COLLABORATION),
+        },
+    }
+    assert codex_controls._advertisement_matches(case, with_async_and_collab)
     assert not codex_controls._advertisement_matches(
         case,
         {
             **exact,
-            "additional_tool_namespaces": {"functions": [*codex_controls._EXPECTED_FUNCTIONS, "other"]},
+            "additional_tool_namespaces": {"functions": [*codex_controls._REQUIRED_FUNCTIONS, "other"]},
         },
     )
     assert not codex_controls._advertisement_matches(
         case,
         {**exact, "additional_tool_namespaces": {"functions": ["exec", "wait"]}},
+    )
+    assert not codex_controls._advertisement_matches(
+        case,
+        {
+            **exact,
+            "additional_tool_namespaces": {
+                "functions": sorted(codex_controls._REQUIRED_FUNCTIONS),
+                "collaboration": ["spawn_agent", "unknown_agent_tool"],
+            },
+        },
     )
 
 
