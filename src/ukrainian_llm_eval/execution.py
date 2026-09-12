@@ -12,6 +12,8 @@ from .core import ExamError, digest
 from .evidence import EvidenceStore
 from .runner import run_exam
 
+_ROUTE_SOURCES_DEFAULT = object()
+
 
 def route_fingerprint(config: Mapping[str, Any], sources_url: str | None) -> str:
     """Bind resolved endpoints without retaining their text or credentials."""
@@ -26,6 +28,7 @@ def execute_attempt(
     evidence_dir: Path,
     *,
     sources_url: str | None = None,
+    route_sources_url: str | None | object = _ROUTE_SOURCES_DEFAULT,
     attempt_id: str | None = None,
     segment_context: Mapping[str, Any] | None = None,
     request_budget: Any = None,
@@ -34,13 +37,21 @@ def execute_attempt(
 
     An exception from storage is fatal: execution must never silently continue
     without its evidence. No grading key is accepted by this interface.
+
+    ``sources_url`` is what the adapter may use for this condition (None on
+    closed-book). ``route_sources_url`` binds evidence ``route_sha256`` to the
+    route-map Sources identity; omit it to fingerprint from ``sources_url``.
     """
+    if route_sources_url is _ROUTE_SOURCES_DEFAULT:
+        identity_sources = sources_url
+    else:
+        identity_sources = route_sources_url  # type: ignore[assignment]
     metadata = {
         "denominator": len(packet["items"]),
         "packet_sha256": packet["packet_sha256"],
         "config_sha256": digest(config),
         "condition": condition,
-        "route_sha256": route_fingerprint(config, sources_url),
+        "route_sha256": route_fingerprint(config, identity_sources),
     }
     if segment_context is not None:
         fields = {"execution_plan_sha256", "cell_id", "segment_id", "reservation_id", "reserved_micro_usd"}

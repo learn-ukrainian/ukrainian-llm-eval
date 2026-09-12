@@ -25,6 +25,28 @@ def test_failed_execution_has_private_verifiable_evidence(monkeypatch, tmp_path)
     assert EvidenceStore(root).verify(receipt["attempt_id"])["result"] == result
 
 
+def test_closed_book_evidence_binds_route_map_sources_identity(monkeypatch, tmp_path):
+    """Closed-book must not execute with Sources, but evidence binds the route URL."""
+    seen = {}
+
+    def trial(*args, evidence, sources_url=None, **kwargs):
+        seen["sources_url"] = sources_url
+        evidence("prompt", "q")
+        return {"status": "ok", "responses": {}}
+
+    monkeypatch.setattr(execution, "run_exam", trial)
+    config = {"adapter": "claude", "model": "fixture"}
+    route_url = "https://sources.example.invalid/mcp"
+    _, receipt = execution.execute_attempt(
+        {"packet_sha256": "a" * 64, "items": [{"id": "q0001"}]},
+        config, "closed-book", tmp_path / "evidence",
+        sources_url=None, route_sources_url=route_url,
+    )
+    assert seen["sources_url"] is None
+    assert receipt["metadata"]["route_sha256"] == execution.route_fingerprint(config, route_url)
+    assert receipt["metadata"]["route_sha256"] != execution.route_fingerprint(config, None)
+
+
 def test_interrupted_execution_is_not_discarded_or_finalized(monkeypatch, tmp_path):
     def trial(*args, evidence, **kwargs):
         evidence("prompt", "question")
