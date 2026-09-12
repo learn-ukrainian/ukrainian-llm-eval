@@ -327,6 +327,9 @@ def build_prompt(
         policy = (
             "Only the explicitly provided Sources reference tools may be used. "
             "Do not use a tool to find answers outside that reference corpus. "
+            "When an item needs corpus evidence, call those tools and use their structured results "
+            "(for example integer match_count) to help decide among the listed options. "
+            "A tool count or hit is not itself an option id. "
             f"You have at most {max_tool_calls} total reference-tool calls for this trial, including failed attempts. "
             "Use them selectively, and submit answers without further calls before you exceed this limit."
         )
@@ -343,11 +346,27 @@ def build_prompt(
     else:
         task = (
             "You are taking a Ukrainian exam. Answer every opaque item id exactly once. "
+            "For single-choice items, respond with exactly one listed option id. "
+            "For matching items, map every row id to a listed option id. "
+            "Never return free-form counts, prose, or values that are not option ids. "
             "Do not explain your reasoning. Return only JSON matching the response schema: "
             "{\"responses\":{\"id\": string | object | null}}. "
         )
         packet_label = "QUESTION PACKET (contains no answers or scoring key):"
     return task + policy + "\n\n" + packet_label + "\n" + canonical(packet)
+
+
+def _mcq_option_ids(item: Mapping[str, Any]) -> list[str]:
+    options = item.get("options", [])
+    if not isinstance(options, list):
+        return []
+    return [str(choice["id"]) for choice in options if isinstance(choice, Mapping) and "id" in choice]
+
+
+def _mcq_string_schema(option_ids: list[str]) -> dict[str, Any]:
+    if option_ids:
+        return {"type": "string", "enum": option_ids}
+    return {"type": "string"}
 
 
 def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
@@ -379,6 +398,7 @@ def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
     answers: dict[str, dict[str, Any]] = {}
     for item in items:
         item_id = str(item["id"])
+        option_ids = _mcq_option_ids(item)
         if item.get("kind") == "matching":
             row_ids = [str(row["id"]) for row in item.get("rows", []) if isinstance(row, Mapping) and "id" in row]
             answers[item_id] = {
@@ -387,13 +407,13 @@ def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
                         "type": "object",
                         "additionalProperties": False,
                         "required": row_ids,
-                        "properties": {row_id: {"type": "string"} for row_id in row_ids},
+                        "properties": {row_id: _mcq_string_schema(option_ids) for row_id in row_ids},
                     },
                     {"type": "null"},
                 ]
             }
         else:
-            answers[item_id] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+            answers[item_id] = {"anyOf": [_mcq_string_schema(option_ids), {"type": "null"}]}
     return {
         "type": "object",
         "additionalProperties": False,
@@ -572,7 +592,9 @@ def _mcp_call(url: str, tool_name: str, arguments: Mapping[str, Any], timeout: i
 def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {"responses"} or not isinstance(value.get("responses"), Mapping):
         raise AdapterError("provider response schema mismatch")
-    expected = [str(item["id"]) for item in packet.get("items", [])]
+    items = [item for item in packet.get("items", []) if isinstance(item, Mapping) and "id" in item]
+    expected = [str(item["id"]) for item in items]
+    by_id = {str(item["id"]): item for item in items}
     responses = value["responses"]
     if set(responses) != set(expected):
         raise AdapterError("provider response IDs mismatch")
@@ -588,10 +610,36 @@ def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 raise AdapterError("provider GEC response value is invalid")
             normalized[item_id] = answer
-        else:
-            if answer is not None and not isinstance(answer, (str, Mapping)):
+            continue
+        item = by_id[item_id]
+        option_ids = set(_mcq_option_ids(item))
+        if answer is None:
+            normalized[item_id] = None
+            continue
+        if item.get("kind") == "matching":
+            if not isinstance(answer, Mapping):
                 raise AdapterError("provider response value is invalid")
-            normalized[item_id] = dict(answer) if isinstance(answer, Mapping) else answer
+            row_ids = {
+                str(row["id"])
+                for row in item.get("rows", [])
+                if isinstance(row, Mapping) and "id" in row
+            }
+            if set(answer) != row_ids:
+                raise AdapterError("provider response value is invalid")
+            normalized_rows: dict[str, str] = {}
+            for row_id, option_id in answer.items():
+                if not isinstance(row_id, str) or not isinstance(option_id, str):
+                    raise AdapterError("provider response value is invalid")
+                if option_ids and option_id not in option_ids:
+                    raise AdapterError("provider response value is invalid")
+                normalized_rows[row_id] = option_id
+            normalized[item_id] = normalized_rows
+            continue
+        if not isinstance(answer, str):
+            raise AdapterError("provider response value is invalid")
+        if option_ids and answer not in option_ids:
+            raise AdapterError("provider response value is invalid")
+        normalized[item_id] = answer
     return normalized
 
 

@@ -1,0 +1,46 @@
+{
+  "schema": "zno-nmt.exam.v1",
+  "title": "Mini closed-book / Sources readiness exam",
+  "subject": "synthetic-readiness",
+  "year": 2026,
+  "provenance": {
+    "source_url": "https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/45",
+    "source_revision": "issue-45-v1",
+    "license": "synthetic-readiness",
+    "exposure": "synthetic"
+  },
+  "scoring": {
+    "kind": "benchmark",
+    "policy_url": null,
+    "pass_threshold": null,
+    "expected_items": 2,
+    "expected_points": 2
+  },
+  "items": [
+    {
+      "id": "closed-format",
+      "kind": "single",
+      "question": "Select the option whose text is exactly X.",
+      "options": [
+        {"id": "A", "text": "X"},
+        {"id": "B", "text": "Y"},
+        {"id": "C", "text": "Z"}
+      ],
+      "rows": [],
+      "correct": "A"
+    },
+    {
+      "id": "sources-match-count",
+      "kind": "single",
+      "question": "Call the allowlisted Sources tool verify_word with word \"синій\" (no pos_filter). Read the structured sources.tool-result.v1 envelope. Which listed option equals the integer match_count? Do not answer with a raw count; answer with the option id.",
+      "options": [
+        {"id": "A", "text": "6"},
+        {"id": "B", "text": "2"},
+        {"id": "C", "text": "0"},
+        {"id": "D", "text": "1"}
+      ],
+      "rows": [],
+      "correct": "A"
+    }
+  ]
+}

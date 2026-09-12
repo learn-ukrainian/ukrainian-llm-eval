@@ -287,6 +287,54 @@ the scored paper. A deliberately new experiment needs a new output directory
 and its own declared configuration. API errors, malformed output and tool
 violations are failures, not silently repaired answers.
 
+## Mini automated readiness check
+
+Before any scored first-study cell, run a tiny synthetic exam through the same
+offline path the full study uses: `prepare` → paired `run`/`pair` (closed-book
+and Sources) → `score` → `compare`. The fixture
+`tests/eval/fixtures/mini_sources_exam.json` is format-only readiness material,
+not a language benchmark.
+
+The Sources item asks for the option id whose text equals the integer
+`match_count` from a `sources.tool-result.v1` `verify_word` result for
+`синій`. Live LU Sources documentation uses `match_count: 6` for that query;
+confirm against your MCP before treating a live pair as admission evidence.
+`match_count` is never itself an option id (see the LU Sources exam/eval pack).
+
+Copy the fixture into a private runtime directory, prepare it, run both
+conditions with authorized routes, then score and compare offline:
+
+```bash
+umask 077
+mkdir -p .runtime/mini-sources-readiness
+cp tests/eval/fixtures/mini_sources_exam.json .runtime/mini-sources-readiness/exam.json
+.venv/bin/python -m ukrainian_llm_eval prepare \
+  --exam .runtime/mini-sources-readiness/exam.json \
+  --questions .runtime/mini-sources-readiness/questions.json \
+  --key .runtime/mini-sources-readiness/grading-key.json
+# pair/run both conditions with your authorized configs, then:
+.venv/bin/python -m ukrainian_llm_eval score \
+  --questions .runtime/mini-sources-readiness/questions.json \
+  --key .runtime/mini-sources-readiness/grading-key.json \
+  --run .runtime/mini-sources-readiness/paired/001-closed-book.json \
+  --output .runtime/mini-sources-readiness/closed-book-score.json
+.venv/bin/python -m ukrainian_llm_eval compare \
+  --questions .runtime/mini-sources-readiness/questions.json \
+  --key .runtime/mini-sources-readiness/grading-key.json \
+  --control .runtime/mini-sources-readiness/paired/001-closed-book.json \
+  --treatment .runtime/mini-sources-readiness/paired/001-sources.json \
+  --output .runtime/mini-sources-readiness/comparison.json
+```
+
+For Gemma readiness mini-runs, do not use the OpenRouter `:free` route. Use an
+operator-authorized paid route such as `google/gemma-4-31b-it` with
+`venice/bf16` (or another explicitly authorized paid backend). Preserve free and
+batch route evidence as history unless the operator re-authorizes them.
+
+MCQ answers that are not listed option ids fail the attempt at response
+extraction (`provider response value is invalid`); they are not recorded as
+successful `status: ok` runs with a free-form value.
+
 ## Score independently and compare
 
 These commands do not invoke a model or MCP. Run them under the grader's

@@ -19,6 +19,10 @@ shared $10 spending ledger and all earlier commitments remain unchanged.
 Free access depends on current availability and quota; fresh native canaries
 must establish whether this route works.
 
+Readiness mini-tests under [running.md](running.md) (issue #45) must not use the
+`:free` Gemma route. Use an operator-authorized paid route such as Venice BF16
+unless the operator explicitly re-authorizes free or batch for that check.
+
 If free access is unavailable, the operator has selected the OpenRouter batch
 variant as the fallback. That variant uses an asynchronous Batch API and a
 Together backend, so it requires its own execution path and fresh route,

@@ -295,7 +295,8 @@ def test_gec_packet_cannot_carry_a_grading_key_and_mcq_schema_stays_unchanged() 
     mcq_packet, _private_key = prepare_exam(exam)
     assert runner._run_schema(mcq_packet) == "zno-nmt.run.v1"
     assert adapters.response_schema(mcq_packet)["properties"]["responses"]["properties"]["q0001"]["anyOf"][0] == {
-        "type": "string"
+        "type": "string",
+        "enum": ["A"],
     }
 
 
