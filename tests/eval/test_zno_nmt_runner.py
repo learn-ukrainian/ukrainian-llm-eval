@@ -363,7 +363,12 @@ def test_sources_prompt_discloses_exact_call_cap_only_for_sources() -> None:
     assert "at most 20 total reference-tool calls" in sources_prompt
     assert "including failed attempts" in sources_prompt
     assert "submit answers without further calls" in sources_prompt
+    assert "use their structured results" in sources_prompt
+    assert "match_count" in sources_prompt
+    assert "not itself an option id" in sources_prompt
+    assert "exactly one listed option id" in sources_prompt
     assert "reference-tool calls" not in closed_prompt
+    assert "match_count" not in closed_prompt
 
 
 def test_tool_policy_and_limit_failures_have_distinct_safe_reasons() -> None:
@@ -419,6 +424,55 @@ def test_response_schema_closes_every_object_and_preserves_item_kinds() -> None:
     assert matching["required"] == ["row-1", "row-2"]
     assert set(matching["properties"]) == {"row-1", "row-2"}
     assert "correct" not in json.dumps(schema)
+
+
+def test_response_schema_enums_option_ids_when_present() -> None:
+    packet = {
+        "items": [
+            {
+                "id": "single",
+                "kind": "single",
+                "options": [{"id": "A", "text": "6"}, {"id": "B", "text": "2"}],
+                "rows": [],
+            },
+            {
+                "id": "matching",
+                "kind": "matching",
+                "options": [{"id": "A", "text": "x"}, {"id": "B", "text": "y"}],
+                "rows": [{"id": "row-1"}, {"id": "row-2"}],
+            },
+        ]
+    }
+    responses = adapters.response_schema(packet)["properties"]["responses"]["properties"]
+    assert responses["single"] == {"anyOf": [{"type": "string", "enum": ["A", "B"]}, {"type": "null"}]}
+    matching = responses["matching"]["anyOf"][0]
+    assert matching["properties"]["row-1"] == {"type": "string", "enum": ["A", "B"]}
+    assert matching["properties"]["row-2"] == {"type": "string", "enum": ["A", "B"]}
+
+
+def test_extract_responses_rejects_non_option_mcq_answers() -> None:
+    packet = {
+        "schema": "zno-nmt.packet.v1",
+        "items": [
+            {
+                "id": "q0001",
+                "kind": "single",
+                "question": "Скільки аналізів?",
+                "options": [
+                    {"id": "A", "text": "6"},
+                    {"id": "B", "text": "2"},
+                    {"id": "C", "text": "0"},
+                ],
+                "rows": [],
+            }
+        ],
+    }
+    assert adapters._extract_responses({"responses": {"q0001": "A"}}, packet) == {"q0001": "A"}
+    assert adapters._extract_responses({"responses": {"q0001": None}}, packet) == {"q0001": None}
+    with pytest.raises(adapters.AdapterError, match="provider response value is invalid"):
+        adapters._extract_responses({"responses": {"q0001": "6"}}, packet)
+    with pytest.raises(adapters.AdapterError, match="provider response value is invalid"):
+        adapters._extract_responses({"responses": {"q0001": "D"}}, packet)
 
 
 def test_runner_retains_preflight_hashes_without_provider_logs(monkeypatch: pytest.MonkeyPatch) -> None:
