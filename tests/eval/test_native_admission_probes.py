@@ -219,11 +219,27 @@ def test_claude_subscription_families_bind(model, family):
 
 
 def test_claude_does_not_cross_substitute_families():
-    values = claude_values()  # Fable family limit
+    values = claude_values()  # Fable family limit + globals
+    # Sonnet/Opus share non-Fable Max capacity: Fable scope is skipped, globals admit.
+    assert subscriptions.normalize_claude(*values, "claude-sonnet-5")
+    assert subscriptions.normalize_claude(*values, "claude-opus-5")
+    # Fable still requires its own family window.
+    values[2]["limits"] = [{"scope": {}, "percent": 10, "is_active": True}]
     with pytest.raises(common.ProbeError, match="model_quota_unknown"):
+        subscriptions.normalize_claude(*values, "claude-fable-5-1")
+
+
+def test_claude_sonnet_enforces_family_window_when_advertised():
+    values = claude_values()
+    values[2]["limits"] = [
+        {"scope": {}, "percent": 10, "is_active": True},
+        {"scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+         "percent": 90, "is_active": True},
+        {"scope": {"model": {"id": None, "display_name": "Sonnet"}, "surface": None},
+         "percent": 100, "is_active": True},
+    ]
+    with pytest.raises(common.ProbeError, match="quota_exhausted"):
         subscriptions.normalize_claude(*values, "claude-sonnet-5")
-    with pytest.raises(common.ProbeError, match="model_quota_unknown"):
-        subscriptions.normalize_claude(*values, "claude-opus-5")
 
 
 def test_claude_known_other_family_windows_can_be_excluded():

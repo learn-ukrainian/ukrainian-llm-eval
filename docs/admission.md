@@ -262,9 +262,13 @@ cannot establish an active subscription.
 places Fable 5.1 within the personal Max Fable allowance. The observed provider
 quota scope `{model: {id: null, display_name: "Fable"}, surface: null}` therefore
 maps to this selected model's family allowance. The parser also accepts its
-exact model ID with an absent or compatible family name. Missing family proof,
-conflicting IDs/names, malformed scopes, and unknown scope applicability fail
-closed. All family windows must have remaining quota, including entries whose
+exact model ID with an absent or compatible family name. **Fable** requires that
+family window. **Sonnet** and **Opus** share the non-Fable Max pool: when a
+matching family window is advertised it is enforced, but its absence is not a
+refusal if global five-hour and weekly windows remain available. Missing Fable
+family proof, conflicting IDs/names, malformed scopes, and unknown scope
+applicability fail closed. All applicable family windows must have remaining
+quota, including entries whose
 UI `is_active` flag is false. Global five-hour and weekly windows must also
 remain available. Explicit `extra_usage.is_enabled: false` and same-account,
 same-organization correlation are still mandatory.
