@@ -20,10 +20,13 @@ from .codex_reference_bridge import snapshot
 
 SERVER_INFO = {"name": "synthetic-reference", "version": "1"}
 _RESOURCE_TOOLS = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
+# Multi-agent orchestration ads are allowed (operator #47/#48). They are not
+# cheat surfaces; strip them from the reference allowlist comparison.
+_ALLOWED_EXTRA_NAMESPACES = frozenset({"collaboration", "multi_agent_v1", "multi_agent_v2"})
 
 
 def surface_matches(summary: dict, tools: list[str], closed: bool) -> bool:
-    """Allow multi-agent collaboration ads; enforce reference/cheat allowlists only."""
+    """Allow multi-agent / collaboration ads; enforce reference/cheat allowlists only."""
 
     expected = {} if closed else {"functions": _RESOURCE_TOOLS, "mcp__sources": tools}
     namespaces = summary.get("additional_tool_namespaces")
@@ -33,13 +36,14 @@ def surface_matches(summary: dict, tools: list[str], closed: bool) -> bool:
         and isinstance(namespaces, dict)
     ):
         return False
-    collaboration = namespaces.get("collaboration")
-    core = {key: value for key, value in namespaces.items() if key != "collaboration"}
-    if collaboration is not None:
-        if not isinstance(collaboration, list):
+    extras = {key: value for key, value in namespaces.items() if key in _ALLOWED_EXTRA_NAMESPACES}
+    core = {key: value for key, value in namespaces.items() if key not in _ALLOWED_EXTRA_NAMESPACES}
+    for key, names in extras.items():
+        if not isinstance(names, list) or len(names) != len(set(names)):
             return False
-        names = set(collaboration)
-        if len(collaboration) != len(names) or not names <= codex_controls._ALLOWED_COLLABORATION:
+        if any(not isinstance(name, str) or not name for name in names):
+            return False
+        if key == "collaboration" and not set(names) <= codex_controls._ALLOWED_COLLABORATION:
             return False
     return set(core) == set(expected) and all(
         len(core[key]) == len(names) and set(core[key]) == set(names) for key, names in expected.items()

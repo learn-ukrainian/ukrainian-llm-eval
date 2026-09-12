@@ -177,7 +177,8 @@ used; they are not treated as cheats. Unknown cheat handlers still fail prefligh
 The reproducible local probe injects the exact fresh, noninteractive invocation
 shape into a loopback-only Responses fixture. The first request may advertise
 `functions.exec`, `functions.wait`, `functions.request_user_input`, optional
-`request_user_input_async`, and the collaboration multi-agent surface, so the
+`request_user_input_async`, collaboration, and `multi_agent_v1` /
+`multi_agent_v2` orchestration ads, so the
 evidence for cheats is inert behavior rather than surface removal. A custom
 `exec` call and a schema-valid function-call `wait` both return the disabled
 code-mode-host diagnostic. A schema-valid input request returns unavailable in

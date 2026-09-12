@@ -455,6 +455,9 @@ def _expected_output(case: _HandlerCase, outputs: list[dict[str, Any]]) -> bool:
     return False
 
 
+_ALLOWED_EXTRA_NAMESPACES = frozenset({"collaboration", "multi_agent_v1", "multi_agent_v2"})
+
+
 def _advertisement_matches(case: _HandlerCase, first_request: Mapping[str, Any] | None) -> bool:
     if not isinstance(first_request, Mapping):
         return False
@@ -467,7 +470,7 @@ def _advertisement_matches(case: _HandlerCase, first_request: Mapping[str, Any] 
         or not isinstance(top_tools, list)
     ):
         return False
-    if top_tools or set(namespaces) - {"functions", "collaboration"}:
+    if top_tools or set(namespaces) - ({"functions"} | _ALLOWED_EXTRA_NAMESPACES):
         return False
     functions = namespaces.get("functions")
     if not isinstance(functions, list):
@@ -477,15 +480,18 @@ def _advertisement_matches(case: _HandlerCase, first_request: Mapping[str, Any] 
         return False
     if not _REQUIRED_FUNCTIONS <= function_names <= _ALLOWED_FUNCTIONS:
         return False
-    if "collaboration" not in namespaces:
-        return True
-    collaboration = namespaces.get("collaboration")
-    if not isinstance(collaboration, list):
-        return False
-    collaboration_names = set(collaboration)
-    if len(collaboration) != len(collaboration_names):
-        return False
-    return collaboration_names <= _ALLOWED_COLLABORATION
+    for key in _ALLOWED_EXTRA_NAMESPACES:
+        if key not in namespaces:
+            continue
+        names = namespaces.get(key)
+        if not isinstance(names, list):
+            return False
+        unique = set(names)
+        if len(names) != len(unique) or any(not isinstance(name, str) or not name for name in names):
+            return False
+        if key == "collaboration" and not unique <= _ALLOWED_COLLABORATION:
+            return False
+    return True
 
 
 def _loopback_overrides(base_url: str) -> tuple[str, ...]:
