@@ -367,8 +367,13 @@ def test_sources_prompt_discloses_exact_call_cap_only_for_sources() -> None:
     assert "match_count" in sources_prompt
     assert "not itself an option id" in sources_prompt
     assert "exactly one listed option id" in sources_prompt
+    assert "also tests whether those reference tools work" in sources_prompt
+    assert "Answering from memory without any reference-tool call fails this Sources check" in sources_prompt
+    assert "MUST call verify_stress on every listed option word" in sources_prompt
     assert "reference-tool calls" not in closed_prompt
     assert "match_count" not in closed_prompt
+    assert "verify_stress" not in closed_prompt
+    assert "fails this Sources check" not in closed_prompt
 
 
 def test_tool_policy_and_limit_failures_have_distinct_safe_reasons() -> None:

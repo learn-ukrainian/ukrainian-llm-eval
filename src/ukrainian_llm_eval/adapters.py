@@ -327,11 +327,16 @@ def build_prompt(
         policy = (
             "Only the explicitly provided Sources reference tools may be used. "
             "Do not use a tool to find answers outside that reference corpus. "
+            "This Sources condition also tests whether those reference tools work: "
+            "you are responsible for exercising them before answering. "
+            "Answering from memory without any reference-tool call fails this Sources check. "
             "When an item needs corpus evidence, call those tools and use their structured results "
             "(for example integer match_count) to help decide among the listed options. "
             "A tool count or hit is not itself an option id. "
+            "For any наголос/stress item, you MUST call verify_stress on every listed option word "
+            "and use the returned stressed forms before selecting an option id. "
             f"You have at most {max_tool_calls} total reference-tool calls for this trial, including failed attempts. "
-            "Use them selectively, and submit answers without further calls before you exceed this limit."
+            "Use them to obtain the needed evidence, and submit answers without further calls before you exceed this limit."
         )
     else:
         raise AdapterError("condition is invalid")
