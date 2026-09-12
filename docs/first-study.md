@@ -5,11 +5,13 @@ configuration matrix and concrete common limits for review. It is a preparation
 input, not a `plan-research` specification or an admission certificate. It
 contains no invented pricing, entitlement, provider-probe or authorization digests.
 
-The executable inventory has eleven configurations: Astra, Fable and Gemini at
-low/medium/high, and Gemma with reasoning off/on. Each has both conditions and
-three repeats on each complete suite: **198 cells and 35,178 segment sessions**.
-Tool rounds and native auxiliary requests can produce additional model requests;
-this session count is not a request count or cost estimate.
+The executable inventory has seventeen configurations: Astra, Fable, Opus,
+Sonnet and Gemini at low/medium/high, and Gemma with reasoning off/on. Each has
+both conditions and three repeats on each complete suite: **306 cells and
+54,366 segment sessions**. Tool rounds and native auxiliary requests can produce
+additional model requests; this session count is not a request count or cost
+estimate. Claude Opus/Sonnet/Fable seats are Max-subscription CLI routes only —
+never Anthropic API keys.
 
 **Grok-4.7** is reserved for the study once that model is released. It is not an
 executable configuration today. **Grok-4.6 must not be substituted.** Until a
@@ -22,7 +24,9 @@ CLIs are operator/worker seats, not candidate runners):
 | LLM | Package adapter | Route |
 | --- | --- | --- |
 | GPT-6 Astra | `codex` | Codex subscription |
-| Claude Fable 5.1 | `claude` | Claude CLI subscription |
+| Claude Fable 5.1 | `claude` | Claude CLI Max subscription |
+| Claude Opus 5 | `claude` | Claude CLI Max subscription |
+| Claude Sonnet 5 | `claude` | Claude CLI Max subscription |
 | Gemini 3.8 Flash | `agy` | AGY subscription |
 | Gemma 4 31B | `opencode` | OpenCode → OpenRouter |
 | Grok-4.7 | native (TBD at release) | Native Grok CLI when 4.7 ships |
@@ -99,7 +103,7 @@ substitute a metric to accommodate a host that cannot execute that architecture.
 
 Before any scored request, run the admission-only `check-research` command
 documented in [research execution](research-execution.md). For the complete
-matrix, its 198 fresh representative probes cover 35,178 structurally validated
+matrix, its 306 fresh representative probes cover 54,366 structurally validated
 segment bindings. It preserves failed probes and inspects the existing shared
 ledger without allocating scored attempts or reservations. Those observations
 expire with their underlying evidence; they are not execution authorization,

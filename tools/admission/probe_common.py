@@ -9,6 +9,7 @@ import re
 import selectors
 import signal
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -263,6 +264,80 @@ ENDPOINTS = {
 }
 
 
+# Cross-process Claude OAuth pacing. Admission invokes are separate processes;
+# ~5 back-to-back probes (~10 HTTP) trip provider_http_429. Prefer steady cadence.
+_PROVIDER_MIN_INTERVAL_SECONDS = 20.0
+_PROVIDER_ADMISSION_GAP_SECONDS = 25.0
+_PROVIDER_429_BACKOFF_SECONDS = (30, 60, 120, 180)
+_THROTTLE_PATH = os.path.join(os.environ.get("TMPDIR") or "/tmp", "ukrainian-llm-eval-claude-oauth-throttle.v2")
+_THROTTLE_LOCK_PATH = _THROTTLE_PATH + ".lock"
+
+
+def _provider_throttle_read():
+    try:
+        with open(_THROTTLE_PATH, "r", encoding="ascii") as handle:
+            raw = handle.read().strip()
+        return float(raw) if raw else 0.0
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _provider_throttle_write(next_allowed):
+    payload = f"{float(next_allowed):.6f}\n".encode("ascii")
+    directory = os.path.dirname(_THROTTLE_PATH) or "."
+    fd, tmp = tempfile.mkstemp(prefix="oauth-throttle-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+        os.replace(tmp, _THROTTLE_PATH)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _provider_lock():
+    import fcntl
+
+    # Lock must outlive the caller briefly; closed explicitly by wait/pace helpers.
+    lock_file = open(_THROTTLE_LOCK_PATH, "a+", encoding="ascii")  # noqa: SIM115
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    return lock_file
+
+
+def _provider_wait_slot(min_interval=_PROVIDER_MIN_INTERVAL_SECONDS):
+    lock_file = _provider_lock()
+    try:
+        while True:
+            now = time.time()
+            next_allowed = _provider_throttle_read()
+            wait = next_allowed - now
+            if wait <= 0:
+                _provider_throttle_write(now + float(min_interval))
+                return
+            lock_file.close()
+            time.sleep(min(wait, 1.0))
+            lock_file = _provider_lock()
+    finally:
+        try:
+            lock_file.close()
+        except OSError:
+            pass
+
+
+def provider_pace_after_admission():
+    """Reserve quiet time after a full Claude admission collect (profile+usage)."""
+    lock_file = _provider_lock()
+    try:
+        now = time.time()
+        next_allowed = max(_provider_throttle_read(), now + _PROVIDER_ADMISSION_GAP_SECONDS)
+        _provider_throttle_write(next_allowed)
+    finally:
+        lock_file.close()
+
+
 def provider_json(url, token, *, body=None, headers=None):
     method = "GET" if body is None else "POST"
     if ENDPOINTS.get(url) != method:
@@ -273,19 +348,32 @@ def provider_json(url, token, *, body=None, headers=None):
                  "Content-Type": "application/json", "Cache-Control": "no-cache", **(headers or {})}, method=method)
     # Environment proxies can redirect bearer credentials; never inherit them.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    try:
-        with opener.open(request, timeout=15) as response:
-            if response.status != 200 or response.geturl() != url:
-                fail("provider_response_rejected")
-            if response.headers.get("Age") not in (None, "0"):
-                fail("cached_provider_response")
-            return parse(response.read(MAX_BYTES + 1))
-    except urllib.error.HTTPError as exc:
-        if type(exc.code) is int and 100 <= exc.code <= 599:
-            fail("provider_http_" + str(exc.code))
-        fail("provider_status_unavailable")
-    except (urllib.error.URLError, OSError):
-        fail("provider_status_unavailable")
+    attempt = 0
+    while True:
+        _provider_wait_slot()
+        try:
+            with opener.open(request, timeout=15) as response:
+                if response.status != 200 or response.geturl() != url:
+                    fail("provider_response_rejected")
+                if response.headers.get("Age") not in (None, "0"):
+                    fail("cached_provider_response")
+                return parse(response.read(MAX_BYTES + 1))
+        except urllib.error.HTTPError as exc:
+            if type(exc.code) is int and exc.code == 429 and attempt < len(_PROVIDER_429_BACKOFF_SECONDS):
+                delay = _PROVIDER_429_BACKOFF_SECONDS[attempt]
+                attempt += 1
+                lock_file = _provider_lock()
+                try:
+                    _provider_throttle_write(time.time() + delay)
+                finally:
+                    lock_file.close()
+                time.sleep(delay)
+                continue
+            if type(exc.code) is int and 100 <= exc.code <= 599:
+                fail("provider_http_" + str(exc.code))
+            fail("provider_status_unavailable")
+        except (urllib.error.URLError, OSError):
+            fail("provider_status_unavailable")
 
 
 def available_percent(value):
