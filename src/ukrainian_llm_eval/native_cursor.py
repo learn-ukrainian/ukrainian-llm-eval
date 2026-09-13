@@ -579,6 +579,31 @@ def _tool_call_id(event: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _tool_call_family(event: Mapping[str, Any]) -> str | None:
+    tool_call = event.get("tool_call")
+    if not isinstance(tool_call, Mapping):
+        return None
+    for key in tool_call:
+        if isinstance(key, str) and key.endswith("ToolCall") and key != "toolCall":
+            return key[: -len("ToolCall")]
+    return None
+
+
+def _is_sources_meta_tool_call(event: Mapping[str, Any]) -> bool:
+    return _tool_call_family(event) in _CURSOR_SOURCES_META_TOOLS
+
+
+def _mcp_server_fields(payload: Mapping[str, Any], args: Mapping[str, Any] | None) -> list[Any]:
+    values: list[Any] = []
+    for source in (args, payload):
+        if not isinstance(source, Mapping):
+            continue
+        for server_key in ("serverIdentifier", "providerIdentifier", "server"):
+            if server_key in source:
+                values.append(source.get(server_key))
+    return values
+
+
 def _tool_name(event: Mapping[str, Any]) -> str | None:
     for key in ("name", "toolName", "tool_name"):
         value = event.get(key)
@@ -610,30 +635,33 @@ def _tool_name(event: Mapping[str, Any]) -> str | None:
                     return family
                 if not isinstance(payload, Mapping):
                     return family
-                args = payload.get("args")
+                args = payload.get("args") if isinstance(payload.get("args"), Mapping) else None
+                for server in _mcp_server_fields(payload, args):
+                    if not isinstance(server, str) or server.strip() != "sources":
+                        return "foreign-mcp"
+                candidates: list[str] = []
                 if isinstance(args, Mapping):
-                    for server_key in ("serverIdentifier", "providerIdentifier", "server"):
-                        server = args.get(server_key)
-                        if server is None:
-                            continue
-                        if not isinstance(server, str) or server.strip() != "sources":
-                            return "foreign-mcp"
-                    for nested_key in ("toolName", "tool", "serverToolName"):
+                    for nested_key in ("toolName", "tool", "serverToolName", "name"):
+                        nested = args.get(nested_key)
+                        if isinstance(nested, str) and nested.strip():
+                            candidates.append(nested.strip())
+                for nested_key in ("name", "toolName", "tool", "serverToolName"):
+                    nested = payload.get(nested_key)
+                    if isinstance(nested, str) and nested.strip():
+                        candidates.append(nested.strip())
+                if not candidates:
+                    return family
+                normalized = {_normalize_tool_name(item) for item in candidates}
+                if len(normalized) != 1:
+                    return "conflicting-mcp-name"
+                # Prefer a bare toolName when present; otherwise first candidate
+                # (often sources-verify_word) for normalization downstream.
+                for nested_key in ("toolName", "tool", "serverToolName"):
+                    if isinstance(args, Mapping):
                         nested = args.get(nested_key)
                         if isinstance(nested, str) and nested.strip():
                             return nested.strip()
-                    # Cursor often sends args.name as sources-verify_word.
-                    nested = args.get("name")
-                    if isinstance(nested, str) and nested.strip():
-                        return nested.strip()
-                nested_name = payload.get("name")
-                if isinstance(nested_name, str) and nested_name.strip():
-                    return nested_name.strip()
-                for nested_key in ("toolName", "tool", "serverToolName"):
-                    nested = payload.get(nested_key)
-                    if isinstance(nested, str) and nested.strip():
-                        return nested.strip()
-                return family
+                return candidates[0]
     message = event.get("message")
     if isinstance(message, Mapping):
         content = message.get("content")
@@ -739,9 +767,9 @@ def _parse_stream_envelope(
             if name is None:
                 raise _fail("CLI tool call surface is malformed")
             normalized = _normalize_tool_name(name)
-            is_meta = normalized in _CURSOR_SOURCES_META_TOOLS or name in _CURSOR_SOURCES_META_TOOLS
+            is_meta = _is_sources_meta_tool_call(event)
             if is_meta:
-                # Discovery only when Sources tools are allowed; closed-book rejects.
+                # Discovery only when Sources tools are configured; closed-book rejects.
                 if not allowed_tools:
                     raise _fail(_TOOL_POLICY_ERROR)
             elif normalized not in allowed_tools and name not in allowed_tools:
