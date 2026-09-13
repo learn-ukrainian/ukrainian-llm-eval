@@ -4,9 +4,11 @@ Runs headless ``cursor-agent`` with stdin prompts. Auth uses the operator's
 Cursor subscription session (keychain / CLI login), not ``CURSOR_API_KEY`` and
 not the Cursor SDK. Isolation is weaker than Codex: the CLI has no
 ``--ignore-user-config`` / ``--ephemeral`` / ``--deny-mcp``. Each attempt uses a
-fresh empty ``--workspace``; closed-book omits MCP approval; Sources mirrors
-only the allowlisted ``sources`` server via the shared MCP proxy. Global
-``~/.cursor/mcp.json`` must be absent or empty or preflight fails closed.
+fresh empty ``--workspace``; closed-book omits MCP approval and ``--force``;
+Sources mirrors only the allowlisted ``sources`` server via the shared MCP
+proxy and passes ``--approve-mcps --force`` so headless ask mode actually
+executes MCP tools. Global ``~/.cursor/mcp.json`` must be absent or empty or
+preflight fails closed.
 """
 
 from __future__ import annotations
@@ -83,8 +85,12 @@ _REQUIRED_HELP_FLAGS = frozenset(
         "--workspace",
         "--mode",
         "--approve-mcps",
+        "--force",
     }
 )
+# Cursor discovery scaffolding before real Sources MCP calls. Allowed only when
+# Sources tools are configured; never counted toward max_tool_calls.
+_CURSOR_SOURCES_META_TOOLS = frozenset({"getMcpTools"})
 
 
 class CursorAdapterError(adapters.AdapterError):
@@ -316,6 +322,7 @@ def _settings_sha256(*, condition: str, tools: list[str], max_tool_calls: int) -
             "output_format": "stream-json",
             "trust": True,
             "approve_mcps": condition == "sources",
+            "force": condition == "sources",
             "global_mcp_denied": True,
             "tools": tools if condition == "sources" else [],
             "max_tool_calls": max_tool_calls,
@@ -340,7 +347,7 @@ def _request_shape_sha256(model: str, condition: str) -> str:
                 "<ephemeral>",
                 "--mode",
                 "ask",
-                *(["--approve-mcps"] if condition == "sources" else []),
+                *(["--approve-mcps", "--force"] if condition == "sources" else []),
             ],
             "stdin": "prompt",
         }
@@ -458,7 +465,14 @@ def _child_env() -> dict[str, str]:
     return env
 
 
-def _build_argv(binary: str, model: str, workspace: Path, *, approve_mcps: bool) -> list[str]:
+def _build_argv(
+    binary: str,
+    model: str,
+    workspace: Path,
+    *,
+    approve_mcps: bool,
+    force: bool = False,
+) -> list[str]:
     argv = [
         binary,
         "-p",
@@ -474,6 +488,10 @@ def _build_argv(binary: str, model: str, workspace: Path, *, approve_mcps: bool)
     ]
     if approve_mcps:
         argv.append("--approve-mcps")
+    if force:
+        # Headless ask mode rejects non-readonly MCP tool runs unless forced.
+        # --approve-mcps alone only auto-approves MCP *servers*.
+        argv.append("--force")
     return argv
 
 
@@ -580,18 +598,30 @@ def _tool_name(event: Mapping[str, Any]) -> str | None:
             if not isinstance(key, str):
                 continue
             if key.endswith("ToolCall") and key != "toolCall":
+                family = key[: -len("ToolCall")]
+                # getMcpToolsToolCall.args.toolName names the *target* tool being
+                # discovered, not this call. Keep the family name for policy.
+                if family in _CURSOR_SOURCES_META_TOOLS:
+                    return family
                 if isinstance(payload, Mapping):
+                    args = payload.get("args")
+                    if isinstance(args, Mapping):
+                        # Prefer canonical toolName (verify_word) over prefixed
+                        # name (sources-verify_word).
+                        for nested_key in ("toolName", "tool", "serverToolName"):
+                            nested = args.get(nested_key)
+                            if isinstance(nested, str) and nested.strip():
+                                return nested.strip()
                     nested_name = payload.get("name")
                     if isinstance(nested_name, str) and nested_name.strip():
                         return nested_name.strip()
-                    # mcp__sources__verify_word style may live under server/tool fields
                     for nested_key in ("toolName", "tool", "serverToolName"):
                         nested = payload.get(nested_key)
                         if isinstance(nested, str) and nested.strip():
                             return nested.strip()
                 # Fall back to the camelCase tool family name for policy checks
                 # after normalization; MCP sources tools must still expose a name.
-                return key[: -len("ToolCall")]
+                return family
     message = event.get("message")
     if isinstance(message, Mapping):
         content = message.get("content")
@@ -610,6 +640,8 @@ def _normalize_tool_name(name: str) -> str:
         return name[len("mcp__sources__") :]
     if name.startswith("sources:"):
         return name.split(":", 1)[1]
+    if name.startswith("sources-"):
+        return name[len("sources-") :]
     if "/" in name:
         return name.rsplit("/", 1)[-1]
     if name.endswith("ToolCall"):
@@ -695,7 +727,12 @@ def _parse_stream_envelope(
             if name is None:
                 raise _fail("CLI tool call surface is malformed")
             normalized = _normalize_tool_name(name)
-            if normalized not in allowed_tools and name not in allowed_tools:
+            is_meta = normalized in _CURSOR_SOURCES_META_TOOLS or name in _CURSOR_SOURCES_META_TOOLS
+            if is_meta:
+                # Discovery only when Sources tools are allowed; closed-book rejects.
+                if not allowed_tools:
+                    raise _fail(_TOOL_POLICY_ERROR)
+            elif normalized not in allowed_tools and name not in allowed_tools:
                 raise _fail(_TOOL_POLICY_ERROR)
             if subtype == "completed":
                 if call_id is None:
@@ -710,9 +747,10 @@ def _parse_stream_envelope(
             if call_id in seen_tool_ids:
                 raise _fail("CLI emitted duplicate tool call id")
             seen_tool_ids.add(call_id)
-            tool_calls += 1
-            if tool_calls > max_tools:
-                raise _fail(_TOOL_LIMIT_ERROR)
+            if not is_meta:
+                tool_calls += 1
+                if tool_calls > max_tools:
+                    raise _fail(_TOOL_LIMIT_ERROR)
             continue
         if event_type == "assistant":
             _check_session(event, session_id)
@@ -849,6 +887,7 @@ def run_cursor(
             checked["model"],
             workspace,
             approve_mcps=condition == "sources",
+            force=condition == "sources",
         )
         env = _child_env()
         if evidence is not None:

@@ -91,7 +91,7 @@ def _fixture_cli(tmp_path: Path, *, stream: list[dict[str, Any]] | None = None) 
         "if '--version' in argv:\n"
         "    print('2026.09.10-fixture')\n"
         "elif '--help' in argv:\n"
-        "    print('-p --print --model --output-format --trust --workspace --mode --approve-mcps')\n"
+        "    print('-p --print --model --output-format --trust --workspace --mode --approve-mcps --force')\n"
         "elif argv[:1] == ['status']:\n"
         "    print('✓ Logged in as fixture@example.com')\n"
         "else:\n"
@@ -526,4 +526,144 @@ def test_build_argv_closed_book_omits_approve_mcps(tmp_path: Path) -> None:
     assert argv[0] == "cursor-agent"
     assert "-p" in argv
     assert "--approve-mcps" not in argv
+    assert "--force" not in argv
     assert argv[argv.index("--mode") + 1] == "ask"
+
+
+def test_build_argv_sources_includes_approve_mcps_and_force(tmp_path: Path) -> None:
+    argv = native_cursor._build_argv(
+        "cursor-agent",
+        "cursor-grok-4.6-high",
+        tmp_path,
+        approve_mcps=True,
+        force=True,
+    )
+    assert "--approve-mcps" in argv
+    assert "--force" in argv
+    assert argv[argv.index("--mode") + 1] == "ask"
+
+
+def test_normalize_sources_hyphen_prefix() -> None:
+    assert native_cursor._normalize_tool_name("sources-verify_word") == "verify_word"
+
+
+def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "meta-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "getMcpToolsToolCall": {
+                        "args": {"server": "sources", "toolName": "verify_word", "toolCallId": "meta-1"}
+                    }
+                },
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "meta-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "getMcpToolsToolCall": {
+                        "args": {"server": "sources", "toolName": "verify_word", "toolCallId": "meta-1"},
+                        "result": {"success": {"content": "{}"}},
+                    }
+                },
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "mcp-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "sources-verify_word",
+                            "toolName": "verify_word",
+                            "args": {"word": "дім"},
+                            "toolCallId": "mcp-1",
+                        }
+                    }
+                },
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "mcp-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "sources-verify_word",
+                            "toolName": "verify_word",
+                            "args": {"word": "дім"},
+                            "toolCallId": "mcp-1",
+                        },
+                        "result": {"success": {"content": "{}"}},
+                    }
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "s1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+            },
+        ]
+    )
+    # max_tools=1 would fail if getMcpTools were counted.
+    parsed = native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+    assert parsed.tool_calls == 1
+    assert parsed.responses == {"opaque-1": "A"}
+
+
+def test_parser_rejects_get_mcp_tools_in_closed_book() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "meta-1",
+                "session_id": "s1",
+                "tool_call": {"getMcpToolsToolCall": {"args": {"server": "sources"}}},
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool_policy_error"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
