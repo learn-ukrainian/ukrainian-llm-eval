@@ -341,7 +341,7 @@ def test_parser_counts_paired_tool_events_once() -> None:
     assert parsed.responses == {"opaque-1": "A"}
 
 
-def test_parser_rejects_foreign_session_and_incomplete_result() -> None:
+def test_parser_rejects_foreign_session_assistant() -> None:
     stdout = "\n".join(
         json.dumps(event, ensure_ascii=False)
         for event in [
@@ -360,10 +360,110 @@ def test_parser_rejects_foreign_session_and_incomplete_result() -> None:
                 },
                 "session_id": "other",
             },
-            {"type": "result", "session_id": "s1"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "{}",
+                "session_id": "s1",
+            },
         ]
     )
     with pytest.raises(native_cursor.CursorAdapterError, match="session identity"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
+
+
+def test_parser_rejects_incomplete_result() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "s1",
+            },
+            {"type": "result", "session_id": "s1"},
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="result error|envelope incomplete"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
+
+
+def test_parser_rejects_orphan_tool_completion() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "name": "verify_word",
+                "session_id": "s1",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "s1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "{}",
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool call id is missing|completion without start"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+
+
+def test_parser_rejects_assistant_tool_call_shape() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "assistant",
+                "subtype": "tool_call",
+                "name": "Shell",
+                "session_id": "s1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "{}",
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool call surface"):
         native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
 
 

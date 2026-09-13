@@ -698,8 +698,9 @@ def _parse_stream_envelope(
             if normalized not in allowed_tools and name not in allowed_tools:
                 raise _fail(_TOOL_POLICY_ERROR)
             if subtype == "completed":
-                # Count once on start; completion must reuse the same call_id when present.
-                if call_id is not None and call_id not in seen_tool_ids:
+                if call_id is None:
+                    raise _fail("CLI tool call id is missing")
+                if call_id not in seen_tool_ids:
                     raise _fail("CLI tool call completion without start")
                 continue
             if subtype not in {None, "started"}:
@@ -715,6 +716,10 @@ def _parse_stream_envelope(
             continue
         if event_type == "assistant":
             _check_session(event, session_id)
+            # Reject tool-bearing assistant shapes; Cursor documents tools as
+            # type=tool_call events. Counting them here would reopen policy holes.
+            if event.get("subtype") == "tool_call" or _tool_name(event) is not None:
+                raise _fail("CLI tool call surface is malformed")
             # Skip partial-stream duplicates when present.
             if event.get("model_call_id") is not None:
                 continue
