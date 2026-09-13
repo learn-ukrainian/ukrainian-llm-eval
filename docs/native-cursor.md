@@ -17,10 +17,19 @@ requires the real `HOME` / `USER`. Each attempt still:
 
 - creates a fresh empty `--workspace`
 - runs `--mode ask` (read-only)
-- omits `--approve-mcps` for closed-book
+- omits `--approve-mcps` and `--force` for closed-book
 - for Sources, writes only allowlisted `sources` into
-  `{workspace}/.cursor/mcp.json` and passes `--approve-mcps`
+  `{workspace}/.cursor/mcp.json` and passes `--approve-mcps --force`
 - fails closed when `~/.cursor/mcp.json` exists with any `mcpServers`
+
+`--approve-mcps` auto-approves MCP *servers*. Headless ask mode still rejects
+non-readonly MCP *tool runs* unless `--force` is also set. Sources therefore
+uses both flags. Closed-book never passes `--force`.
+
+Cursor may emit a `getMcpTools` discovery call before Sources MCP tools. The
+adapter allows that meta-tool only under Sources and does not count it toward
+`max_tool_calls`. MCP names may arrive as `sources-verify_word`; they are
+normalized to bare reference tool ids.
 
 Residual account/config leakage (global rules, model prefs, cloud account
 state) remains possible. Document that limitation in study notes; prefer
