@@ -579,18 +579,27 @@ def _tool_call_id(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _tool_call_family(event: Mapping[str, Any]) -> str | None:
+def _tool_call_families(event: Mapping[str, Any]) -> list[str]:
     tool_call = event.get("tool_call")
     if not isinstance(tool_call, Mapping):
-        return None
+        return []
+    families: list[str] = []
     for key in tool_call:
         if isinstance(key, str) and key.endswith("ToolCall") and key != "toolCall":
-            return key[: -len("ToolCall")]
-    return None
+            families.append(key[: -len("ToolCall")])
+    return families
+
+
+def _tool_call_family(event: Mapping[str, Any]) -> str | None:
+    families = _tool_call_families(event)
+    if len(families) != 1:
+        return None
+    return families[0]
 
 
 def _is_sources_meta_tool_call(event: Mapping[str, Any]) -> bool:
-    return _tool_call_family(event) in _CURSOR_SOURCES_META_TOOLS
+    families = _tool_call_families(event)
+    return len(families) == 1 and families[0] in _CURSOR_SOURCES_META_TOOLS
 
 
 def _mcp_server_fields(payload: Mapping[str, Any], args: Mapping[str, Any] | None) -> list[Any]:
@@ -605,63 +614,54 @@ def _mcp_server_fields(payload: Mapping[str, Any], args: Mapping[str, Any] | Non
 
 
 def _tool_name(event: Mapping[str, Any]) -> str | None:
+    tool_call = event.get("tool_call")
+    # When a native tool_call payload is present, ignore outer event/wrapper
+    # name fields that can spoof allowlisted ids past family/server checks.
+    if isinstance(tool_call, Mapping):
+        families = [
+            key[: -len("ToolCall")]
+            for key in tool_call
+            if isinstance(key, str) and key.endswith("ToolCall") and key != "toolCall"
+        ]
+        if len(families) != 1:
+            return "ambiguous-tool-family"
+        family = families[0]
+        payload = tool_call.get(family + "ToolCall")
+        if family in _CURSOR_SOURCES_META_TOOLS:
+            return family
+        if family != "mcp":
+            return family
+        if not isinstance(payload, Mapping):
+            return family
+        args = payload.get("args") if isinstance(payload.get("args"), Mapping) else None
+        for server in _mcp_server_fields(payload, args):
+            if not isinstance(server, str) or server.strip() != "sources":
+                return "foreign-mcp"
+        candidates: list[str] = []
+        if isinstance(args, Mapping):
+            for nested_key in ("toolName", "tool", "serverToolName", "name"):
+                nested = args.get(nested_key)
+                if isinstance(nested, str) and nested.strip():
+                    candidates.append(nested.strip())
+        for nested_key in ("name", "toolName", "tool", "serverToolName"):
+            nested = payload.get(nested_key)
+            if isinstance(nested, str) and nested.strip():
+                candidates.append(nested.strip())
+        if not candidates:
+            return family
+        normalized = {_normalize_tool_name(item) for item in candidates}
+        if len(normalized) != 1:
+            return "conflicting-mcp-name"
+        for nested_key in ("toolName", "tool", "serverToolName"):
+            if isinstance(args, Mapping):
+                nested = args.get(nested_key)
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()
+        return candidates[0]
     for key in ("name", "toolName", "tool_name"):
         value = event.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    tool_call = event.get("tool_call")
-    if isinstance(tool_call, Mapping):
-        for key in ("name", "toolName", "tool_name"):
-            value = tool_call.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        function = tool_call.get("function")
-        if isinstance(function, Mapping) and isinstance(function.get("name"), str):
-            return function["name"].strip()
-        # Cursor native shapes: {"readToolCall": {...}}, {"mcpToolCall": {"name": ...}}
-        for key, payload in tool_call.items():
-            if not isinstance(key, str):
-                continue
-            if key.endswith("ToolCall") and key != "toolCall":
-                family = key[: -len("ToolCall")]
-                # getMcpToolsToolCall.args.toolName names the *target* tool being
-                # discovered, not this call. Keep the family name for policy.
-                if family in _CURSOR_SOURCES_META_TOOLS:
-                    return family
-                # Only mcpToolCall may resolve to Sources reference tool ids.
-                # Other families (shell/read/...) must not honor a nested
-                # toolName that happens to match an allowlisted reference.
-                if family != "mcp":
-                    return family
-                if not isinstance(payload, Mapping):
-                    return family
-                args = payload.get("args") if isinstance(payload.get("args"), Mapping) else None
-                for server in _mcp_server_fields(payload, args):
-                    if not isinstance(server, str) or server.strip() != "sources":
-                        return "foreign-mcp"
-                candidates: list[str] = []
-                if isinstance(args, Mapping):
-                    for nested_key in ("toolName", "tool", "serverToolName", "name"):
-                        nested = args.get(nested_key)
-                        if isinstance(nested, str) and nested.strip():
-                            candidates.append(nested.strip())
-                for nested_key in ("name", "toolName", "tool", "serverToolName"):
-                    nested = payload.get(nested_key)
-                    if isinstance(nested, str) and nested.strip():
-                        candidates.append(nested.strip())
-                if not candidates:
-                    return family
-                normalized = {_normalize_tool_name(item) for item in candidates}
-                if len(normalized) != 1:
-                    return "conflicting-mcp-name"
-                # Prefer a bare toolName when present; otherwise first candidate
-                # (often sources-verify_word) for normalization downstream.
-                for nested_key in ("toolName", "tool", "serverToolName"):
-                    if isinstance(args, Mapping):
-                        nested = args.get(nested_key)
-                        if isinstance(nested, str) and nested.strip():
-                            return nested.strip()
-                return candidates[0]
     message = event.get("message")
     if isinstance(message, Mapping):
         content = message.get("content")
@@ -683,7 +683,12 @@ def _normalize_tool_name(name: str) -> str:
     if name.startswith("sources-"):
         return name[len("sources-") :]
     if "/" in name:
-        return name.rsplit("/", 1)[-1]
+        head, tail = name.rsplit("/", 1)
+        # Only strip trusted Sources namespaces; keep foreign prefixes intact so
+        # other/verify_word does not collapse to verify_word.
+        if head in {"sources", "mcp__sources__"}:
+            return tail
+        return name
     if name.endswith("ToolCall"):
         return name[: -len("ToolCall")]
     return name
@@ -717,7 +722,7 @@ def _parse_stream_envelope(
     resolved_model = "unknown"
     api_key_source = "unknown"
     answer_segments: list[str] = []
-    seen_tool_ids: set[str] = set()
+    seen_tool_ids: dict[str, tuple[str, str, bool]] = {}
     tool_calls = 0
     usage: dict[str, int | float | None] = {
         "input_tokens": None,
@@ -763,22 +768,34 @@ def _parse_stream_envelope(
             _check_session(event, session_id)
             subtype = event.get("subtype")
             call_id = _tool_call_id(event)
+            families = _tool_call_families(event)
+            if len(families) > 1:
+                raise _fail("CLI tool call surface is malformed")
             name = _tool_name(event)
             if name is None:
                 raise _fail("CLI tool call surface is malformed")
             normalized = _normalize_tool_name(name)
-            is_meta = _is_sources_meta_tool_call(event)
+            if len(families) == 1:
+                family = families[0]
+                is_meta = family in _CURSOR_SOURCES_META_TOOLS
+            else:
+                family = "flat"
+                is_meta = False
             if is_meta:
                 # Discovery only when Sources tools are configured; closed-book rejects.
                 if not allowed_tools:
                     raise _fail(_TOOL_POLICY_ERROR)
             elif normalized not in allowed_tools and name not in allowed_tools:
                 raise _fail(_TOOL_POLICY_ERROR)
+            identity = (family, normalized, is_meta)
             if subtype == "completed":
                 if call_id is None:
                     raise _fail("CLI tool call id is missing")
-                if call_id not in seen_tool_ids:
+                prior = seen_tool_ids.get(call_id)
+                if prior is None:
                     raise _fail("CLI tool call completion without start")
+                if prior != identity:
+                    raise _fail("CLI tool call identity drift")
                 continue
             if subtype not in {None, "started"}:
                 raise _fail("CLI tool call surface is malformed")
@@ -786,7 +803,7 @@ def _parse_stream_envelope(
                 raise _fail("CLI tool call id is missing")
             if call_id in seen_tool_ids:
                 raise _fail("CLI emitted duplicate tool call id")
-            seen_tool_ids.add(call_id)
+            seen_tool_ids[call_id] = identity
             if not is_meta:
                 tool_calls += 1
                 if tool_calls > max_tools:

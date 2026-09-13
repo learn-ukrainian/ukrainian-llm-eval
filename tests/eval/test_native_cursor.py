@@ -904,6 +904,125 @@ def test_parser_rejects_payload_level_foreign_server() -> None:
         native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
 
 
+def test_parser_rejects_ambiguous_tool_families() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "c1",
+                "session_id": "s1",
+                "tool_call": {
+                    "getMcpToolsToolCall": {"args": {"server": "sources"}},
+                    "shellToolCall": {"args": {"command": "pwd"}},
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="malformed"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 0)
+
+
+def test_parser_rejects_start_complete_family_drift() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "c1",
+                "session_id": "s1",
+                "tool_call": {"getMcpToolsToolCall": {"args": {"server": "sources"}}},
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "c1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "toolName": "verify_word",
+                            "serverIdentifier": "sources",
+                            "toolCallId": "c1",
+                        }
+                    }
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="identity drift"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 0)
+
+
+def test_parser_rejects_foreign_path_prefix() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "c1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "other/verify_word",
+                            "toolName": "verify_word",
+                            "toolCallId": "c1",
+                        }
+                    }
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool_policy_error"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+
+
 def test_parser_rejects_get_mcp_tools_in_closed_book() -> None:
     stdout = "\n".join(
         json.dumps(event, ensure_ascii=False)
