@@ -270,6 +270,7 @@ def _assert_login(binary: str, timeout: int) -> None:
             text=True,
             timeout=min(15, timeout),
             check=False,
+            env=_child_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise _fail("cursor-agent subscription login unavailable") from exc
@@ -538,6 +539,28 @@ def _assistant_text(event: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _tool_call_id(event: Mapping[str, Any]) -> str | None:
+    for key in ("call_id", "callId", "id"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tool_call = event.get("tool_call")
+    if isinstance(tool_call, Mapping):
+        for key in ("call_id", "callId", "id", "toolCallId"):
+            value = tool_call.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for payload in tool_call.values():
+            if isinstance(payload, Mapping):
+                args = payload.get("args")
+                if isinstance(args, Mapping):
+                    for key in ("toolCallId", "call_id", "id"):
+                        value = args.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
+    return None
+
+
 def _tool_name(event: Mapping[str, Any]) -> str | None:
     for key in ("name", "toolName", "tool_name"):
         value = event.get(key)
@@ -552,6 +575,23 @@ def _tool_name(event: Mapping[str, Any]) -> str | None:
         function = tool_call.get("function")
         if isinstance(function, Mapping) and isinstance(function.get("name"), str):
             return function["name"].strip()
+        # Cursor native shapes: {"readToolCall": {...}}, {"mcpToolCall": {"name": ...}}
+        for key, payload in tool_call.items():
+            if not isinstance(key, str):
+                continue
+            if key.endswith("ToolCall") and key != "toolCall":
+                if isinstance(payload, Mapping):
+                    nested_name = payload.get("name")
+                    if isinstance(nested_name, str) and nested_name.strip():
+                        return nested_name.strip()
+                    # mcp__sources__verify_word style may live under server/tool fields
+                    for nested_key in ("toolName", "tool", "serverToolName"):
+                        nested = payload.get(nested_key)
+                        if isinstance(nested, str) and nested.strip():
+                            return nested.strip()
+                # Fall back to the camelCase tool family name for policy checks
+                # after normalization; MCP sources tools must still expose a name.
+                return key[: -len("ToolCall")]
     message = event.get("message")
     if isinstance(message, Mapping):
         content = message.get("content")
@@ -572,7 +612,25 @@ def _normalize_tool_name(name: str) -> str:
         return name.split(":", 1)[1]
     if "/" in name:
         return name.rsplit("/", 1)[-1]
+    if name.endswith("ToolCall"):
+        return name[: -len("ToolCall")]
     return name
+
+
+def _check_session(event: Mapping[str, Any], session_id: str) -> None:
+    sid = event.get("session_id")
+    if sid is None:
+        raise _fail("CLI session identity missing")
+    if not isinstance(sid, str) or sid.strip() != session_id:
+        raise _fail("CLI session identity drift")
+
+
+def _parse_answer_payload(content: str, packet: Mapping[str, Any]) -> dict[str, Any] | None:
+    try:
+        parsed = adapters._strict_json_loads(content)
+        return adapters._extract_responses(parsed, packet)
+    except adapters.AdapterError:
+        return None
 
 
 def _parse_stream_envelope(
@@ -586,7 +644,8 @@ def _parse_stream_envelope(
     session_id: str | None = None
     resolved_model = "unknown"
     api_key_source = "unknown"
-    answer_content: str | None = None
+    answer_segments: list[str] = []
+    seen_tool_ids: set[str] = set()
     tool_calls = 0
     usage: dict[str, int | float | None] = {
         "input_tokens": None,
@@ -615,43 +674,63 @@ def _parse_stream_envelope(
             if isinstance(model, str) and model.strip():
                 resolved_model = model.strip()
             source = event.get("apiKeySource")
-            if isinstance(source, str) and source.strip():
-                api_key_source = source.strip()
-            if api_key_source not in {"login", "unknown"}:
-                # Subscription route must not silently switch to env/flag API keys.
+            if not isinstance(source, str) or not source.strip():
+                raise _fail("cursor-agent auth source is not subscription login")
+            api_key_source = source.strip()
+            if api_key_source != "login":
+                # Subscription route must not silently switch to env/flag API keys
+                # and must not claim cli-login without positive login evidence.
                 raise _fail("cursor-agent auth source is not subscription login")
             continue
-        if event_type == "tool_call" or (
-            event_type == "assistant" and _tool_name(event) is not None and event.get("subtype") == "tool_call"
-        ):
+        if session_id is None:
+            raise _fail("CLI stream envelope incomplete")
+        if event_type in {"user", "thinking"}:
+            _check_session(event, session_id)
+            continue
+        if event_type == "tool_call":
+            _check_session(event, session_id)
+            subtype = event.get("subtype")
+            call_id = _tool_call_id(event)
             name = _tool_name(event)
             if name is None:
                 raise _fail("CLI tool call surface is malformed")
             normalized = _normalize_tool_name(name)
             if normalized not in allowed_tools and name not in allowed_tools:
                 raise _fail(_TOOL_POLICY_ERROR)
+            if subtype == "completed":
+                # Count once on start; completion must reuse the same call_id when present.
+                if call_id is not None and call_id not in seen_tool_ids:
+                    raise _fail("CLI tool call completion without start")
+                continue
+            if subtype not in {None, "started"}:
+                raise _fail("CLI tool call surface is malformed")
+            if call_id is None:
+                raise _fail("CLI tool call id is missing")
+            if call_id in seen_tool_ids:
+                raise _fail("CLI emitted duplicate tool call id")
+            seen_tool_ids.add(call_id)
             tool_calls += 1
             if tool_calls > max_tools:
                 raise _fail(_TOOL_LIMIT_ERROR)
             continue
         if event_type == "assistant":
+            _check_session(event, session_id)
+            # Skip partial-stream duplicates when present.
+            if event.get("model_call_id") is not None:
+                continue
             text = _assistant_text(event)
-            if text is not None:
-                answer_content = text
+            if text is not None and text.strip():
+                answer_segments.append(text)
             continue
         if event_type == "result":
-            saw_result = True
-            if event.get("is_error") is True or event.get("subtype") not in {None, "success"}:
+            if saw_result:
+                raise _fail("CLI emitted duplicate result event")
+            _check_session(event, session_id)
+            if event.get("subtype") != "success" or event.get("is_error") is not False:
                 raise _fail("cursor-agent CLI result error")
-            text = _assistant_text(event)
-            if text is not None:
-                answer_content = text
-            sid = event.get("session_id")
-            if isinstance(sid, str) and sid.strip():
-                if session_id is None:
-                    session_id = sid.strip()
-                elif sid.strip() != session_id:
-                    raise _fail("CLI session identity drift")
+            if "result" not in event or not isinstance(event.get("result"), str):
+                raise _fail("CLI stream envelope incomplete")
+            saw_result = True
             raw_usage = event.get("usage")
             if isinstance(raw_usage, Mapping):
                 usage["input_tokens"] = _usage_number(raw_usage.get("inputTokens", raw_usage.get("input_tokens")))
@@ -660,20 +739,26 @@ def _parse_stream_envelope(
                 if total is None and usage["input_tokens"] is not None and usage["output_tokens"] is not None:
                     total = usage["input_tokens"] + usage["output_tokens"]
                 usage["total_tokens"] = _usage_number(total)
+            # Do not use concatenated result text as the answer; prefer the final
+            # assistant segment after tools (Cursor result is all segments joined).
+            continue
+        if event_type is not None:
+            # Unknown event types are ignored only after session check when they carry one.
+            if "session_id" in event:
+                _check_session(event, session_id)
             continue
     if not saw_init or not saw_result or not session_id:
         raise _fail("CLI stream envelope incomplete")
     if not allowed_tools and tool_calls:
         raise _fail(_TOOL_POLICY_ERROR)
+    answer_content = answer_segments[-1] if answer_segments else None
     responses = None
     answer_failure_reason = None
     if answer_content is None:
         answer_failure_reason = CANDIDATE_RESPONSE_ERROR
     else:
-        try:
-            parsed = adapters._strict_json_loads(answer_content)
-            responses = adapters._extract_responses(parsed, packet)
-        except adapters.AdapterError:
+        responses = _parse_answer_payload(answer_content, packet)
+        if responses is None:
             answer_failure_reason = CANDIDATE_RESPONSE_ERROR
     return _ParsedCursorStream(
         responses=responses,

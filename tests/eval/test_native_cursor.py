@@ -129,6 +129,9 @@ def test_full_validator_rejects_unknown_and_contradictory_provider(tmp_path: Pat
 def test_preflight_records_identity_and_unknown_effective_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fixture_cli(tmp_path)
     monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USER", "fixture-user")
+    (tmp_path / "home").mkdir()
     capability = native_cursor.preflight_cursor(_config(str(binary), tools=[]), "closed-book")
     assert capability["adapter"] == "cursor"
     assert capability["capability"] == "native-cursor-workspace-isolated"
@@ -146,6 +149,9 @@ def test_preflight_rejects_global_mcp(tmp_path: Path, monkeypatch: pytest.Monkey
         encoding="utf-8",
     )
     monkeypatch.setattr(native_cursor, "_global_mcp_path", lambda: mcp)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USER", "fixture-user")
+    (tmp_path / "home").mkdir()
     with pytest.raises(native_cursor.CursorAdapterError, match="global cursor MCP"):
         native_cursor.preflight_cursor(_config(str(binary), tools=[]), "closed-book")
 
@@ -221,7 +227,25 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
             "session_id": "sources-session",
             "model": "Cursor Grok 4.6 High",
         },
-        {"type": "tool_call", "name": "mcp__sources__verify_word", "session_id": "sources-session"},
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "Checking Sources"}]},
+            "session_id": "sources-session",
+        },
+        {
+            "type": "tool_call",
+            "subtype": "started",
+            "call_id": "call-1",
+            "name": "mcp__sources__verify_word",
+            "session_id": "sources-session",
+        },
+        {
+            "type": "tool_call",
+            "subtype": "completed",
+            "call_id": "call-1",
+            "name": "mcp__sources__verify_word",
+            "session_id": "sources-session",
+        },
         {
             "type": "assistant",
             "message": {
@@ -234,7 +258,7 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
             "type": "result",
             "subtype": "success",
             "is_error": False,
-            "result": '{"responses":{"opaque-1":"A"}}',
+            "result": 'Checking Sources{"responses":{"opaque-1":"A"}}',
             "session_id": "sources-session",
             "usage": {"inputTokens": 11, "outputTokens": 4},
         },
@@ -270,6 +294,102 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
     assert servers["sources"]["env"]["ZNO_NMT_SOURCES_URL"] == "http://127.0.0.1:8766/mcp"
 
 
+def test_parser_counts_paired_tool_events_once() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "c1",
+                "name": "verify_word",
+                "session_id": "s1",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "c1",
+                "name": "verify_word",
+                "session_id": "s1",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "s1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": 'narration{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    parsed = native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+    assert parsed.tool_calls == 1
+    assert parsed.responses == {"opaque-1": "A"}
+
+
+def test_parser_rejects_foreign_session_and_incomplete_result() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "other",
+            },
+            {"type": "result", "session_id": "s1"},
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="session identity"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
+
+
+def test_parser_rejects_missing_api_key_source() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "{}",
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="subscription login"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), set(), 1)
+
+
 def test_parser_rejects_unlisted_tool() -> None:
     stdout = "\n".join(
         json.dumps(event, ensure_ascii=False)
@@ -281,7 +401,13 @@ def test_parser_rejects_unlisted_tool() -> None:
                 "session_id": "s1",
                 "model": "Cursor Grok 4.6 High",
             },
-            {"type": "tool_call", "name": "Shell", "session_id": "s1"},
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "c1",
+                "name": "Shell",
+                "session_id": "s1",
+            },
             {
                 "type": "result",
                 "subtype": "success",
