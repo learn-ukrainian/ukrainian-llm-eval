@@ -591,6 +591,8 @@ def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
                         "args": {
                             "name": "sources-verify_word",
                             "toolName": "verify_word",
+                            "serverIdentifier": "sources",
+                            "providerIdentifier": "sources",
                             "args": {"word": "дім"},
                             "toolCallId": "mcp-1",
                         }
@@ -607,6 +609,8 @@ def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
                         "args": {
                             "name": "sources-verify_word",
                             "toolName": "verify_word",
+                            "serverIdentifier": "sources",
+                            "providerIdentifier": "sources",
                             "args": {"word": "дім"},
                             "toolCallId": "mcp-1",
                         },
@@ -633,6 +637,149 @@ def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
         ]
     )
     # max_tools=1 would fail if getMcpTools were counted.
+    parsed = native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+    assert parsed.tool_calls == 1
+    assert parsed.responses == {"opaque-1": "A"}
+
+
+def test_parser_rejects_non_mcp_toolname_spoof() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "shell-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "shellToolCall": {
+                        "args": {"toolName": "verify_word", "command": "pwd"},
+                    }
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool_policy_error"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+
+
+def test_parser_rejects_foreign_mcp_server() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "mcp-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "other-verify_word",
+                            "toolName": "verify_word",
+                            "serverIdentifier": "other",
+                            "providerIdentifier": "other",
+                            "args": {"word": "дім"},
+                            "toolCallId": "mcp-1",
+                        }
+                    }
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+            },
+        ]
+    )
+    with pytest.raises(native_cursor.CursorAdapterError, match="tool_policy_error"):
+        native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
+
+
+def test_parser_accepts_mcp_args_name_without_toolname() -> None:
+    stdout = "\n".join(
+        json.dumps(event, ensure_ascii=False)
+        for event in [
+            {
+                "type": "system",
+                "subtype": "init",
+                "apiKeySource": "login",
+                "session_id": "s1",
+                "model": "Cursor Grok 4.6 High",
+            },
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "call_id": "mcp-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "sources-verify_word",
+                            "serverIdentifier": "sources",
+                            "args": {"word": "дім"},
+                            "toolCallId": "mcp-1",
+                        }
+                    }
+                },
+            },
+            {
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "mcp-1",
+                "session_id": "s1",
+                "tool_call": {
+                    "mcpToolCall": {
+                        "args": {
+                            "name": "sources-verify_word",
+                            "serverIdentifier": "sources",
+                            "toolCallId": "mcp-1",
+                        },
+                        "result": {"success": {"content": "{}"}},
+                    }
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                },
+                "session_id": "s1",
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '{"responses":{"opaque-1":"A"}}',
+                "session_id": "s1",
+                "usage": {"inputTokens": 1, "outputTokens": 1},
+            },
+        ]
+    )
     parsed = native_cursor._parse_stream_envelope(stdout, _packet(), {"verify_word"}, 1)
     assert parsed.tool_calls == 1
     assert parsed.responses == {"opaque-1": "A"}

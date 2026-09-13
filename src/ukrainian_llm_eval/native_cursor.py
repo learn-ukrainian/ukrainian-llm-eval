@@ -603,24 +603,36 @@ def _tool_name(event: Mapping[str, Any]) -> str | None:
                 # discovered, not this call. Keep the family name for policy.
                 if family in _CURSOR_SOURCES_META_TOOLS:
                     return family
-                if isinstance(payload, Mapping):
-                    args = payload.get("args")
-                    if isinstance(args, Mapping):
-                        # Prefer canonical toolName (verify_word) over prefixed
-                        # name (sources-verify_word).
-                        for nested_key in ("toolName", "tool", "serverToolName"):
-                            nested = args.get(nested_key)
-                            if isinstance(nested, str) and nested.strip():
-                                return nested.strip()
-                    nested_name = payload.get("name")
-                    if isinstance(nested_name, str) and nested_name.strip():
-                        return nested_name.strip()
+                # Only mcpToolCall may resolve to Sources reference tool ids.
+                # Other families (shell/read/...) must not honor a nested
+                # toolName that happens to match an allowlisted reference.
+                if family != "mcp":
+                    return family
+                if not isinstance(payload, Mapping):
+                    return family
+                args = payload.get("args")
+                if isinstance(args, Mapping):
+                    for server_key in ("serverIdentifier", "providerIdentifier", "server"):
+                        server = args.get(server_key)
+                        if server is None:
+                            continue
+                        if not isinstance(server, str) or server.strip() != "sources":
+                            return "foreign-mcp"
                     for nested_key in ("toolName", "tool", "serverToolName"):
-                        nested = payload.get(nested_key)
+                        nested = args.get(nested_key)
                         if isinstance(nested, str) and nested.strip():
                             return nested.strip()
-                # Fall back to the camelCase tool family name for policy checks
-                # after normalization; MCP sources tools must still expose a name.
+                    # Cursor often sends args.name as sources-verify_word.
+                    nested = args.get("name")
+                    if isinstance(nested, str) and nested.strip():
+                        return nested.strip()
+                nested_name = payload.get("name")
+                if isinstance(nested_name, str) and nested_name.strip():
+                    return nested_name.strip()
+                for nested_key in ("toolName", "tool", "serverToolName"):
+                    nested = payload.get(nested_key)
+                    if isinstance(nested, str) and nested.strip():
+                        return nested.strip()
                 return family
     message = event.get("message")
     if isinstance(message, Mapping):
