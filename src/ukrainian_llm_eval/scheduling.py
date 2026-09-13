@@ -25,7 +25,7 @@ def research_implementation_sha256():
         "native_kimi.py", "native_codex.py", "responses_http.py", "candidate_outcome.py",
         "codex_catalog.py", "codex_reference.py", "codex_reference_bridge.py", "codex_reference_controls.py",
         "native_agy.py", "agy_hook.py", "native_opencode.py", "opencode_gateway.py",
-        "opencode_batch.py",
+        "opencode_batch.py", "native_cursor.py",
     )
     return digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in names})
 

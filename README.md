@@ -4,7 +4,7 @@ Reproducible evaluation of **Ukrainian language** models and agents, with option
 
 This project is under development toward its first release. It does not yet publish a complete model leaderboard. Track the [results TL;DR, leaderboards and training-data lessons](docs/results.md). Follow the [release epic](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/1).
 
-The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, AGY Gemini, and controlled Codex execution, Gemma through native OpenCode/OpenRouter, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
+The engine supports ZNO/NMT multiple-choice and matching questions, ULP proficiency questions, and UA-GEC correction with separate reference custody, preserved execution evidence, native Claude, Kimi, AGY Gemini, controlled Codex execution, Cursor Agent subscription routes, Gemma through native OpenCode/OpenRouter, plus compatible chat-completions endpoints. UA-GEC scoring uses a separately built offline Docker runtime. Additional native adapters and the public evaluation remain tracked work. No other exam subjects are planned.
 
 The [first-study preparation](docs/first-study.md) records the selected model matrix,
 complete source denominators, concrete per-suite limits and remaining launch checks.
@@ -27,6 +27,10 @@ Provider runs require your own authorized CLI subscription or endpoint credentia
 The [AGY runbook](docs/native-agy.md) covers subscription-only Gemini execution
 at low, medium and high effort, with or without Sources MCP, including native
 tool restrictions and the unverified effective output-token cap.
+
+The [Cursor runbook](docs/native-cursor.md) covers headless `cursor-agent`
+subscription runs (including `cursor-grok-4.6-high`), workspace isolation
+limits, and Sources MCP mirroring.
 
 The [Kimi runbook](docs/native-kimi.md) explains private subscription provisioning
 and execution with or without Sources MCP. Kimi results identify the requested

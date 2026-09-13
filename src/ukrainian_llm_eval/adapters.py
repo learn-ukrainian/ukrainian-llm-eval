@@ -137,6 +137,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         from .native_codex import validate_config as validate_codex_config
 
         return validate_codex_config(config)
+    if adapter == "cursor":
+        from .native_cursor import validate_config as validate_cursor_config
+
+        return validate_cursor_config(config)
     base = {
         "schema",
         "adapter",
@@ -282,6 +286,10 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
             checked, condition, sources_url,
             private_env_path=os.environ.get("UKRAINIAN_LLM_EVAL_CODEX_PROVISIONING_DIR"),
         )
+    if checked["adapter"] == "cursor":
+        from .native_cursor import preflight as cursor_preflight
+
+        return cursor_preflight(checked, condition, sources_url)
     _condition_policy(checked, condition, sources_url)
     capability: dict[str, Any] = {
         "schema": "zno-nmt.capability.v1",
