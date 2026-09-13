@@ -61,6 +61,16 @@ def is_candidate_response_failure(
             "entrypoint_sha256", "native_runtime_sha256", "control_receipt_sha256",
             "settings_sha256", "request_shape_sha256", "response_schema_sha256",
         )
+    elif adapter == "cursor":
+        required_identity = (
+            ("adapter", "cursor"),
+            ("harness", "cursor-agent"),
+            ("provider", "managed:cursor-subscription"),
+        )
+        required_hashes = (
+            "binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256",
+            "settings_sha256", "request_shape_sha256",
+        )
     else:
         return False
     if any(identity.get(field) != expected for field, expected in required_identity):

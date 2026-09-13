@@ -93,7 +93,7 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
             constants[filename + "_sha256"] = hashlib.sha256(
                 Path(adapters.__file__).with_name(filename).read_bytes()
             ).hexdigest()
-    elif config["adapter"] in {"kimi", "codex", "agy"}:
+    elif config["adapter"] in {"kimi", "codex", "agy", "cursor"}:
         constants["native_adapter_implementation_sha256"] = hashlib.sha256(
             Path(adapters.__file__).with_name(f"native_{config['adapter']}.py").read_bytes()
         ).hexdigest()
@@ -247,6 +247,21 @@ def run_exam(
             ):
                 if trial["identity"].get(field) != capability.get(field):
                     raise ExamError("native Codex configuration changed after preflight")
+        elif checked_config["adapter"] == "cursor":
+            from .native_cursor import run_cursor
+
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the native CLI adapter")
+            trial = run_cursor(
+                checked_packet, checked_config, condition, sources_url=sources_url, prompt=prompt,
+                **evidence_options,
+            )
+            for field in (
+                "binary_sha256", "native_config_sha256", "catalog_provider_sha256", "catalog_model_sha256",
+                "settings_sha256", "request_shape_sha256",
+            ):
+                if trial["identity"].get(field) != capability.get(field):
+                    raise ExamError("native Cursor configuration changed after preflight")
         else:
             budget_options = {"request_budget": request_budget} if request_budget is not None else {}
             if checked_config["adapter"] == "responses-http":

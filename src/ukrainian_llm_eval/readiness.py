@@ -62,6 +62,10 @@ def _condition(config, condition, sources_url):
             from .native_kimi import _validate_condition
 
             _validate_condition(config, condition, sources_url)
+        elif config["adapter"] == "cursor":
+            from .native_cursor import _validate_condition
+
+            _validate_condition(condition, sources_url, config.get("tools") or [])
         else:
             _condition_policy(config, condition, sources_url)
     except AdapterError as exc:
