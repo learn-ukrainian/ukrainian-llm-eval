@@ -31,6 +31,37 @@ def test_catalog_preserves_identity_instructions_and_efforts():
         codex_catalog.restrict_catalog({"models": [original]}, "gpt-6-astra")
 
 
+@pytest.mark.parametrize("closed", [True, False])
+def test_reference_policy_disables_goals_in_both_conditions(tmp_path, closed):
+    overrides = () if closed else adapter.reference_overrides(tmp_path / "reference.json", ["verify_word"])
+    argv = codex_catalog.build_argv(
+        "codex-fixture", model="gpt-6.1-sol", effort="high", response_schema_path=tmp_path / "schema.json",
+        catalog_path=tmp_path / "catalog.json", final_message_path=tmp_path / "final.txt",
+        reference_overrides=overrides,
+    )
+    assert argv.count("goals") == 1
+    assert argv[argv.index("goals") - 1] == "--disable"
+    assert not {"multi_agent", "multi_agent_v2", "collaboration_modes"} & set(argv)
+    assert any("mcp_servers.sources" in value for value in argv) is (not closed)
+    assert {"--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check"} <= set(argv)
+
+
+@pytest.mark.parametrize("closed", [True, False])
+@pytest.mark.parametrize("tool", ["get_goal", "create_goal", "update_goal", "unknown_tool"])
+def test_reference_surfaces_reject_goal_and_unknown_functions(closed, tool):
+    from ukrainian_llm_eval.codex_reference_controls import surface_matches
+
+    namespaces = {} if closed else {
+        "functions": ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"],
+        "mcp__sources": ["verify_word"],
+    }
+    namespaces["multi_agent_v1"] = ["spawn_agent", "close_agent", "send_input", "wait_agent"]
+    summary = {"tool_surface_valid": True, "top_level_tool_count": 0, "additional_tool_namespaces": namespaces}
+    assert surface_matches(summary, ["verify_word"], closed)
+    namespaces.setdefault("functions", []).append(tool)
+    assert not surface_matches(summary, ["verify_word"], closed)
+
+
 @pytest.fixture
 def upstream(monkeypatch):
     observed = []

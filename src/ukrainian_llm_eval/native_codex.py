@@ -62,6 +62,7 @@ _DISABLED_FEATURES = (
     "remote_plugin", "browser_use", "browser_use_external", "computer_use", "view_image",
     "skill_search", "workspace_dependencies", "memories", "tool_suggest", "sleep_tool",
     "code_mode", "code_mode_host",
+    "goals",  # Persistent goal handlers are outside both evaluation tool surfaces.
 )
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
