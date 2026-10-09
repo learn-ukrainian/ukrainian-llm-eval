@@ -154,6 +154,7 @@ def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: st
             "requested_effort": config["effort"],
             "effective_effort": "unknown",
             "session_id": None,
+            **adapters.native_output_limit_metadata(config),
         },
         "comparison": _comparison(packet, config, smoke_intent=smoke_intent),
         "metrics": _empty_metrics(),

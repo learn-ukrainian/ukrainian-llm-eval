@@ -209,6 +209,45 @@ model ID available through your authenticated CLI instead of a moving alias:
 }
 ```
 
+### Native output-limit selection (#67)
+
+The required `max_output_tokens` field accepts the exact string
+`"native-default"` for native Claude, Codex, AGY and Cursor. This selects native
+runtime defaults in both closed-book and Sources conditions. For the six-model
+comparison, use this selection for Sol, Luna, Flash, Grok, Sonnet and Opus.
+It does not establish a common 8,192-token cap or equal effective ceilings.
+Positive integers remain compatible. Omitted values, null, booleans,
+nonpositive integers, floats, numeric strings and other sentinels are rejected.
+HTTP, OpenCode and Kimi adapters continue requiring positive integers.
+
+| Native route | `"native-default"` | Positive integer |
+| --- | --- | --- |
+| Claude (Sonnet / Opus) | Remove `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from the child environment before capability probes and execution | Request the exact decimal value through that environment variable |
+| Codex (Sol / Luna), AGY (Flash), Cursor (Grok) | Omit output overrides | Record numeric metadata without forwarding an output override |
+
+New preflight, successful-run and failed-run identities retain
+`max_output_tokens_configured` as requested, `max_output_tokens_effective` as
+`"unknown"`, and `max_output_tokens_mechanism` as `"runtime-default"`,
+`"environment-requested"` or `"numeric-metadata-not-forwarded"`. An environment
+request is not an attested ceiling: [Claude's environment reference](https://code.claude.com/docs/en/env-vars)
+documents model-dependent defaults and caps and lowering an override above the
+model's cap. The evaluator does not infer numeric effective ceilings from
+advertised maxima, historical captures or observed usage.
+
+Captured usage counters stay unchanged, even above a configured integer.
+Codex, AGY and Cursor disclose their existing 2,000,000-byte stdout bound as
+`capture_stdout_max_bytes`; AGY supplementary artifacts retain their separate
+16 MiB bound. Capture overflow remains a failure and byte bounds are not token
+limits. Claude's existing capture behavior is unchanged; no numeric stdout
+bound is claimed for it. Output selection remains a pairing constant, so a
+native-default trial and an integer-configured trial are incomparable.
+
+This implementation changes no sample, prompt, response schema, effort, run
+count, 600-second comparison deadline or 20-reference-call bound. Credential-free
+synthetic tests prove construction and accounting only. Historical attempts,
+scores and counters remain intact; authorized native proof and independently
+reviewed study results remain separate driver obligations.
+
 The same configuration is used for both conditions. `tools` defines the
 assisted condition only. Closed-book execution exposes none of them. Do not
 put endpoint URLs, tokens or private machine details in a checked-in config.

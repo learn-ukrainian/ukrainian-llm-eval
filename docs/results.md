@@ -1,5 +1,23 @@
 # Results and lessons for Ukrainian training data
 
+## Output-limit interpretation (#67)
+
+The explicit native selection is `"max_output_tokens": "native-default"`
+for Sol/Luna through Codex, Flash through AGY, Grok through Cursor and
+Sonnet/Opus through Claude, in both conditions. This selects each runtime's
+default; no common 8,192-token or equal-effective-cap claim follows. Positive
+integer compatibility and historical attempts, scores and counters remain
+unchanged. New receipts distinguish configured selection, mechanism and unknown
+effective ceiling; usage counters are observations, not ceiling evidence.
+Different output selections remain incomparable. Byte capture bounds remain
+separate safety controls. See [the running contract](running.md#native-output-limit-selection-67).
+
+Credential-free construction/accounting tests do not prove native defaults or
+Ukrainian proficiency. This change supplies no new scored result, native smoke
+or study admission. The accountable evaluation driver owns native proof,
+independent held-out checks, cross-family review, CI, merge and study/report
+reconciliation. Historical result sections below retain their original scope.
+
 ## TL;DR
 
 Updated: 11 September 2026. Owner: the evaluator release lead. Tracking: [report maintenance #24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24), [public study #6](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/6).

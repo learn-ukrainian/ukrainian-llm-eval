@@ -121,7 +121,7 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
             "tools_sha256": adapters.digest(checked["tools"]), "tool_schema_sha256": adapters.digest(tools),
             "mcp_server_identity_sha256": identity,
             "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,
-            "capability": "native-agy-reference-gated", "max_output_tokens_effective": "unknown"}
+            "capability": "native-agy-reference-gated", **adapters.native_output_limit_metadata(checked), "capture_stdout_max_bytes": MAX_BYTES}
 
 
 INPUT_FRAME_PREFIX = '{"event":"user","message":{"content":'
@@ -473,8 +473,8 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
                     "effective_model": checked["model"], "requested_effort": checked["effort"],
                     "effective_effort": "unknown", "binary_sha256": binary_hash,
                     "native_controls_sha256": control_hash(checked, condition),
-                    "max_output_tokens_configured": checked["max_output_tokens"],
-                    "max_output_tokens_effective": "unknown", "g1_credit_fallback": False,
+                    **adapters.native_output_limit_metadata(checked),
+                    "capture_stdout_max_bytes": MAX_BYTES, "g1_credit_fallback": False,
                     "auxiliary_title_generation": "native-harness-metadata; not candidate output",
                     "tool_schema_sha256": adapters.digest(checked["tools"] if condition == "sources" else []),
                     "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,

@@ -130,7 +130,7 @@ def identity(config: dict, condition: str, probe: native._CliProbe, catalog_iden
         "tools_sha256": adapters.digest(config["tools"] if sources else []),
         "mcp_server_identity_sha256": receipt["source_server_sha256"] if sources else None,
         "corpus_id_sha256": adapters.digest(config["corpus_id"]) if sources and config["corpus_id"] else None,
-        "max_output_tokens_configured": config["max_output_tokens"], "max_output_tokens_effective": "unknown",
+        **adapters.native_output_limit_metadata(config), "capture_stdout_max_bytes": native._MAX_OUTPUT_BYTES,
         "codex_tool_policy": "reference-only", **catalog_identity,
     }
 

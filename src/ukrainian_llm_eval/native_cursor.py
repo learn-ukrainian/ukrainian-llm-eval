@@ -173,7 +173,9 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if effort is not None:
         effort = _nonempty_text(effort, "configuration effort", max_length=64)
         checked["effort"] = effort
-    for field in ("timeout_seconds", "max_output_tokens", "max_tool_calls", "repeats"):
+    if checked.get("max_output_tokens") != "native-default":
+        _positive_int(checked.get("max_output_tokens"), "configuration max_output_tokens")
+    for field in ("timeout_seconds", "max_tool_calls", "repeats"):
         checked[field] = _positive_int(checked.get(field), f"configuration {field}")
     tools = checked.get("tools")
     if not isinstance(tools, list) or any(
@@ -396,7 +398,8 @@ def preflight_cursor(
         "tool_schema_sha256": adapters.digest(tools),
         "mcp_server_identity_sha256": identity,
         "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,
-        "max_output_tokens_effective": "unknown",
+        **adapters.native_output_limit_metadata(checked),
+        "capture_stdout_max_bytes": _MAX_STREAM_BYTES,
     }
 
 
@@ -959,8 +962,8 @@ def _identity(
         "tool_schema_sha256": None if condition == "sources" else adapters.digest([]),
         "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,
         "mcp_server_identity_sha256": None,
-        "max_output_tokens_configured": checked["max_output_tokens"],
-        "max_output_tokens_effective": "unknown",
+        **adapters.native_output_limit_metadata(checked),
+        "capture_stdout_max_bytes": _MAX_STREAM_BYTES,
         "settings_sha256": _settings_sha256(
             condition=condition, tools=checked["tools"], max_tool_calls=checked["max_tool_calls"]
         ),

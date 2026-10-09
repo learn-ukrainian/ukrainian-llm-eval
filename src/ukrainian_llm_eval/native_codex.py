@@ -166,7 +166,9 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     effort = _text(checked.get("effort"), "configuration effort", max_length=32)
     if effort not in _EFFORTS:
         raise _fail("configuration effort is unsupported")
-    for field in ("timeout_seconds", "max_output_tokens", "max_tool_calls", "repeats"):
+    if checked.get("max_output_tokens") != "native-default":
+        _positive(checked.get("max_output_tokens"), "configuration max_output_tokens")
+    for field in ("timeout_seconds", "max_tool_calls", "repeats"):
         _positive(checked.get(field), f"configuration {field}")
     policy = checked.get("codex_tool_policy")
     if policy is not None and policy != "reference-only":
@@ -548,7 +550,7 @@ def preflight_codex(config: Mapping[str, Any], condition: str, sources_url: str 
         "settings_sha256": _settings_hash(options.config), "request_shape_sha256": adapters.digest(_request_shape(options.config)),
         "control_receipt_sha256": adapters.digest(receipt),
         "tool_schema_sha256": adapters.digest([]), "mcp_server_identity_sha256": None,
-        "max_output_tokens_configured": options.config["max_output_tokens"], "max_output_tokens_effective": "unknown",
+        **adapters.native_output_limit_metadata(options.config), "capture_stdout_max_bytes": _MAX_OUTPUT_BYTES,
     }
 
 
@@ -907,7 +909,7 @@ def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: s
         else:
             assert parsed.responses is not None
             responses = parsed.responses
-    trial: dict[str, Any] = {"responses": responses, "identity": {"adapter": CODEX_ADAPTER, "harness": CODEX_HARNESS, "model": options.config["model"], "provider": CODEX_PROVIDER, "account_identity": "unknown", "session_id": parsed.session_id, "control_receipt_sha256": control_receipt_sha256, "requested_model": options.config["model"], "requested_model_alias": options.config["model"], "effective_model": "unknown", "effective_backend_model": "unknown", "requested_effort": options.config["effort"], "accepted_effort": "unknown", "effective_effort": "unknown", "cli_version": probe.version, "version_observed": probe.version, "entrypoint_sha256": probe.entrypoint_sha256, "native_runtime_sha256": probe.native_runtime_sha256, "tool_schema_sha256": adapters.digest([]), "corpus_id_sha256": None, "mcp_server_identity_sha256": None, "max_output_tokens_configured": options.config["max_output_tokens"], "max_output_tokens_effective": "unknown", "settings_sha256": _settings_hash(options.config), "request_shape_sha256": adapters.digest(_request_shape(options.config)), "response_schema_sha256": response_schema_sha256}, "metrics": {"elapsed_seconds": elapsed, **parsed.usage, "tool_calls": 0}}
+    trial: dict[str, Any] = {"responses": responses, "identity": {"adapter": CODEX_ADAPTER, "harness": CODEX_HARNESS, "model": options.config["model"], "provider": CODEX_PROVIDER, "account_identity": "unknown", "session_id": parsed.session_id, "control_receipt_sha256": control_receipt_sha256, "requested_model": options.config["model"], "requested_model_alias": options.config["model"], "effective_model": "unknown", "effective_backend_model": "unknown", "requested_effort": options.config["effort"], "accepted_effort": "unknown", "effective_effort": "unknown", "cli_version": probe.version, "version_observed": probe.version, "entrypoint_sha256": probe.entrypoint_sha256, "native_runtime_sha256": probe.native_runtime_sha256, "tool_schema_sha256": adapters.digest([]), "corpus_id_sha256": None, "mcp_server_identity_sha256": None, **adapters.native_output_limit_metadata(options.config), "capture_stdout_max_bytes": _MAX_OUTPUT_BYTES, "settings_sha256": _settings_hash(options.config), "request_shape_sha256": adapters.digest(_request_shape(options.config)), "response_schema_sha256": response_schema_sha256}, "metrics": {"elapsed_seconds": elapsed, **parsed.usage, "tool_calls": 0}}
     if parsed.answer_failure_reason is not None:
         trial.update(status="failed", failure_reason=CANDIDATE_RESPONSE_ERROR)
     return trial

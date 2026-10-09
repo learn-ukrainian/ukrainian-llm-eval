@@ -533,6 +533,31 @@ def _require_exact_keys(value: Mapping[str, Any], allowed: set[str], label: str)
         raise AdapterError(f"{label} contains unsupported fields")
 
 
+def validate_output_limit(value: Any, *, native_default: bool = False) -> None:
+    """Accept an explicit native selection or the existing positive integer."""
+    if native_default and value == "native-default":
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AdapterError("configuration max_output_tokens must be positive")
+
+
+def native_output_limit_metadata(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe a requested control without inferring a runtime token ceiling."""
+    if config["adapter"] not in {"claude", "codex", "agy", "cursor"}:
+        return {}
+    selection = config["max_output_tokens"]
+    mechanism = (
+        "runtime-default" if selection == "native-default" else
+        "environment-requested" if config["adapter"] == "claude" else
+        "numeric-metadata-not-forwarded"
+    )
+    return {
+        "max_output_tokens_configured": selection,
+        "max_output_tokens_effective": "unknown",
+        "max_output_tokens_mechanism": mechanism,
+    }
+
+
 def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the public, serialisable evaluator configuration.
 
@@ -590,7 +615,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     effort = config.get("effort")
     if effort is not None and (not isinstance(effort, str) or not effort.strip()):
         raise AdapterError("configuration effort must be string or null")
-    for field in ("timeout_seconds", "max_output_tokens", "max_tool_calls", "repeats"):
+    validate_output_limit(config.get("max_output_tokens"), native_default=adapter == "claude")
+    for field in ("timeout_seconds", "max_tool_calls", "repeats"):
         value = config.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise AdapterError(f"configuration {field} must be positive")
@@ -751,7 +777,8 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
     }
     if checked["adapter"] == "claude":
         version = _preflight_claude(checked, condition)
-        capability.update(capability="native-claude-restricted", cli_version=version)
+        capability.update(capability="native-claude-restricted", cli_version=version,
+                          **native_output_limit_metadata(checked))
     else:
         endpoint = os.environ.get(str(checked["endpoint_env"]), "")
         if not endpoint:
@@ -941,7 +968,7 @@ def prompt_reference_catalog(config: Mapping[str, Any], condition: str, sources_
     return _reference_catalog(tools, config["tools"])
 
 
-def _child_env(max_output_tokens: int) -> dict[str, str]:
+def _child_env(max_output_tokens: int | str) -> dict[str, str]:
     attempt = _ATTEMPT.get()
     if attempt is None:
         raise AdapterError("native attempt boundary missing")
@@ -954,7 +981,10 @@ def _child_env(max_output_tokens: int) -> dict[str, str]:
     # Claude's native limit is an environment control.  The version probe
     # cannot attest that a particular CLI build honored it, so receipts retain
     # that distinction as configured rather than observed.
-    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
+    if max_output_tokens == "native-default":
+        env.pop("CLAUDE_CODE_MAX_OUTPUT_TOKENS", None)
+    else:
+        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
     return env
 
 
@@ -1451,7 +1481,7 @@ def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: 
     session_id = _claude_session_identity(completed.stdout)
     return {
         "responses": responses,
-        "identity": {"model_context_mapping": model_mapping, "adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, "max_output_tokens_configured": checked["max_output_tokens"], "max_output_tokens_effective": "unknown"},
+        "identity": {"model_context_mapping": model_mapping, "adapter": "claude", "harness": "claude-cli", "model": checked["model"], "provider": checked.get("provider") or "claude-cli", "session_id": session_id, "requested_model": checked["model"], "effective_model": effective_model, "requested_effort": checked["effort"], "effective_effort": "unknown", "cli_version": cli_version, "tool_schema_sha256": digest(checked["tools"] if condition == "sources" else []), "corpus_id_sha256": digest(checked["corpus_id"]) if checked["corpus_id"] is not None else None, **native_output_limit_metadata(checked)},
         "metrics": {"elapsed_seconds": elapsed, "input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "total_tokens": usage["total_tokens"], "cost_usd": usage["cost_usd"], "tool_calls": tool_calls,
                     "controller_metadata_operations": metadata_count, "native_metadata_operations": "unknown"},
     }

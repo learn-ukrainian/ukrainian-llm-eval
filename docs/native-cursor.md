@@ -114,3 +114,17 @@ The shared runner reads only the runtime provisioning variable above.
 Receipts keep subscription authentication distinct from actual inference:
 `auth_path: "cli-login"` records the native route, and `api_key_source` must be
 positively attested as `login` by the native stream.
+
+## Explicit native output defaults (#67)
+
+For Grok, set the required `max_output_tokens` field to the exact string
+`"native-default"` to select the native runtime default in either condition.
+Positive integers remain accepted as numeric metadata and are not forwarded
+as output overrides. No token-limit switch is added. New preflight and run
+identities disclose the configured selection and mechanism; effective numeric
+ceilings remain unknown. The existing 2,000,000-byte stdout safety bound is
+reported separately as `capture_stdout_max_bytes`. Usage is never clamped to
+a configured integer and does not attest a per-request ceiling. See the
+[shared selection contract](running.md#native-output-limit-selection-67)
+for validation, failures and pairing. Historical captures do not renew proof
+for this runtime revision.
