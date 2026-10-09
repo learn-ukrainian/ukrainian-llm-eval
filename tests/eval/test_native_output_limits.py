@@ -61,11 +61,10 @@ def synthetic_runtime(tmp_path, monkeypatch):
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     captured = []
     monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "77777")
-    monkeypatch.setattr(adapters, "_managed_inventory", lambda: {})
+    monkeypatch.setattr(adapters, "_managed_inventory", dict)
     monkeypatch.setattr(adapters, "_mcp_list_tools", lambda *_: (copy.deepcopy(CATALOG), "d" * 64))
     def inherited_override(*_):
         adapters._ATTEMPT.get()["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "77777"
-        return None
 
     monkeypatch.setattr(adapters, "_provision_claude", inherited_override)
     monkeypatch.setattr(adapters, "_auth_integrity", lambda *_: contextlib.nullcontext())

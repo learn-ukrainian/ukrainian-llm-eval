@@ -6,9 +6,9 @@ AGY's hook and the parent MCP bridge independently limit reference calls.
 """
 from __future__ import annotations
 
-import hashlib
 import base64
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -171,7 +171,7 @@ def capture_native_artifacts(root: Path, log: Path, app_data: Path, evidence) ->
         # They are retained verbatim, never stripped, inlined or paired by order.
         result_texts = [row.get("content", "") for row in rows if row.get("type") in {"GENERIC", "MCP_TOOL"}
                         and isinstance(row.get("content"), str)]
-        for uri in set(uri for content in result_texts for uri in _POINTER.findall(content)):
+        for uri in {uri for content in result_texts for uri in _POINTER.findall(content)}:
             parsed = urllib.parse.urlsplit(uri)
             if parsed.netloc or parsed.query or parsed.fragment:
                 raise adapters.AdapterError("AGY native result pointer unsafe")
@@ -326,13 +326,12 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
         if prior is not None and _finish_completes(prior, step):
             steps[step["step_index"]] = {**prior, **step, "step_type": "finish"}
             continue
-        if prior is not None:
-            if (prior.get("state") == "DONE" or step.get("state") != "DONE"
-                    or any(prior.get(key) != step.get(key) for key in ("conversation_id", "step_type", "tool_name"))
-                    or prior.get("tool_info", {}).get("parameters") != step.get("tool_info", {}).get("parameters")
-                    or ("output" in prior.get("tool_info", {})
-                        and prior["tool_info"]["output"] != step.get("tool_info", {}).get("output"))):
-                raise adapters.AdapterError("AGY duplicate or conflicting native step")
+        if prior is not None and (prior.get("state") == "DONE" or step.get("state") != "DONE"
+                or any(prior.get(key) != step.get(key) for key in ("conversation_id", "step_type", "tool_name"))
+                or prior.get("tool_info", {}).get("parameters") != step.get("tool_info", {}).get("parameters")
+                or ("output" in prior.get("tool_info", {})
+                    and prior["tool_info"]["output"] != step.get("tool_info", {}).get("output"))):
+            raise adapters.AdapterError("AGY duplicate or conflicting native step")
         steps[step["step_index"]] = step
     if any(step.get("state") != "DONE" for step in steps.values()):
         raise adapters.AdapterError("AGY unfinished native step")

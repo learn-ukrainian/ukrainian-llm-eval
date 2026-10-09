@@ -33,7 +33,7 @@ def canonical(value: object) -> str:
 
 def normalized_catalog(tools: list[dict], configured: list[str]) -> list[dict]:
     if not isinstance(tools, list):
-        raise ValueError("MCP tool schema listing is invalid")
+        raise ValueError("MCP tool schema listing is invalid")  # noqa: TRY004
     indexed = {}
     for tool in tools:
         if (not isinstance(tool, dict) or not isinstance(tool.get("name"), str)

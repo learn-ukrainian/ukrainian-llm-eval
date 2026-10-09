@@ -1,13 +1,11 @@
 """Native context modifiers require matching terminal backend attestation."""
 
-from answer_first_fixtures import wire_responses
-
 import json
 import subprocess
 
-from native_validity_fixtures import staged_native_auth as staged_native_auth
-
 import pytest
+from answer_first_fixtures import wire_responses
+from native_validity_fixtures import staged_native_auth as staged_native_auth  # noqa: PLC0414
 
 from ukrainian_llm_eval import adapters
 

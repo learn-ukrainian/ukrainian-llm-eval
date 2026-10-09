@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from answer_first_fixtures import wire_responses
-
 import json
 import subprocess
 import threading
@@ -12,9 +10,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from native_validity_fixtures import staged_native_auth as staged_native_auth
-
 import pytest
+from answer_first_fixtures import wire_responses
+from native_validity_fixtures import staged_native_auth as staged_native_auth  # noqa: PLC0414
 
 from ukrainian_llm_eval import adapters, runner
 from ukrainian_llm_eval.core import prepare_exam

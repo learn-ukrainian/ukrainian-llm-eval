@@ -1,7 +1,5 @@
 """Native OpenCode controls using fake provider streams, never paid inference."""
 
-from answer_first_fixtures import wire_responses
-
 import copy
 import http.client
 import io
@@ -13,6 +11,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+from answer_first_fixtures import wire_responses
 
 from ukrainian_llm_eval import adapters
 from ukrainian_llm_eval import native_opencode as native

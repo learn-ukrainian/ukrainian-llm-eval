@@ -16,8 +16,8 @@ import json
 import math
 import os
 import re
-import signal
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -33,8 +33,10 @@ from pathlib import Path
 from typing import Any
 
 from .gec import GEC_PACKET_SCHEMA
+from .mcp_proxy import REFERENCE_TOOLS, normalized_catalog
+from .mcp_proxy import SMOKE_CATALOG_SHA256 as SMOKE_CATALOG_SHA256  # noqa: PLC0414
+from .mcp_proxy import SMOKE_TOOLS as SMOKE_TOOLS  # noqa: PLC0414
 from .mcp_proxy import physical_lines as _physical_lines
-from .mcp_proxy import REFERENCE_TOOLS, SMOKE_CATALOG_SHA256 as SMOKE_CATALOG_SHA256, SMOKE_TOOLS as SMOKE_TOOLS, normalized_catalog
 
 
 class AdapterError(ValueError):
@@ -67,7 +69,7 @@ def _private_directory_fd(path: Path, *, owner_only: bool = True) -> int:
             # A root-owned sticky temporary ancestor is a supported trust boundary.
             if st.st_mode & 0o022 and not (st.st_uid == 0 and st.st_mode & stat.S_ISVTX):
                 raise AdapterError("private directory ancestor writable")
-            if owner_only and index == len(path.parts) - 2:
+            if owner_only and index == len(path.parts) - 2:  # noqa: SIM102
                 if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
                     raise AdapterError("private directory must be current-user 0700")
         return fd
@@ -299,7 +301,7 @@ def _auth_capture(evidence):
     def record(kind, payload):
         if evidence is None:
             return
-        if kind in {"cli_result", "cli_timeout"} and isinstance(payload, dict):
+        if kind in {"cli_result", "cli_timeout"} and isinstance(payload, dict):  # noqa: SIM102
             if not _has_model_output(payload.get("stdout", "")):
                 payload = {"reason": "auth_unavailable" if _auth_failure(payload) else "pre_model_failure",
                            "returncode": payload.get("returncode"), "timeout": kind == "cli_timeout"}

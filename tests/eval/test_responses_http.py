@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from answer_first_fixtures import wire_responses
-
 import copy
 import json
 import threading
@@ -12,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from answer_first_fixtures import wire_responses
 
 from ukrainian_llm_eval import adapters, responses_http
 
