@@ -20,6 +20,37 @@ snapshot, and executes the copied Python interpreter and script directly.
 Arguments are not shell commands. Only explicitly named environment variables
 are passed; code-loading environment variables are rejected.
 
+### Copied CPython runtime binding
+
+For supported relocatable POSIX CPython installations, the runner exclusively
+creates a private `pyvenv.cfg` at the snapshot root with mode `0600`. Its `home`
+is the resolved parent of the declared executable, bound by device and inode to
+the file descriptor whose bytes were verified. Both CPython config readers must
+recover that exact UTF-8 home without line injection or whitespace ambiguity.
+The final config line is `include-system-site-packages = false`.
+
+The copied interpreter uses [CPython's own base-runtime search](https://github.com/python/cpython/blob/v3.12.14/Modules/getpath.py),
+including upward searches for its standard library. This locates runtime files;
+it does not authenticate them. Undeclared base and user site-packages, including
+their `.pth` startup code, are unavailable. Declared sibling dependencies remain
+in the copied script directory. No original executable is run, no ambient
+`PYTHONHOME` or `PYTHONPATH` is supplied, and the runner has no runtime fallback.
+
+Declared `pyvenv.cfg` and executable-basename `._pth` files are rejected, including
+casefold-equivalent names on a case-insensitive snapshot filesystem. Original
+neighboring or parent `pyvenv.cfg` files and executable `._pth` sidecars are also
+unsupported, including virtual-environment executables. An unrepresentable home
+is rejected before spawn; loader or standard-library failures remain bounded
+failures. This is not a universal portability guarantee.
+
+The command identity still hashes the same declared spec and bytes. Because
+runner behavior changes without changing `admission_command_sha256`, refresh
+native canary evidence before any new run relies on this binding. Historical
+score evidence and all attempts are retained. Retention does not establish
+current comparison eligibility: this runtime repair alone cannot certify
+comparability after the output-budget repair in #67. Refreshed semantic canaries
+and identical affected reruns must establish that separately.
+
 Each spec supplies time and stdin/stdout/stderr byte limits within defensive
 protocol ceilings. Timeout and output overflow kill the process group. Failure
 results contain normalized status, byte counts and hashes, with no raw streams.

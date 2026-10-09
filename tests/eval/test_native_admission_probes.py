@@ -572,8 +572,6 @@ def test_support_must_bind_real_reviewed_artifact_bytes(tmp_path):
 
 def test_complete_probe_from_verified_snapshot(tmp_path, monkeypatch):
     """Actual copied scripts/interpreter + fake native RPC, strict V2 output."""
-    import shutil
-
     from ukrainian_llm_eval.admission_command import invoke_admission
 
     account, usage, models = codex_values()
@@ -601,9 +599,7 @@ def test_complete_probe_from_verified_snapshot(tmp_path, monkeypatch):
           "byte_token_upper_bound_verified")}}
     input_path = tmp_path / "frozen-input.json"
     input_path.write_bytes(common.canonical(cfg))
-    executable = tmp_path / "python-runtime"
-    shutil.copyfile(sys.executable, executable)
-    executable.chmod(0o700)
+    executable = Path(sys.executable).resolve()
     files = [(executable, "executable"), (PROBES / "native_probe.py", "script"), (input_path, "runtime_lock"),
              (artifact, "dependency")]
     files.extend((PROBES / name, "dependency") for name in
@@ -744,9 +740,12 @@ def test_agy_owned_collection_reaps_and_rejects_drift(tmp_path, monkeypatch, dri
         def ports(self): return {("127.0.0.1", 12345)}
         def rpc(self, endpoint, method, body):
             state["calls"].append((method, body))
-            if method == "RetrieveUserQuotaSummary": return values[2]
-            if drift == "credential": (state["home"] / agy.AUTH_PATH).write_text("changed")
-            if drift == "runtime": Path(cfg["binary"]).write_text("changed")
+            if method == "RetrieveUserQuotaSummary":
+                return values[2]
+            if drift == "credential":
+                (state["home"] / agy.AUTH_PATH).write_text("changed")
+            if drift == "runtime":
+                Path(cfg["binary"]).write_text("changed")
             return values[1]
         def close(self): state["closed"] = True
     monkeypatch.setattr(agy, "OwnedNative", Child)

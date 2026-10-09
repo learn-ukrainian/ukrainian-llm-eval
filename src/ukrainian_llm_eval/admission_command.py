@@ -112,7 +112,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
         _reject("invalid_request")
 
 
-def _read_verified_file(path: str, expected_sha256: str) -> bytes:
+def _read_verified_file(path: str, expected_sha256: str) -> tuple[bytes, os.stat_result]:
     if not hasattr(os, "O_NOFOLLOW") or os.name != "posix":
         _reject("unsupported_runtime")
     try:
@@ -145,7 +145,7 @@ def _read_verified_file(path: str, expected_sha256: str) -> bytes:
         payload = b"".join(chunks)
         if hashlib.sha256(payload).hexdigest() != expected_sha256:
             _reject("identity_mismatch")
-        return payload
+        return payload, after
     finally:
         os.close(descriptor)
 
@@ -243,16 +243,78 @@ def _validate_shape(spec: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _load_declared_files(normalized: Mapping[str, object]) -> dict[str, bytes]:
+def _load_declared_files(normalized: Mapping[str, object]) -> tuple[dict[str, bytes], os.stat_result]:
     payloads: dict[str, bytes] = {}
     total = 0
+    executable_stat: os.stat_result | None = None
     for entry in normalized["declared_files"]:  # type: ignore[union-attr]
-        payload = _read_verified_file(entry["path"], entry["byte_sha256"])
+        payload, verified_stat = _read_verified_file(entry["path"], entry["byte_sha256"])
         total += len(payload)
         if total > _MAX_TOTAL_DECLARED_BYTES:
             _reject("identity_mismatch")
         payloads[entry["path"]] = payload
-    return payloads
+        if entry["role"] == "executable":
+            executable_stat = verified_stat
+    assert executable_stat is not None  # Required by _validate_shape.
+    return payloads, executable_stat
+
+
+def _runtime_config(normalized: Mapping[str, object], executable_stat: os.stat_result) -> bytes:
+    """Bind CPython base-runtime discovery to the captured executable's inode.
+
+    This locates, but does not authenticate, the undeclared base runtime. Both
+    config readers must interpret the generated UTF-8 home identically.
+    """
+    executable = normalized["argv"][0]  # type: ignore[index]
+    reserved = {"pyvenv.cfg", os.path.basename(executable) + "._pth"}
+    if any(os.path.basename(entry["path"]) in reserved for entry in normalized["declared_files"]):
+        _reject("unsupported_runtime")
+    try:
+        resolved = os.path.realpath(executable, strict=True)
+        resolved_stat = os.stat(resolved)
+    except (OSError, ValueError):
+        _reject("identity_mismatch")
+    if (resolved_stat.st_dev, resolved_stat.st_ino) != (executable_stat.st_dev, executable_stat.st_ino):
+        _reject("identity_mismatch")
+    home = os.path.dirname(resolved)
+    if any(character in home for character in "\r\n\x00") or home.strip() != home:
+        _reject("unsupported_runtime")
+    try:
+        config = f"home = {home}\ninclude-system-site-packages = false\n".encode("utf-8", errors="strict")
+    except UnicodeError:
+        _reject("unsupported_runtime")
+
+    # getpath stops at the first home; site reads to EOF and the last key wins.
+    getpath_home: str | None = None
+    for line in config.decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower() == "home":
+            getpath_home = value.strip()
+            break
+    site_values: dict[str, str] = {}
+    for line in config.decode("utf-8").split("\n"):
+        key, separator, value = line.partition("=")
+        if separator:
+            site_values[key.strip().lower()] = value.strip()
+    if getpath_home != home or site_values.get("home") != home or site_values.get("include-system-site-packages") != "false":
+        _reject("unsupported_runtime")
+
+    # Check both the declared and resolved layout: intermediate directory
+    # symlinks are allowed only when the resolved file is the verified inode.
+    sidecars: set[str] = set()
+    for path in (executable, resolved):
+        parent = os.path.dirname(path)
+        sidecars.update((os.path.join(parent, "pyvenv.cfg"),
+                         os.path.join(os.path.dirname(parent), "pyvenv.cfg"), path + "._pth"))
+    for path in sidecars:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _reject("unsupported_runtime")
+        _reject("unsupported_runtime")
+    return config
 
 
 def validate_command_spec(spec: Mapping[str, object]) -> dict[str, object]:
@@ -263,7 +325,8 @@ def validate_command_spec(spec: Mapping[str, object]) -> dict[str, object]:
     """
 
     normalized = _validate_shape(spec)
-    _load_declared_files(normalized)
+    _payloads, executable_stat = _load_declared_files(normalized)
+    _runtime_config(normalized, executable_stat)
     return normalized
 
 
@@ -280,7 +343,8 @@ def command_identity_sha256(spec: Mapping[str, object]) -> str:
     """
 
     normalized = _validate_shape(spec)
-    _load_declared_files(normalized)
+    _payloads, executable_stat = _load_declared_files(normalized)
+    _runtime_config(normalized, executable_stat)
     return _identity_from_normalized(normalized)
 
 
@@ -366,8 +430,22 @@ def _result(
 
 
 def _snapshot_command(
-    normalized: Mapping[str, object], payloads: Mapping[str, bytes], snapshot_dir: Path
+    normalized: Mapping[str, object], payloads: Mapping[str, bytes], snapshot_dir: Path,
+    executable_stat: os.stat_result,
 ) -> tuple[list[str], Path]:
+    config = _runtime_config(normalized, executable_stat)
+    config_path = snapshot_dir / "pyvenv.cfg"
+    descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(config)
+        handle.flush()
+        os.fsync(handle.fileno())
+    # Probe the destination filesystem using the exclusively created file;
+    # normcase alone does not detect case-insensitive POSIX filesystems.
+    if (snapshot_dir / "PYVENV.CFG").exists():
+        reserved = {"pyvenv.cfg", (os.path.basename(normalized["argv"][0]) + "._pth").casefold()}
+        if any(os.path.basename(path).casefold() in reserved for path in payloads):
+            _reject("unsupported_runtime")
     files_dir = snapshot_dir / "files"
     cwd = snapshot_dir / "cwd"
     files_dir.mkdir(mode=0o700)
@@ -404,7 +482,10 @@ def invoke_admission(spec: Mapping[str, object], request: Mapping[str, object]) 
 
     try:
         normalized = _validate_shape(spec)
-        payloads = _load_declared_files(normalized)
+        payloads, executable_stat = _load_declared_files(normalized)
+        # Refuse unsupported runtime homes before identity serialization can
+        # misclassify their non-UTF-8 paths as an invalid request.
+        _runtime_config(normalized, executable_stat)
         command_identity = _identity_from_normalized(normalized)
     except AdmissionCommandError as exc:
         return _result(exc.status)
@@ -430,7 +511,7 @@ def invoke_admission(spec: Mapping[str, object], request: Mapping[str, object]) 
         with tempfile.TemporaryDirectory(prefix="ukrainian-llm-eval-admission-") as temp_name:
             snapshot_dir = Path(temp_name)
             os.chmod(snapshot_dir, 0o700)
-            argv, cwd = _snapshot_command(normalized, payloads, snapshot_dir)
+            argv, cwd = _snapshot_command(normalized, payloads, snapshot_dir, executable_stat)
             try:
                 process = subprocess.Popen(
                     argv,
@@ -509,6 +590,8 @@ def invoke_admission(spec: Mapping[str, object], request: Mapping[str, object]) 
                 command_identity=command_identity,
                 stdout=bytes(stdout_capture.buffer),
             )
+    except AdmissionCommandError as exc:
+        return _result(exc.status, command_identity=command_identity)
     except OSError:
         if process is not None:
             _kill_process_group(process)

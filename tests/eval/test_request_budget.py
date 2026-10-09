@@ -1,9 +1,11 @@
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from test_admission_command import _command_spec, _fixture
 
-from ukrainian_llm_eval import adapters
+from ukrainian_llm_eval import adapters, admission_command, request_budget
 from ukrainian_llm_eval.admission_command import command_identity_sha256
 from ukrainian_llm_eval.core import ExamError, digest
 from ukrainian_llm_eval.evidence import EvidenceStore
@@ -204,6 +206,67 @@ def test_counter_time_is_charged_to_total_deadline_before_paid_transport(monkeyp
             prompt="Кандидатський запит", request_budget=budget,
         )
     assert budget.rounds == 1
+
+
+def test_real_counter_binds_exact_request_hash_semantics_count_and_empty_env(monkeypatch, tmp_path):
+    _route, _config, mechanism, _controller, budget = _values(tmp_path)
+    monkeypatch.setenv("PYTHONHOME", "/untrusted-runtime")
+    monkeypatch.setenv("PYTHONPATH", "/untrusted-imports")
+    popen = admission_command.subprocess.Popen
+    environments = []
+
+    def observe_spawn(*args, **kwargs):
+        environments.append(kwargs["env"])
+        return popen(*args, **kwargs)
+
+    monkeypatch.setattr(admission_command.subprocess, "Popen", observe_spawn)
+    invoke = request_budget.invoke_admission
+    results = []
+
+    def observe_counter(spec, payload):
+        result = invoke(spec, payload)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(request_budget, "invoke_admission", observe_counter)
+    payload = {"model": "fixture-model", "messages": [{"role": "user", "content": "exact bytes"}],
+               "max_tokens": 100}
+    raw, _commitment = budget.commit_request(payload)
+    assert environments == [{}]
+    assert len(results) == 1 and results[0]["status"] == "success"
+    counted = json.loads(results[0]["stdout"])
+    assert counted == {
+        "schema": COUNTER_RESULT_SCHEMA,
+        "request_sha256": hashlib.sha256(raw).hexdigest(),
+        "counter_semantics_sha256": mechanism["counter_semantics_sha256"],
+        "input_tokens": len(raw),
+    }
+    assert budget.rounds == 1
+
+
+@pytest.mark.parametrize("field", ["schema", "request_sha256", "counter_semantics_sha256"])
+def test_wrong_real_counter_evidence_rejects_before_transport(monkeypatch, tmp_path, field):
+    counter = _counter
+
+    def wrong_counter(path):
+        spec, semantics = counter(path)
+        script = Path(spec["argv"][1])
+        # Use the existing real counter source, then corrupt exactly one field.
+        prefix, expression = script.read_text(encoding="utf-8").split("print(json.dumps(", 1)
+        expression = expression.removesuffix("))\n")
+        script.write_text(prefix + "result = " + expression + "\n"
+                          + f"result[{field!r}] = 'wrong'\nprint(json.dumps(result))\n", encoding="utf-8")
+        spec["declared_files"][1]["byte_sha256"] = hashlib.sha256(script.read_bytes()).hexdigest()
+        return spec, semantics
+
+    monkeypatch.setattr(__name__ + "._counter", wrong_counter)
+    _route, config, _mechanism, _controller, budget = _values(tmp_path)
+    monkeypatch.setenv("FIXTURE_ENDPOINT", "https://provider.invalid/chat")
+    monkeypatch.setattr(adapters, "_http_json", lambda *_a, **_k: pytest.fail("invalid counter reached transport"))
+    with pytest.raises(RequestBudgetError, match="counter"):
+        adapters.run_chat_http(_packet(), config, "closed-book", sources_url=None,
+                               prompt="fixture prompt", request_budget=budget)
+    assert budget.rounds == 0
 
 
 def test_second_round_is_rejected_before_transport_when_cumulative_history_exceeds_input_cap(tmp_path):
