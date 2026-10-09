@@ -188,6 +188,34 @@ def test_native_finish_matches_hook_payload():
         native.parse_events(serialize(events()), packet(), config(), hooks, [])
 
 
+def finish_pair(sources=False, active_changes=None, done_changes=None):
+    # CLI 1.3.2 shape: the finish step appears as ACTIVE tool finish, then DONE finish, at one step_index.
+    value = events(sources)
+    index = value[-2]["step_update"]["step_index"]
+    active = {"conversation_id": "session", "step_index": index, "state": "ACTIVE", "step_type": "tool", "tool_name": "finish",
+              "tool_info": {"name": "finish", "parameters": json.dumps(wire_responses({"q1": "A"}))}, **(active_changes or {})}
+    done = {"conversation_id": "session", "step_index": index, "state": "DONE", "step_type": "finish",
+            "duration_seconds": 0.06, **(done_changes or {})}
+    value[-2:-1] = [{"event": "step_update", "step_update": active}, {"event": "step_update", "step_update": done}]
+    return value
+
+
+@pytest.mark.parametrize("sources", [False, True])
+def test_cli_1_3_2_finish_transition_is_accepted(sources):
+    result = native.parse_events(serialize(finish_pair(sources)), packet(), config(), hook_receipts(sources), call_receipts(sources))
+    assert result["responses"] == {"q1": "A"} and result["metrics"]["tool_calls"] == int(sources)
+
+
+@pytest.mark.parametrize("value", [
+    finish_pair(done_changes={"conversation_id": "other"}),
+    finish_pair(active_changes={"tool_name": "call_mcp_tool", "tool_info": {"name": "call_mcp_tool"}}),
+    finish_pair(active_changes={"state": "DONE"}),
+], ids=["done-other-conversation", "active-other-tool", "done-then-done"])
+def test_cli_1_3_2_finish_transition_rejects_other_conflicts(value):
+    with pytest.raises(adapters.AdapterError, match="duplicate or conflicting"):
+        native.parse_events(serialize(value), packet(), config(), hook_receipts(), [])
+
+
 def test_native_runner_copies_only_credentials_and_one_prompt(monkeypatch, tmp_path):
     root = provision(tmp_path)
     (root / "untrusted-settings.json").write_text("DO NOT IMPORT")
