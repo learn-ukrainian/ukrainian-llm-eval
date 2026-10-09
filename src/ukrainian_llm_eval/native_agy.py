@@ -153,10 +153,11 @@ def capture_native_artifacts(root: Path, log: Path, app_data: Path, evidence) ->
 
     try:
         raw_log = retain(log, "log")
-        identities = _CONVERSATION.findall(raw_log.decode("utf-8", errors="strict"))
+        # CLI 1.3.2 repeats the bound identity on several log lines; only distinct identities are ambiguous.
+        identities = set(_CONVERSATION.findall(raw_log.decode("utf-8", errors="strict")))
         if len(identities) != 1:
             raise adapters.AdapterError("AGY native conversation binding missing or ambiguous")
-        session = identities[0]
+        session = identities.pop()
         conversation = app_data / "brain" / session
         transcript = conversation / ".system_generated/logs/transcript.jsonl"
         raw = retain(transcript, "transcript")

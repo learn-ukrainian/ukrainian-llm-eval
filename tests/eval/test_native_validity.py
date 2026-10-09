@@ -480,7 +480,7 @@ def test_agy_artifacts_fail_closed_and_preserve_available_diagnostics(failure):
         if failure == "missing-log":
             log.unlink()
         elif failure == "duplicate-conversation":
-            log.write_text(log.read_text()*2)
+            log.write_text(log.read_text() + "Created conversation 00000000-0000-0000-0000-000000000003\n")
         elif failure == "wrong-conversation":
             log.write_text("Created conversation 00000000-0000-0000-0000-000000000002\n")
         elif failure == "missing-transcript":
@@ -503,6 +503,27 @@ def test_agy_artifacts_fail_closed_and_preserve_available_diagnostics(failure):
             native_agy.capture_native_artifacts(root,log,app_data,lambda *record:records.append(record))
         assert records[-1][0] == "agy_native_capture_failure"
     assert all("raw_base64" not in payload or payload["kind"] in {"log","transcript"} for _kind,payload in records)
+
+
+def test_agy_cli_1_3_2_repeated_conversation_identity_is_bound():
+    # Line shapes mirror CLI 1.3.2 logs: one conversation identity repeated across several log lines.
+    session = "00000000-0000-0000-0000-000000000004"
+    records = []
+    with adapters._native_attempt() as attempt:
+        root, log, app_data, _session = capture_fixture(attempt)
+        emit_agy_capture(root, session)
+        log.write_text("Created conversation " + session + "\n"
+                       "GetConversationDetail: found conversation " + session + " (active=true)\n"
+                       "Forwarding user message to conversation " + session + " (items=1, media=0)\n"
+                       "GetConversationDetail: found conversation " + session + " (active=true)\n")
+        transcript = app_data / "brain" / session / ".system_generated/logs/transcript.jsonl"
+        rows = [{"step_index": 0, "source": "USER", "type": "USER_INPUT", "status": "DONE", "created_at": "2026-10-09T20:12:18Z", "content": "trivial"},
+                {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": "2026-10-09T20:12:20Z",
+                 "input_tokens": 3, "cache_read_tokens": 0, "output_tokens": 1, "content": "OK"}]
+        write_private(transcript, ("\n".join(json.dumps(row) for row in rows) + "\n").encode())
+        assert native_agy.capture_native_artifacts(root, log, app_data, lambda *record: records.append(record)) == session
+    assert [payload["kind"] for kind, payload in records if kind == "agy_native_artifact"] == ["log", "transcript"]
+    assert records[-1][0] == "agy_native_capture"
 
 
 def test_agy_missing_inline_result_remains_failed_even_with_capture():
