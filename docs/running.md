@@ -705,7 +705,7 @@ success. Actual fresh-HOME inference still needs authorized native smoke.
 For the frozen five-tool treatment, the common configured order is verify_words,
 verify_stress, query_pravopys, search_style_guide, search_text. All executing
 layers compare the filtered upstream catalog with canonical SHA-256
-`702240cdf17e9e2f7a11ba51f3ee07cce2ff5e1e6eb94e823ca7fb116bdfe9b7`;
+`63cb16b7233e298814b0dc5a85e6f27cc27c7b6fd112123a48c365ab11a4fba3`;
 drift fails instead of re-freezing a cell. Smoke's explicit checklist stays opt-in
 through `smoke_intent`; ordinary study prompts acquire no forced five calls.
 Metadata and content counters are independent (eight and twenty), with the same

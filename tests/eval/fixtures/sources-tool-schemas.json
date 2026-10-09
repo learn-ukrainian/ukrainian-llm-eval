@@ -1,6 +1,10 @@
 [
   {
-    "name": "search_text",
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": true
+    },
+    "description": "FTS5 keyword search across Ukrainian school textbooks. Returns relevant text chunks with metadata (section, source, grade, author, subject).",
     "inputSchema": {
       "properties": {
         "query": {
@@ -60,10 +64,15 @@
         "query"
       ],
       "type": "object"
-    }
+    },
+    "name": "search_text"
   },
   {
-    "name": "verify_words",
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Batch-verify multiple Ukrainian word forms against VESUM in a single call. Much faster than multiple verify_word calls — one SQL query instead of N round-trips. Returns per-word results: found/not-found with lemma, POS, and tags.",
     "inputSchema": {
       "properties": {
         "words": {
@@ -82,10 +91,15 @@
         "words"
       ],
       "type": "object"
-    }
+    },
+    "name": "verify_words"
   },
   {
-    "name": "verify_stress",
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Stress oracle: look up the stressed form + stressed-vowel index for a Ukrainian word from homonym-checked ULIF per-form rows first, then a labelled offline trie fallback, with exact-form overrides applied and a VESUM identity join. Duals retain both variants and the teaching choice. vowel_index is the 0-based codepoint index of the stressed vowel in the NFC-normalized unstressed form (same convention as generate_practice_deck.py / PracticeStress.tsx). status is 'ok' (agreeing readings), 'ambiguous' (pass lemma/pos/tags to disambiguate; see each match's tags and evidence), 'pending' (no trusted reading), or 'invalid_input' (empty/multi-word/non-Cyrillic/single-syllable). The text channel is a one-line summary; the structured result keeps the full oracle payload.",
     "inputSchema": {
       "properties": {
         "word": {
@@ -109,10 +123,15 @@
         "word"
       ],
       "type": "object"
-    }
+    },
+    "name": "verify_stress"
   },
   {
-    "name": "query_pravopys",
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Look up Ukrainian orthography rules in the official 2019 Pravopys (authorized edition, Наукова думка 2019), answered offline from sources.db with a § locator; an unofficial live site is used only when the offline copy is missing. Query by topic keyword (e.g., 'апостроф', 'м’який знак', 'у-в', 'кличний відмінок') or by § number (1-168).",
     "inputSchema": {
       "properties": {
         "topic": {
@@ -124,10 +143,15 @@
         "topic"
       ],
       "type": "object"
-    }
+    },
+    "name": "query_pravopys"
   },
   {
-    "name": "search_style_guide",
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Search Антоненко-Давидович «Як ми говоримо» style guide. Coverage: 279 of estimated 600+ discussion items (~46% indexed). Identifies calques, Russianisms, and unnatural Ukrainian phrasing. HIGH PRIORITY for quality — use when unsure if a phrase is natural Ukrainian or a Russian calque. Query in Ukrainian (e.g., 'приймати участь', 'вірний'). **Absence of result is NOT evidence of absence in source** — 54% of canonical entries are unindexed. For full coverage, Tier 2 escalate to https://www.ukrlib.com.ua/books/printit.php?tid=4002. Issue: #1663.",
     "inputSchema": {
       "properties": {
         "query": {
@@ -144,6 +168,7 @@
         "query"
       ],
       "type": "object"
-    }
+    },
+    "name": "search_style_guide"
   }
 ]
