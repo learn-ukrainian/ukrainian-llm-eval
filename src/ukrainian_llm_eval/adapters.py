@@ -315,6 +315,8 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         available = {str(item.get("name", "")) for item in tools}
         if not expected.issubset(available):
             raise AdapterError("Sources MCP does not expose configured tools")
+        tools = _reference_catalog(tools, checked["tools"])
+        capability["reference_catalog"] = tools
         capability["tool_schema_sha256"] = digest(tools)
         capability["mcp_server_identity_sha256"] = identity
     else:
@@ -324,7 +326,8 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
 
 
 def build_prompt(
-    packet: Mapping[str, Any], condition: str, *, max_tool_calls: int | None = None
+    packet: Mapping[str, Any], condition: str, *, max_tool_calls: int | None = None,
+    reference_catalog: list[dict[str, Any]] | None = None,
 ) -> str:
     """Create the shared, gold-free prompt used by each fresh trial."""
     if condition == "closed-book":
@@ -352,8 +355,7 @@ def build_prompt(
         task = (
             "You are performing Ukrainian grammatical-error correction. For every opaque item id, return exactly one "
             "corrected Ukrainian sentence while preserving the original meaning. If no correction is needed, return "
-            "the original sentence unchanged. Do not explain or annotate edits. "
-            "Return only JSON matching the response schema: {\"responses\":{\"id\": string | null}}. "
+            "the original sentence unchanged. Do not annotate edits in the answer field. "
         )
         packet_label = "SENTENCE PACKET:"
     else:
@@ -362,11 +364,25 @@ def build_prompt(
             "For single-choice items, respond with exactly one listed option id. "
             "For matching items, map every row id to a listed option id. "
             "Never return free-form counts, prose, or values that are not option ids. "
-            "Do not explain your reasoning. Return only JSON matching the response schema: "
-            "{\"responses\":{\"id\": string | object | null}}. "
         )
         packet_label = "QUESTION PACKET (contains no answers or scoring key):"
-    return task + policy + "\n\n" + packet_label + "\n" + canonical(packet)
+    contract = (
+        'Return only JSON: {"responses":{"id":{"answer":<answer or null>,"explanation":<string>}}}. '
+        'For each item, give the final answer FIRST in "answer", then a short explanation of why in '
+        'the separate "explanation" field, citing Sources if used. The explanation must be nonblank. '
+        'Do not provide a chain of thought. Only answers are scored; explanations are unscored review evidence. '
+        'Use exactly the packet IDs and exactly these two fields in this order. '
+    )
+    catalog_text = ""
+    if condition == "sources" and reference_catalog is not None:
+        policy += (
+            " Exercise every tool in the supplied reference catalog with schema-valid arguments before answering. "
+            "Use the runtime's reference dispatcher with the listed tool name and arguments; where required, "
+            "provide Sources server selection and native tool metadata. No filesystem schema lookup is needed."
+        )
+        catalog_text = "\n\nTRUSTED REFERENCE CATALOG:\n" + canonical(reference_catalog)
+    return (task + contract + policy + catalog_text + "\n\nRESPONSE SCHEMA:\n" + canonical(response_schema(packet))
+            + "\n\n" + packet_label + "\n" + canonical(packet))
 
 
 def _mcq_option_ids(item: Mapping[str, Any]) -> list[str]:
@@ -404,7 +420,7 @@ def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
                     "type": "object",
                     "additionalProperties": False,
                     "required": ids,
-                    "properties": answers,
+                    "properties": _answer_envelope_schemas(answers),
                 }
             },
         }
@@ -436,10 +452,43 @@ def response_schema(packet: Mapping[str, Any]) -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "required": ids,
-                "properties": answers,
+                "properties": _answer_envelope_schemas(answers),
             }
         },
     }
+
+
+def _answer_envelope_schemas(answers: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        item_id: {"type": "object", "additionalProperties": False,
+                  "required": ["answer", "explanation"],
+                  "properties": {"answer": answer, "explanation": {"type": "string", "pattern": r"\S"}}}
+        for item_id, answer in answers.items()
+    }
+
+
+def _reference_catalog(tools: list[dict[str, Any]], configured: list[str]) -> list[dict[str, Any]]:
+    """Bind the configured ordered subset of the actual preflight listing."""
+    if not isinstance(tools, list):
+        raise AdapterError("MCP tool schema listing is invalid")
+    indexed = {}
+    for tool in tools:
+        if (not isinstance(tool, Mapping) or not isinstance(tool.get("name"), str)
+                or not isinstance(tool.get("inputSchema"), Mapping) or tool["name"] in indexed):
+            raise AdapterError("MCP tool schema is invalid or duplicated")
+        indexed[tool["name"]] = dict(tool)
+    if not set(configured) <= indexed.keys():
+        raise AdapterError("Sources MCP does not expose configured tools")
+    return [indexed[name] for name in configured]
+
+
+def prompt_reference_catalog(config: Mapping[str, Any], condition: str, sources_url: str | None) -> list[dict[str, Any]]:
+    """Use the same filtered listing for admission prompt-size estimates."""
+    if condition == "closed-book" or (condition == "sources" and not config["tools"]):
+        return []
+    _condition_policy(config, condition, sources_url)
+    tools, _identity = _mcp_list_tools(str(sources_url), config["timeout_seconds"])
+    return _reference_catalog(tools, config["tools"])
 
 
 def _child_env(max_output_tokens: int) -> dict[str, str]:
@@ -568,7 +617,7 @@ def _mcp_list_tools(url: str, timeout: int) -> tuple[list[dict[str, Any]], str |
     for tool in tools:
         if not isinstance(tool, Mapping) or not isinstance(tool.get("name"), str) or not isinstance(tool.get("inputSchema"), Mapping):
             raise AdapterError("MCP tool schema is invalid")
-        normalized.append({"name": tool["name"], "inputSchema": dict(tool["inputSchema"])})
+        normalized.append(dict(tool))
     identity = None
     if _SERVER_IDENTITY_TOOL in {tool["name"] for tool in normalized}:
         try:
@@ -656,6 +705,34 @@ def _extract_responses(value: Any, packet: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _extract_enveloped_responses(
+    value: Any, packet: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, str], dict[str, list[str]]]:
+    """Parse wire envelopes, leaving the saved flat-map validator untouched.
+
+    Strings are decoded with ordered key pairs and duplicate rejection. Native
+    event callers must pass objects directly from that same strict raw decoder,
+    before any canonical serialization. Explanations are never normalized.
+    """
+    if isinstance(value, str):
+        value = _strict_json_loads(value)
+    if not isinstance(value, Mapping) or set(value) != {"responses"} or not isinstance(value["responses"], Mapping):
+        raise AdapterError("provider response schema mismatch")
+    answers, explanations, order = {}, {}, {}
+    for item_id, envelope in value["responses"].items():
+        if not isinstance(envelope, Mapping) or set(envelope) != {"answer", "explanation"}:
+            raise AdapterError("provider response envelope fields mismatch")
+        explanation = envelope["explanation"]
+        if not isinstance(explanation, str) or not explanation.strip():
+            raise AdapterError("provider response explanation is blank or invalid")
+        order[item_id] = list(envelope)
+        if order[item_id] != ["answer", "explanation"]:
+            raise AdapterError("provider response field order mismatch")
+        answers[item_id] = envelope["answer"]
+        explanations[item_id] = explanation
+    return _extract_responses({"responses": answers}, packet), explanations, order
+
+
 def _claude_context_model_mapping(stdout: str) -> dict[str, str]:
     """Resolve a context selector only when native terminal metadata attests it."""
     events = [_strict_json_loads(line) for line in stdout.splitlines()]
@@ -686,6 +763,7 @@ def _parse_stream_json(
 ) -> tuple[dict[str, Any], str, int, dict[str, int | float | None]]:
     result_text: str | None = None
     structured_output: Mapping[str, Any] | None = None
+    submissions: list[Any] = []
     observed_models: set[str] = set()
     observed_tools: list[str] = []
     init_seen = False
@@ -699,6 +777,8 @@ def _parse_stream_json(
             raise AdapterError("CLI emitted invalid stream event")
         structured = event.get("structured_output")
         if isinstance(structured, Mapping):
+            if event.get("type") != "result" or structured_output is not None:
+                raise AdapterError("CLI structured result evidence is duplicated or misplaced")
             structured_output = structured
         model = event.get("model")
         if model is None and isinstance(event.get("message"), Mapping):
@@ -725,6 +805,7 @@ def _parse_stream_json(
                     if not isinstance(name, str):
                         raise AdapterError("CLI emitted malformed tool call")
                     if name == "StructuredOutput":
+                        submissions.append(block.get("input"))
                         continue
                     observed_tools.append(name)
         if event.get("type") == "tool_use":
@@ -732,6 +813,7 @@ def _parse_stream_json(
             if not isinstance(name, str):
                 raise AdapterError("CLI emitted malformed tool call")
             if name == "StructuredOutput":
+                submissions.append(event.get("input"))
                 continue
             observed_tools.append(name)
         if event.get("type") == "result" and isinstance(event.get("result"), str):
@@ -767,7 +849,13 @@ def _parse_stream_json(
             if packet.get("schema") == GEC_PACKET_SCHEMA:
                 raise
             raise AdapterError("CLI response is not JSON") from exc
-    return _extract_responses(payload, packet), next(iter(observed_models), "unknown"), len(observed_tools), usage
+    # Both objects still carry raw stream key order from _strict_json_loads.
+    if structured_output is None or len(submissions) != 1:
+        raise AdapterError("CLI StructuredOutput input evidence missing or duplicated")
+    parsed = _extract_enveloped_responses(payload, packet)
+    if _extract_enveloped_responses(submissions[0], packet) != parsed:
+        raise AdapterError("CLI StructuredOutput and result evidence disagree")
+    return parsed[0], next(iter(observed_models), "unknown"), len(observed_tools), usage
 
 
 def _claude_session_identity(stdout: str) -> str:
@@ -801,6 +889,8 @@ def _nonnegative_number(value: Any) -> int | float | None:
 def _run_claude_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int, evidence: Callable[[str, Any], None] | None = None) -> subprocess.CompletedProcess[str]:
     """Kill the whole CLI process group so an MCP proxy cannot survive a timeout."""
     try:
+        if evidence is not None:
+            evidence("candidate_submission", {"stdin": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
         process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         stdout, stderr = process.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
@@ -819,7 +909,7 @@ def _run_claude_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], p
     return subprocess.CompletedProcess(argv, process.returncode, stdout=stdout, stderr=stderr)
 
 
-def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
+def run_claude(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, reference_catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Run one fresh restricted Claude CLI session and return sanitized evidence."""
     checked = validate_config(config)
     if checked["adapter"] != "claude":
@@ -1047,7 +1137,7 @@ def run_chat_http(packet: Mapping[str, Any], config: Mapping[str, Any], conditio
             if not isinstance(content, str):
                 raise AdapterError("HTTP completion content invalid")
             try:
-                responses = _extract_responses(_strict_json_loads(content), packet)
+                responses = _extract_enveloped_responses(content, packet)[0]
             except AdapterError as exc:
                 if packet.get("schema") == GEC_PACKET_SCHEMA:
                     raise

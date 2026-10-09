@@ -32,7 +32,11 @@ def test_catalog_preserves_identity_instructions_and_efforts():
 
 
 @pytest.mark.parametrize("closed", [True, False])
-def test_reference_policy_disables_goals_in_both_conditions(tmp_path, closed):
+def test_reference_policy_disables_goals_in_both_conditions(tmp_path, closed, monkeypatch):
+    bridge = tmp_path / "synthetic-bridge"
+    bridge.write_text("fixture")
+    bridge.chmod(0o700)
+    monkeypatch.setattr(adapter, "bridge_command", lambda: bridge)
     overrides = () if closed else adapter.reference_overrides(tmp_path / "reference.json", ["verify_word"])
     argv = codex_catalog.build_argv(
         "codex-fixture", model="gpt-6.1-sol", effort="high", response_schema_path=tmp_path / "schema.json",
@@ -141,6 +145,10 @@ def test_missing_duplicate_and_paginated_schemas_rejected(upstream, monkeypatch)
 
 
 def _native_fixture(tmp_path, monkeypatch):
+    bridge = tmp_path / "synthetic-bridge"
+    bridge.write_text("fixture")
+    bridge.chmod(0o700)
+    monkeypatch.setattr(adapter, "bridge_command", lambda: bridge)
     from test_native_codex import _config, _probe
 
     config = native_codex.validate_config(_config(model="gpt-6-astra", effort="low", tools=["verify_word"],
@@ -272,7 +280,7 @@ def test_empty_closed_book_surface_and_extra_descriptor_rejection():
     assert surface_matches(summary, ["verify_word"], False)
 
 
-@pytest.mark.parametrize("answer", ['{"responses":{"opaque-1":"A"}}', 'Malformed final answer'])
+@pytest.mark.parametrize("answer", ['{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}', 'Malformed final answer'])
 def test_explicit_final_output_preserves_commentary_and_strict_answer_validation(answer):
     from test_native_codex import _packet
 
@@ -289,6 +297,6 @@ def test_explicit_final_output_preserves_commentary_and_strict_answer_validation
         assert parsed.responses == {"opaque-1": "A"} and parsed.answer_failure_reason is None
     else:
         assert parsed.responses is None and parsed.answer_failure_reason == "provider JSON is invalid"
-    for mismatched in ("", '{"responses":{"opaque-1":"B"}}', "Checking the reference."):
+    for mismatched in ("", '{"responses":{"opaque-1":{"answer":"B","explanation":"Fixture evidence."}}}', "Checking the reference."):
         with pytest.raises(native_codex.CodexAdapterError, match="final output disagrees"):
             adapter.parse_events(raw, _packet(), [], [], final_message=mismatched)

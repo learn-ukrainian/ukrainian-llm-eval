@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from .adapters import AdapterError, _condition_policy, build_prompt
+from .adapters import AdapterError, _condition_policy, build_prompt, prompt_reference_catalog
 from .admission import admission_composite_sha256, build_admission_request, verify_admission_evidence
 from .core import ExamError, digest, read_json
 from .evidence import EvidenceStore
@@ -125,7 +125,7 @@ def check_research(packets, segment_plans, manifest, plan, configs, root: Path, 
                        "candidate_attempt_id": scheduled["attempt_id"], "cell_id": cell["cell_id"],
                        "segment_id": segment_id, "segment_packet_sha256": segment["packet_sha256"],
                        "config_sha256": digest(config), "condition": cell["condition"]}
-            size = len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"]).encode())
+            size = len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"], reference_catalog=prompt_reference_catalog(config, cell["condition"], route_sources)).encode())
             bindings.append(binding)
             if largest is None or size > largest[0]:
                 largest = (size, binding, scheduled["reserved_micro_usd"])

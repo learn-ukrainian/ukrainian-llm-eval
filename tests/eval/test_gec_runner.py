@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from answer_first_fixtures import wire_responses
+
 import json
 from pathlib import Path
 from typing import Any
@@ -138,7 +140,7 @@ def test_gec_http_transport_returns_strings_or_null_and_uses_gec_schema(
                 {
                     "message": {
                         "content": json.dumps(
-                            {"responses": {"q0001": "Виправлене речення.", "q0002": None, "q0003": "Ще один приклад ."}}
+                            wire_responses({"q0001": "Виправлене речення.", "q0002": None, "q0003": "Ще один приклад ."})
                         )
                     }
                 }
@@ -157,8 +159,8 @@ def test_gec_http_transport_returns_strings_or_null_and_uses_gec_schema(
     response_format = captured["payload"]["response_format"]["json_schema"]
     assert response_format["name"] == "ua_gec_responses"
     q0001 = response_format["schema"]["properties"]["responses"]["properties"]["q0001"]
-    assert q0001["anyOf"][0]["type"] == "string"
-    assert q0001["anyOf"][0]["pattern"] == "^[^\\r\\n\\u0085\\u2028\\u2029]+$"
+    assert q0001["properties"]["answer"]["anyOf"][0]["type"] == "string"
+    assert q0001["properties"]["answer"]["anyOf"][0]["pattern"] == "^[^\\r\\n\\u0085\\u2028\\u2029]+$"
 
 
 @pytest.mark.parametrize(
@@ -184,7 +186,7 @@ def test_gec_malformed_http_values_preserve_raw_response_before_rejection(
             {
                 "message": {
                     "content": json.dumps(
-                        {"responses": {"q0001": malformed, "q0002": None, "q0003": "Валідне речення."}}
+                        wire_responses({"q0001": malformed, "q0002": None, "q0003": "Валідне речення."})
                     )
                 }
             }
@@ -294,7 +296,7 @@ def test_gec_packet_cannot_carry_a_grading_key_and_mcq_schema_stays_unchanged() 
     }
     mcq_packet, _private_key = prepare_exam(exam)
     assert runner._run_schema(mcq_packet) == "zno-nmt.run.v1"
-    assert adapters.response_schema(mcq_packet)["properties"]["responses"]["properties"]["q0001"]["anyOf"][0] == {
+    assert adapters.response_schema(mcq_packet)["properties"]["responses"]["properties"]["q0001"]["properties"]["answer"]["anyOf"][0] == {
         "type": "string",
         "enum": ["A"],
     }
@@ -304,7 +306,8 @@ def test_gec_pair_resume_retains_interrupted_trial_and_never_repeats_completed_c
     from ukrainian_llm_eval import scheduling
     from ukrainian_llm_eval.evidence import EvidenceStore
 
-    capability = {"tool_schema_sha256": "a" * 64, "mcp_server_identity_sha256": None}
+    capability = {"tool_schema_sha256": "a" * 64, "mcp_server_identity_sha256": None,
+                  "reference_catalog": [{"name": "verify_word", "inputSchema": {"type": "object"}}]}
     monkeypatch.setattr(runner, "preflight", lambda *args, **kwargs: capability)
     monkeypatch.setattr(scheduling, "preflight", lambda *args, **kwargs: capability)
     calls = []

@@ -991,7 +991,7 @@ def _parse_stream_envelope(
             answer_content=answer_content,
         )
     try:
-        responses = adapters._extract_responses(payload, packet)
+        responses = adapters._extract_enveloped_responses(payload, packet)[0]
     except adapters.AdapterError:
         return _ParsedKimiStream(
             responses=None,

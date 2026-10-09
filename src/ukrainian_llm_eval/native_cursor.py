@@ -372,7 +372,9 @@ def preflight_cursor(
     )
     if condition == "sources" and not set(checked["tools"]) <= {tool["name"] for tool in tools}:
         raise _fail("Sources MCP does not expose configured tools")
+    tools = adapters._reference_catalog(tools, checked["tools"]) if condition == "sources" else []
     return {
+        "reference_catalog": tools,
         "schema": CURSOR_CAPABILITY_SCHEMA,
         "adapter": CURSOR_ADAPTER,
         "condition": condition,
@@ -505,6 +507,8 @@ def _run_cursor_process(
     evidence: Callable[[str, Any], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
+        if evidence is not None:
+            evidence("candidate_submission", {"stdin": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
         process = subprocess.Popen(
             argv,
             cwd=str(cwd),
@@ -704,8 +708,7 @@ def _check_session(event: Mapping[str, Any], session_id: str) -> None:
 
 def _parse_answer_payload(content: str, packet: Mapping[str, Any]) -> dict[str, Any] | None:
     try:
-        parsed = adapters._strict_json_loads(content)
-        return adapters._extract_responses(parsed, packet)
+        return adapters._extract_enveloped_responses(content, packet)[0]
     except adapters.AdapterError:
         return None
 
@@ -732,6 +735,7 @@ def _parse_stream_envelope(
     }
     saw_init = False
     saw_result = False
+    result_content: str | None = None
     for line in stdout.splitlines():
         if not line.strip():
             continue
@@ -831,6 +835,7 @@ def _parse_stream_envelope(
             if "result" not in event or not isinstance(event.get("result"), str):
                 raise _fail("CLI stream envelope incomplete")
             saw_result = True
+            result_content = event["result"]
             raw_usage = event.get("usage")
             if isinstance(raw_usage, Mapping):
                 usage["input_tokens"] = _usage_number(raw_usage.get("inputTokens", raw_usage.get("input_tokens")))
@@ -839,8 +844,8 @@ def _parse_stream_envelope(
                 if total is None and usage["input_tokens"] is not None and usage["output_tokens"] is not None:
                     total = usage["input_tokens"] + usage["output_tokens"]
                 usage["total_tokens"] = _usage_number(total)
-            # Do not use concatenated result text as the answer; prefer the final
-            # assistant segment after tools (Cursor result is all segments joined).
+            # Retain the native terminal text as the presentation authority.
+            # Progress concatenated into this text is not a valid envelope.
             continue
         if event_type is not None:
             # Unknown event types are ignored only after session check when they carry one.
@@ -851,7 +856,7 @@ def _parse_stream_envelope(
         raise _fail("CLI stream envelope incomplete")
     if not allowed_tools and tool_calls:
         raise _fail(_TOOL_POLICY_ERROR)
-    answer_content = answer_segments[-1] if answer_segments else None
+    answer_content = result_content
     responses = None
     answer_failure_reason = None
     if answer_content is None:
@@ -860,6 +865,16 @@ def _parse_stream_envelope(
         responses = _parse_answer_payload(answer_content, packet)
         if responses is None:
             answer_failure_reason = CANDIDATE_RESPONSE_ERROR
+        elif answer_segments:
+            try:
+                terminal = adapters._extract_enveloped_responses(answer_content, packet)
+                assistant = adapters._extract_enveloped_responses(answer_segments[-1], packet)
+            except adapters.AdapterError:
+                responses = None
+                answer_failure_reason = CANDIDATE_RESPONSE_ERROR
+            else:
+                if terminal != assistant:
+                    raise _fail("CLI assistant and result evidence disagree")
     return _ParsedCursorStream(
         responses=responses,
         session_id=session_id,
@@ -925,6 +940,7 @@ def run_cursor(
     sources_url: str | None = None,
     prompt: str,
     evidence: Callable[[str, Any], None] | None = None,
+    reference_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     options = validate_options(config)
     checked = options.config

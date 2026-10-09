@@ -56,7 +56,7 @@ def _config(binary: str, **extra: Any) -> dict[str, Any]:
 def _fixture_cli(tmp_path: Path, *, stream: list[dict[str, Any]] | None = None) -> Path:
     output = stream or [
         {"role": "meta", "type": "system.version", "version": "0.41.0"},
-        {"role": "assistant", "content": '{"responses":{"opaque-1":"A"}}'},
+        {"role": "assistant", "content": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'},
         {"role": "meta", "type": "session.resume_hint", "session_id": "fixture-session"},
     ]
     script = tmp_path / "kimi-fixture"
@@ -339,7 +339,7 @@ def test_run_uses_fresh_neutral_controls_and_exact_source_proxy(monkeypatch: pyt
         observed["mcp"] = (Path(env[native_kimi.KIMI_HOME_ENV]) / "mcp.json").exists()
         return subprocess.CompletedProcess(argv, 0, "\n".join([
             json.dumps({"role": "meta", "type": "system.version", "version": "0.41.0"}),
-            json.dumps({"role": "assistant", "content": '{"responses":{"opaque-1":"A"}}'}),
+            json.dumps({"role": "assistant", "content": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}),
             json.dumps({"role": "meta", "type": "session.resume_hint", "session_id": "fake-session"}),
         ]) + "\n", "")
 
@@ -432,7 +432,7 @@ def test_parser_rejects_missing_tool_result_and_accepts_usage_when_present() -> 
     missing_result = [
         {"role": "meta", "type": "system.version", "version": "0.41.0"},
         {"role": "assistant", "tool_calls": [{"type": "function", "id": "1", "function": {"name": "mcp__sources__verify_word", "arguments": "{}"}}]},
-        {"role": "assistant", "content": '{"responses":{"opaque-1":"A"}}'},
+        {"role": "assistant", "content": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'},
         {"role": "meta", "type": "session.resume_hint", "session_id": "fixture-session"},
     ]
     with pytest.raises(native_kimi.KimiAdapterError, match="tool result evidence"):
@@ -449,7 +449,7 @@ def test_parser_rejects_missing_tool_result_and_accepts_usage_when_present() -> 
         {"role": "meta", "type": "system.version", "version": "0.41.0"},
         {"role": "assistant", "tool_calls": [{"type": "function", "id": "1", "function": {"name": "mcp__sources__verify_word", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "1", "content": "{}"},
-        {"role": "assistant", "content": '{"responses":{"opaque-1":"A"}}', "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7, "cost_usd": 0}},
+        {"role": "assistant", "content": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}', "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7, "cost_usd": 0}},
         {"role": "meta", "type": "session.resume_hint", "session_id": "fixture-session"},
     ]
     responses, session, version, calls, usage = native_kimi._parse_stream_json(

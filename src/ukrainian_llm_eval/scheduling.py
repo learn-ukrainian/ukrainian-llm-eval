@@ -302,7 +302,7 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
     alone is not proof of current authorization or cost.
     The experiment-wide POSIX lock covers admission, allocation and execution.
     """
-    from .adapters import build_prompt
+    from .adapters import build_prompt, prompt_reference_catalog
     from .admission import admission_composite_sha256, build_admission_request, verify_admission_evidence
     from .request_budget import request_budget_attempt_id, verify_request_budget_evidence
     from .runner import _comparison
@@ -397,7 +397,7 @@ def run_research(packets, segment_plans, manifest, plan, configs, root: Path, *,
                         if route_fingerprint(config, sources_urls.get(route_id)) != route["route_sha256"]:
                             raise ExamError("runtime endpoint drift")
                         request = build_admission_request(route, config, cell["condition"],
-                                                          input_utf8_bytes=len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"]).encode()),
+                                                          input_utf8_bytes=len(build_prompt(segment, cell["condition"], max_tool_calls=config["max_tool_calls"], reference_catalog=prompt_reference_catalog(config, cell["condition"], sources_urls.get(route_id))).encode()),
                                                           tool_policy_sha256=manifest["tool_policy_sha256"], composite_sha256=composite)
                         if sequential:
                             available = request_budget_controller.remaining_ceiling_micro_usd()

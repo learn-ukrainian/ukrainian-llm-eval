@@ -176,7 +176,7 @@ def test_packet_response_schema_has_exact_question_and_row_keys() -> None:
     responses = schema["properties"]["responses"]
     assert responses["required"] == ["single-1", "matching-1"]
     assert set(responses["properties"]) == {"single-1", "matching-1"}
-    matching = responses["properties"]["matching-1"]["anyOf"][0]
+    matching = responses["properties"]["matching-1"]["properties"]["answer"]["anyOf"][0]
     assert matching["required"] == ["row-a", "row-b"]
     assert set(matching["properties"]) == {"row-a", "row-b"}
 
@@ -312,9 +312,10 @@ def test_process_evidence_callback_retains_its_open_file_descriptor(
             timeout=timeout,
             evidence=evidence,
         )
-    assert len(handles) == 1
-    handles[0].write(b"-still-open")
-    handles[0].close()
+    assert len(handles) == 2  # actual stdin receipt, then failure receipt
+    for handle in handles:
+        handle.write(b"-still-open")
+        handle.close()
     assert retained.read_bytes() == b"callback-still-open"
 
 
@@ -514,7 +515,7 @@ def test_run_uses_fresh_home_structured_envelope_and_raw_evidence(monkeypatch: p
             {"type": "thread.started", "thread_id": "fresh-session"},
             {"type": "item.completed", "item": {"id": "warning", "type": "error", "message": "synthetic bootstrap warning"}},
             {"type": "turn.started"},
-            {"type": "item.completed", "item": {"type": "agent_message", "text": '{"responses":{"opaque-1":"A"}}'}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}},
             {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7}},
         ]
         return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(event) for event in stream), "private-stderr")
@@ -557,7 +558,7 @@ def test_parser_rejects_item_error_after_turn_started() -> None:
         {"type": "thread.started", "thread_id": "fresh"},
         {"type": "turn.started"},
         {"type": "item.completed", "item": {"type": "error", "message": "mid-turn failure"}},
-        {"type": "item.completed", "item": {"type": "agent_message", "text": '{"responses":{"opaque-1":"A"}}'}},
+        {"type": "item.completed", "item": {"type": "agent_message", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}},
         {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}},
     ]
     with pytest.raises(native_codex.CodexAdapterError, match="item error during a turn"):

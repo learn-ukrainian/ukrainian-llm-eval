@@ -72,6 +72,34 @@ def inputs(*, metered=False):
     return {"ulp": packet}, {"ulp": segmentation}, manifest, plan, {"fixture": config}
 
 
+def test_execution_admission_sizes_the_complete_ordered_catalog(monkeypatch, tmp_path):
+    from ukrainian_llm_eval import adapters
+    packets, segments, manifest, _plan, configs = inputs()
+    url = "https://reference.invalid/mcp"
+    catalog = [{"name": "search_text", "description": "Synthetic reference", "inputSchema": {"type": "object"}}]
+    configs["fixture"]["tools"] = ["search_text"]
+    route = manifest["routes"][0]
+    route.update(config_sha256=digest(configs["fixture"]), route_sha256=execution.route_fingerprint(configs["fixture"], url))
+    manifest = build_experiment_manifest(manifest["protocol_sha256"], manifest["suites"], [route],
+        scorer_sha256=manifest["scorer_sha256"], tool_policy_sha256=manifest["tool_policy_sha256"])
+    plan = build_execution_plan(manifest)
+    monkeypatch.setattr(adapters, "_mcp_list_tools", lambda *_: (catalog, None))
+    calls, requests = [], []
+    monkeypatch.setattr(execution, "run_exam", trial(calls))
+    def capture(*args, request, **kwargs):
+        requests.append(request)
+        return admit(*args, request=request, **kwargs)
+    capture.prepare = admit.prepare
+    progress = list(scheduling.run_research(packets, segments, manifest, plan, configs, tmp_path / "run",
+        admission_probe=capture, request_budget_controller=fixture_budgets, sources_urls={"fixture": url}))
+    assert len(progress) == 6 and all(item["status"] == "ok" for item in progress)
+    assert len(requests) == len(calls) == 12
+    for request, (packet, condition) in zip(requests, calls, strict=True):
+        expected = adapters.build_prompt(packet, condition, max_tool_calls=2,
+            reference_catalog=catalog if condition == "sources" else [])
+        assert request["requirements"]["input_utf8_bytes"] == len(expected.encode())
+
+
 @pytest.mark.parametrize("missing_controller", [True, False])
 def test_subscription_frozen_budget_cannot_start_without_budget(monkeypatch, tmp_path, missing_controller):
     packets, plans, manifest, _, configs = inputs()

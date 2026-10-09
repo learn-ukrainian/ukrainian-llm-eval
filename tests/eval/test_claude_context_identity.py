@@ -1,5 +1,7 @@
 """Native context modifiers require matching terminal backend attestation."""
 
+from answer_first_fixtures import wire_responses
+
 import json
 import subprocess
 
@@ -11,8 +13,8 @@ from ukrainian_llm_eval import adapters
 def _events():
     return [
         {"type": "system", "subtype": "init", "model": "claude-fixture[1m]", "tools": [], "session_id": "fresh"},
-        {"type": "assistant", "message": {"model": "claude-fixture", "content": []}, "session_id": "fresh"},
-        {"type": "result", "is_error": False, "session_id": "fresh", "result": '{"responses":{"q":"A"}}',
+        {"type": "assistant", "message": {"model": "claude-fixture", "content": [{"type": "tool_use", "name": "StructuredOutput", "input": wire_responses({"q": "A"})}]}, "session_id": "fresh"},
+        {"type": "result", "is_error": False, "session_id": "fresh", "structured_output": wire_responses({"q": "A"}), "result": '{"responses":{"q":{"answer":"A","explanation":"Fixture evidence."}}}',
          "modelUsage": {"claude-fixture[1m]": {"canonicalModel": "claude-fixture", "contextWindow": 1000000}}},
     ]
 

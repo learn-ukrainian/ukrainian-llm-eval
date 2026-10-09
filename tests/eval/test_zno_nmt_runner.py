@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from answer_first_fixtures import wire_responses
+
 import json
 import subprocess
 import threading
@@ -179,7 +181,7 @@ def test_closed_book_http_sends_no_tools_or_runtime_secret(monkeypatch: pytest.M
         captured.update(payload=payload, key=kwargs["key"])
         return {
             "model": "local-test-model",
-            "choices": [{"message": {"content": json.dumps({"responses": {"opaque-1": "A"}})}}],
+            "choices": [{"message": {"content": json.dumps(wire_responses({"opaque-1": "A"}))}}],
             "usage": {},
         }
 
@@ -210,7 +212,8 @@ def test_claude_empty_builtins_and_model_drift_is_rejected(monkeypatch: pytest.M
         stdout = "\n".join(
             [
                 json.dumps({"type": "system", "subtype": "init", "model": "wrong-model", "tools": []}),
-                json.dumps({"type": "result", "result": json.dumps({"responses": {"opaque-1": "A"}})}),
+                json.dumps({"type": "tool_use", "name": "StructuredOutput", "input": wire_responses({"opaque-1": "A"})}),
+                json.dumps({"type": "result", "structured_output": wire_responses({"opaque-1": "A"})}),
             ]
         )
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="provider output must not be retained")
@@ -285,8 +288,8 @@ def test_structured_output_tool_is_not_counted_as_retrieval() -> None:
     stdout = "\n".join(
         [
             json.dumps({"type": "system", "subtype": "init", "model": "fixture", "tools": ["StructuredOutput"]}),
-            json.dumps({"type": "tool_use", "name": "StructuredOutput"}),
-            json.dumps({"type": "result", "structured_output": {"responses": {"opaque-1": "A"}}}),
+            json.dumps({"type": "tool_use", "name": "StructuredOutput", "input": wire_responses({"opaque-1": "A"})}),
+            json.dumps({"type": "result", "structured_output": wire_responses({"opaque-1": "A"})}),
         ]
     )
     responses, model, calls, _usage = adapters._parse_stream_json(stdout, _packet(), set(), 1)
@@ -424,8 +427,8 @@ def test_response_schema_closes_every_object_and_preserves_item_kinds() -> None:
 
     assert_closed(schema)
     responses = schema["properties"]["responses"]["properties"]
-    assert responses["single"] == {"anyOf": [{"type": "string"}, {"type": "null"}]}
-    matching = responses["matching"]["anyOf"][0]
+    assert responses["single"]["properties"]["answer"] == {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    matching = responses["matching"]["properties"]["answer"]["anyOf"][0]
     assert matching["required"] == ["row-1", "row-2"]
     assert set(matching["properties"]) == {"row-1", "row-2"}
     assert "correct" not in json.dumps(schema)
@@ -449,8 +452,8 @@ def test_response_schema_enums_option_ids_when_present() -> None:
         ]
     }
     responses = adapters.response_schema(packet)["properties"]["responses"]["properties"]
-    assert responses["single"] == {"anyOf": [{"type": "string", "enum": ["A", "B"]}, {"type": "null"}]}
-    matching = responses["matching"]["anyOf"][0]
+    assert responses["single"]["properties"]["answer"] == {"anyOf": [{"type": "string", "enum": ["A", "B"]}, {"type": "null"}]}
+    matching = responses["matching"]["properties"]["answer"]["anyOf"][0]
     assert matching["properties"]["row-1"] == {"type": "string", "enum": ["A", "B"]}
     assert matching["properties"]["row-2"] == {"type": "string", "enum": ["A", "B"]}
 

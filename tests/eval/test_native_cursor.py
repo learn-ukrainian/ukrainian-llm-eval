@@ -65,7 +65,7 @@ def _stream_events() -> list[dict[str, Any]]:
             "type": "assistant",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
             },
             "session_id": "fixture-session",
         },
@@ -73,7 +73,7 @@ def _stream_events() -> list[dict[str, Any]]:
             "type": "result",
             "subtype": "success",
             "is_error": False,
-            "result": '{"responses":{"opaque-1":"A"}}',
+            "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
             "session_id": "fixture-session",
             "usage": {"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 0, "cacheWriteTokens": 0},
         },
@@ -250,7 +250,7 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
             "type": "assistant",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
             },
             "session_id": "sources-session",
         },
@@ -258,7 +258,7 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
             "type": "result",
             "subtype": "success",
             "is_error": False,
-            "result": 'Checking Sources{"responses":{"opaque-1":"A"}}',
+            "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
             "session_id": "sources-session",
             "usage": {"inputTokens": 11, "outputTokens": 4},
         },
@@ -323,7 +323,7 @@ def test_parser_counts_paired_tool_events_once() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "s1",
             },
@@ -331,7 +331,7 @@ def test_parser_counts_paired_tool_events_once() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": 'narration{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -356,7 +356,7 @@ def test_parser_rejects_foreign_session_assistant() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "other",
             },
@@ -388,7 +388,7 @@ def test_parser_rejects_incomplete_result() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "s1",
             },
@@ -420,7 +420,7 @@ def test_parser_rejects_orphan_tool_completion() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "s1",
             },
@@ -512,7 +512,7 @@ def test_parser_rejects_unlisted_tool() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -622,7 +622,7 @@ def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "s1",
             },
@@ -630,7 +630,7 @@ def test_parser_allows_get_mcp_tools_meta_without_counting() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
                 "usage": {"inputTokens": 10, "outputTokens": 5},
             },
@@ -668,7 +668,7 @@ def test_parser_rejects_non_mcp_toolname_spoof() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -710,7 +710,7 @@ def test_parser_rejects_foreign_mcp_server() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -766,7 +766,7 @@ def test_parser_accepts_mcp_args_name_without_toolname() -> None:
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":"A"}}'}],
+                    "content": [{"type": "text", "text": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}'}],
                 },
                 "session_id": "s1",
             },
@@ -774,7 +774,7 @@ def test_parser_accepts_mcp_args_name_without_toolname() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
                 "usage": {"inputTokens": 1, "outputTokens": 1},
             },
@@ -817,7 +817,7 @@ def test_parser_rejects_conflicting_mcp_name_and_toolname() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -856,7 +856,7 @@ def test_parser_rejects_mcp_named_getMcpTools_without_meta_family() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -895,7 +895,7 @@ def test_parser_rejects_payload_level_foreign_server() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -929,7 +929,7 @@ def test_parser_rejects_ambiguous_tool_families() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -975,7 +975,7 @@ def test_parser_rejects_start_complete_family_drift() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -1014,7 +1014,7 @@ def test_parser_rejects_foreign_path_prefix() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]
@@ -1045,7 +1045,7 @@ def test_parser_rejects_get_mcp_tools_in_closed_book() -> None:
                 "type": "result",
                 "subtype": "success",
                 "is_error": False,
-                "result": '{"responses":{"opaque-1":"A"}}',
+                "result": '{"responses":{"opaque-1":{"answer":"A","explanation":"Fixture evidence."}}}',
                 "session_id": "s1",
             },
         ]

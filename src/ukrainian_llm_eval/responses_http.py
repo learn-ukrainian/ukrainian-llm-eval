@@ -365,9 +365,9 @@ def run_responses_http(
             if not messages:
                 raise AdapterError("Responses completed without a message")
             try:
-                responses = adapters._extract_responses(
+                responses = adapters._extract_enveloped_responses(
                     adapters._strict_json_loads(message_text), packet
-                )
+                )[0]
             except AdapterError as exc:
                 if packet.get("schema") == GEC_PACKET_SCHEMA:
                     raise

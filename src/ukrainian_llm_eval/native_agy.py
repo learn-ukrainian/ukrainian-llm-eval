@@ -7,6 +7,7 @@ AGY's hook and the parent MCP bridge independently limit reference calls.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import shlex
@@ -123,13 +124,18 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
     tools, identity = adapters._mcp_list_tools(str(sources_url), checked["timeout_seconds"]) if condition == "sources" else ([], None)
     if condition == "sources" and not set(checked["tools"]) <= {tool["name"] for tool in tools}:
         raise adapters.AdapterError("AGY Sources tool capability unavailable")
-    return {"schema": "zno-nmt.capability.v1", "adapter": "agy", "condition": condition,
+    tools = adapters._reference_catalog(tools, checked["tools"]) if condition == "sources" else []
+    return {"reference_catalog": tools, "schema": "zno-nmt.capability.v1", "adapter": "agy", "condition": condition,
             "requested_model": checked["model"], "requested_effort": checked["effort"],
             "binary_sha256": binary_hash, "native_controls_sha256": control_hash(checked, condition),
             "tools_sha256": adapters.digest(checked["tools"]), "tool_schema_sha256": adapters.digest(tools),
             "mcp_server_identity_sha256": identity,
             "corpus_id_sha256": adapters.digest(checked["corpus_id"]) if checked["corpus_id"] else None,
             "capability": "native-agy-reference-gated", "max_output_tokens_effective": "unknown"}
+
+
+INPUT_FRAME_PREFIX = '{"event":"user","message":{"content":'
+INPUT_FRAME_SUFFIX = "}}\n"
 
 
 class ReferenceServer:
@@ -249,13 +255,17 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
             or final.get("status") != "SUCCESS" or final.get("error") or final.get("num_turns") != 1
             or final.get("json_schema") != schema):
         raise adapters.AdapterError("AGY final response invalid")
-    responses = adapters._extract_responses(final.get("structured_output"), packet)
+    parsed = adapters._extract_enveloped_responses(final.get("structured_output"), packet)
+    responses = parsed[0]
     finish = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "finish"]
     refs = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "call_mcp_tool"]
     if len(finish) != 1 or len(hook_receipts) != len(refs) + 1 or hook_receipts[-1] != finish[0]:
         raise adapters.AdapterError("AGY hook evidence incomplete")
     args = finish[0]["call"].get("args", {})
-    if {key: value for key, value in args.items() if key not in {"toolSummary", "toolAction"}} != final["structured_output"]:
+    finish_payload = {key: value for key, value in args.items() if key not in {"toolSummary", "toolAction"}}
+    if finish_payload != final["structured_output"]:
+        raise adapters.AdapterError("AGY native structured evidence mismatch")
+    if adapters._extract_enveloped_responses(finish_payload, packet) != parsed:
         raise adapters.AdapterError("AGY native structured evidence mismatch")
     native_refs = [step for step in steps.values() if step.get("step_type") == "tool"]
     if len(native_refs) != len(calls) or len(refs) != len(calls) or len(calls) > config["max_tool_calls"]:
@@ -282,11 +292,16 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
 
 def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None,
             prompt: str, private_env_path: str | os.PathLike[str] | None = None,
-            evidence: Callable[[str, Any], None] | None = None) -> dict[str, Any]:
+            evidence: Callable[[str, Any], None] | None = None,
+            reference_catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     checked = validate_config(config)
     adapters._condition_policy(checked, condition, sources_url)
     credential = _credential(private_env_path)
     binary, binary_hash = _binary(checked)
+    if evidence is not None:
+        evidence("runtime_scaffolding", {"prefix": INPUT_FRAME_PREFIX, "suffix": INPUT_FRAME_SUFFIX,
+            "sha256": hashlib.sha256((INPUT_FRAME_PREFIX + INPUT_FRAME_SUFFIX).encode()).hexdigest(),
+            "condition": condition})
     started = time.monotonic()
     deadline = started + checked["timeout_seconds"]
     with tempfile.TemporaryDirectory(prefix="agy-eval-") as temp:
@@ -317,11 +332,6 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             if condition == "sources":
                 (native / "mcp_config.json").write_text(adapters.canonical({"mcpServers": {"sources": {
                     "serverUrl": reference.url, "headers": {"Authorization": "Bearer " + reference.token}}}}))
-                tools, _identity = adapters._mcp_list_tools(str(sources_url), checked["timeout_seconds"])
-                catalog = [tool for tool in tools if tool["name"] in checked["tools"]]
-                prompt += ("\nTrusted reference catalog follows. Use call_mcp_tool with ServerName=sources, "
-                           "ToolName and Arguments matching a schema, and required toolSummary/toolAction metadata. "
-                           "No filesystem schema lookup is needed.\n" + adapters.canonical(catalog))
             argv = [binary, "--input-format", "stream-json", "--output-format", "stream-json",
                     "--agent", PROFILE_NAME, "--model", checked["model"], "--effort", checked["effort"],
                     "--json-schema", str(schema_path), "--disable-slash-commands",
@@ -334,11 +344,14 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             if remaining <= 0:
                 raise adapters.AdapterError("AGY timeout before candidate execution")
             result = adapters._run_claude_process(argv, cwd=workspace, env=env,
-                prompt=adapters.canonical({"event": "user", "message": {"content": prompt}}) + "\n",
+                prompt=INPUT_FRAME_PREFIX + json.dumps(prompt, ensure_ascii=False, allow_nan=False) + INPUT_FRAME_SUFFIX,
                 timeout=remaining, evidence=evidence)
             if evidence is not None:
                 evidence("cli_result", {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
-            receipts = [adapters._strict_json_loads(line) for line in gate.with_suffix(".jsonl").read_text().splitlines()] if gate.with_suffix(".jsonl").exists() else []
+            receipt_text = gate.with_suffix(".jsonl").read_text() if gate.with_suffix(".jsonl").exists() else ""
+            if evidence is not None:
+                evidence("agy_hook_receipts_raw", {"text": receipt_text})
+            receipts = [adapters._strict_json_loads(line) for line in receipt_text.splitlines()]
             if evidence is not None:
                 evidence("agy_hook_receipts", receipts)
             if result.returncode or reference.error is not None or len(result.stdout.encode()) > MAX_BYTES:

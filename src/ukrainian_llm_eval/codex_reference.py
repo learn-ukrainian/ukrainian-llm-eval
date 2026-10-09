@@ -141,7 +141,8 @@ def preflight(config, condition, sources_url=None, *, private_env_path=None):
     )
     return {**identity(config, condition, probe, catalog_identity, receipt),
             "schema": native.CODEX_CAPABILITY_SCHEMA, "condition": condition,
-            "capability": "native-codex-reference-controls"}
+            "capability": "native-codex-reference-controls",
+            "reference_catalog": receipt["schemas"] if condition == "sources" else []}
 
 
 def reference_overrides(config_path: Path, tools: list[str]) -> tuple[str, ...]:
@@ -200,10 +201,12 @@ def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict
     return native._parse_events("\n".join(filtered), packet, final_message=final_message), len(completed)
 
 
-def run(packet, config, condition, *, sources_url, prompt, evidence=None, private_env_path=None):
+def run(packet, config, condition, *, sources_url, prompt, evidence=None, private_env_path=None, reference_catalog=None):
     if not isinstance(prompt, str) or not prompt:
         raise native._fail("Codex prompt must be a nonempty string")
     config, root, probe, catalog, catalog_identity, receipt = prepare(config, condition, sources_url, private_env_path)
+    if condition == "sources" and reference_catalog is not None and reference_catalog != receipt["schemas"]:
+        raise native._fail("native reference prompt catalog drift")
     trial_identity = identity(config, condition, probe, catalog_identity, receipt)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="codex-reference-home-") as home_raw, tempfile.TemporaryDirectory(

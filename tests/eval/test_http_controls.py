@@ -1,4 +1,6 @@
 """Explicit provider routing and local validation of JSON-object responses."""
+from answer_first_fixtures import wire_responses
+
 import json
 
 import pytest
@@ -12,7 +14,7 @@ ROUTING = {"provider_endpoint": "fixture/endpoint", "expected_provider_name": "F
 
 def response(provider="Fixture Provider", responses=None):
     return {"model": "local-test-model", "provider": provider,
-            "choices": [{"message": {"content": json.dumps({"responses": responses or {"opaque-1": "A"}})}}],
+            "choices": [{"message": {"content": json.dumps(wire_responses(responses or {"opaque-1": "A"}))}}],
             "usage": {}}
 
 

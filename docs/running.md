@@ -231,6 +231,64 @@ changing the budget starts a new experiment, not a replacement successful trial.
 
 ## Run without MCP
 
+### Answer-first wire migration
+
+New candidate submissions use exactly this per-item envelope:
+
+```json
+{"responses":{"q0001":{"answer":"A","explanation":"The selected option matches the task."}}}
+```
+
+`answer` keeps the original listed MCQ option ID, complete matching map, or
+single-line GEC correction, including `null` abstention. `explanation` is a
+nonblank string. Short explanations are prompt guidance: there is no length
+cap, truncation, trimming, or typography normalization of this field. Every
+item must present `answer` before `explanation`. Missing, extra, duplicate or
+invalid data fail without repair from a correct-looking explanation.
+
+Saved `run.responses` remains an answer-only map. Explanations do not affect
+points or GEC prediction bytes. Historical flat runs still score unchanged;
+historical flat **provider responses** do not satisfy the new wire contract.
+`_extract_responses` continues to validate saved maps; the separate envelope
+parser handles new wire output. The schema and adapter hashes in `_comparison`
+change, so `core.compare_runs` intentionally refuses a pre-change/post-change
+pair. Begin a new experiment instead of mixing protocol versions.
+
+The runner records the logical prompt text and SHA-256 after adding the
+configured, ordered, filtered reference catalog from the preflight listing.
+The same schema, catalog and task instructions reach every study route.
+Admission prompt-size estimates include that catalog. Codex retains its
+separate runtime schema/server drift checks; those are not task-prompt additions.
+Only AGY's declared JSON user-event framing differs from the logical text.
+
+Keep the evidence callback connected to the private `EvidenceStore`. Raw
+`cli_result.stdout`, Codex `cli_final_message.text`, AGY
+`agy_hook_receipts_raw.text`, and `candidate_submission.stdin` retain authentic
+text and serialized presentation, including failed attempts. Evidence-store
+canonicalization sorts event objects, so inspect these raw **string** fields,
+not reconstructed dictionaries, for observed order.
+
+| Route | Order source and limitation |
+| --- | --- |
+| Claude Sonnet/Opus | Raw StructuredOutput `tool_use.input` line and terminal `result.structured_output`; values, explanations and observed field order must agree. These are CLI-serialized tool/event evidence; model token order is not independently attested. |
+| AGY Flash | Raw stdout `result` event and raw finish-hook arguments; both sources must agree before evidence sorting. Both are runtime-serialized objects; pre-runtime model presentation is not attested. |
+| Codex Sol/Luna | Final message text, bound to the final streamed agent message. Strict decoding forces schema order: a pass shows schema compliance, not a model preference for answer-first. |
+| Cursor Grok | Terminal result text, checked against the last assistant segment when present. Concatenated progress or malformed final text fails; an earlier valid answer does not salvage it. Native text may have been reserialized; pre-runtime token order is not attested. |
+
+Credential-free regression oracles are the existing saved flat-run builders
+`tests/eval/test_zno_nmt_core.py::_run` and
+`tests/eval/test_gec_scoring.py::inputs`. The contract tests compare unchanged
+MCQ score bytes and GEC prediction/reference bytes, including contradictory
+explanations. These synthetic fixtures are not held-out language evaluations.
+
+This migration does not certify the 36 actual native smoke cells under #68,
+fresh isolation, complete Sources discovery/attestation, AGY producer evidence
+under #65, or effective native output limits under #67. These remain owned by
+the accountable driver. Candidate-response continuation remains asymmetric:
+only Kimi/Codex/Cursor have the existing typed continuation path; Claude/AGY
+contract failures retain ordinary fail-closed behavior. No route eligibility
+has been expanded.
+
 ```bash
 .venv/bin/python -m ukrainian_llm_eval preflight \
   --config .runtime/zno-nmt-demo/config.json --condition closed-book

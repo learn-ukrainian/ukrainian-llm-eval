@@ -28,6 +28,25 @@ A denied or failed tool, extra turn, unfinished step, missing hook, malformed
 answer or evidence mismatch fails the attempt. Answers are never repaired.
 Raw events and reference receipts remain in private evidence.
 
+The shared runner prompt includes the complete ordered reference catalog and
+all task instructions before recording its SHA-256. AGY does not list tools
+again to append a private task suffix. In both conditions its only input-frame
+constants are `INPUT_FRAME_PREFIX = '{"event":"user","message":{"content":'`
+and `INPUT_FRAME_SUFFIX = '}}\n'`, enclosing the JSON-encoded logical prompt.
+These constants contain transport syntax only. The private
+`runtime_scaffolding` event records them, the condition and the SHA-256 of their
+concatenated UTF-8 bytes; `candidate_submission.stdin` retains the actual frame.
+Any additional task byte fails submission equality.
+
+Each item now submits `answer` first and a separate nonblank `explanation`.
+The raw stdout result line and raw finish-hook args are both decoded with
+ordered key pairs before evidence-store canonicalization. Answer, explanation
+contents and observed field order must agree. `agy_hook_receipts_raw.text`
+preserves the hook log verbatim; only answer values enter the saved run.
+The hook and CLI serialize JSON objects, so this proves their observed
+presentation, not the ordering of pre-runtime model tokens. Missing producer
+events remain failures; the adapter never synthesizes terminal evidence.
+
 ## Provisioning and configuration
 
 Authenticate in your normal AGY session first. Create an owner-only private

@@ -150,7 +150,7 @@ def test_http_sends_exact_counted_bytes_with_tools_and_full_tool_history(monkeyp
                                  "name": "mcp__sources__verify_word", "arguments": "{\"word\":\"слово\"}"}}]}}]
             }
         return common | {
-            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "{\"responses\":{\"q0001\":\"A\"}}"}}]
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": '{"responses":{"q0001":{"answer":"A","explanation":"Fixture evidence."}}}'}}]
         }
 
     monkeypatch.setattr(adapters, "_http_json", response)

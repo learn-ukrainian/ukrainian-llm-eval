@@ -1,5 +1,15 @@
 # Native Cursor adapter
 
+New wire answers use the shared answer-first envelope: each packet ID maps to
+`answer` followed by a separate nonblank `explanation`. Only answer values
+enter saved runs and scoring. The native terminal result text is the order
+source, checked against the last assistant segment when present; source
+disagreement fails. Concatenated progress or malformed terminal text cannot
+be repaired from an earlier valid answer or explanation. Raw stdout and
+`candidate_submission.stdin` remain private evidence strings, preserving
+presentation before canonical sorting. This observes native text; model-token
+ordering before runtime serialization remains unverified.
+
 `ukrainian_llm_eval.native_cursor` is a fail-closed adapter for headless
 `cursor-agent` evaluation on a Cursor **subscription login**. It does not use
 the Cursor SDK, does not prefer `CURSOR_API_KEY`, and does not import Learn

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from answer_first_fixtures import wire_responses
+
 import copy
 import hashlib
 import json
@@ -36,7 +38,7 @@ def reference_args():
 
 def hook_receipts(sources=False):
     refs = [{"decision": "allow", "count_before": 0, "call": {"name": "call_mcp_tool", "args": reference_args()}}] if sources else []
-    return [*refs, {"decision": "allow", "count_before": int(sources), "call": {"name": "finish", "args": {"responses": {"q1": "A"}, "toolSummary": "Fixture", "toolAction": "Return answer"}}}]
+    return [*refs, {"decision": "allow", "count_before": int(sources), "call": {"name": "finish", "args": {**wire_responses({"q1": "A"}), "toolSummary": "Fixture", "toolAction": "Return answer"}}}]
 
 
 def call_receipts(sources=False):
@@ -52,7 +54,7 @@ def events(sources=False):
     return [{"event": "init", "init": {"model": config()["model"], "agent": native.PROFILE_NAME, "json_schema": schema}},
             *[{"event": "step_update", "step_update": step} for step in steps],
             {"event": "result", "result": {"conversation_id": "session", "num_turns": 1, "status": "SUCCESS",
-                                            "structured_output": {"responses": {"q1": "A"}}, "json_schema": schema,
+                                            "structured_output": wire_responses({"q1": "A"}), "json_schema": schema,
                                             "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}}]
 
 
@@ -216,10 +218,11 @@ def test_expired_reference_setup_never_launches_candidate(monkeypatch, tmp_path)
     clock = [0.0]
     monkeypatch.setattr(native, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(native, "_binary", lambda _config: ("fixture", "a" * 64))
-    def tools(*_args):
+    original_enter = native.ReferenceServer.__enter__
+    def delayed_reference(self):
         clock[0] = 16.0
-        return [{"name": "verify_word"}], None
-    monkeypatch.setattr(adapters, "_mcp_list_tools", tools)
+        return original_enter(self)
+    monkeypatch.setattr(native.ReferenceServer, "__enter__", delayed_reference)
     monkeypatch.setattr(adapters, "_run_claude_process", lambda *_args, **_kwargs: pytest.fail("candidate must not launch"))
     with pytest.raises(adapters.AdapterError, match="timeout before"):
         native.run_agy(packet(), config(), "sources", sources_url="http://localhost:1/mcp", prompt="packet", private_env_path=root)

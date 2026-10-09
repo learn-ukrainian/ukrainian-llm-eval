@@ -1,5 +1,7 @@
 """Native OpenCode controls using fake provider streams, never paid inference."""
 
+from answer_first_fixtures import wire_responses
+
 import copy
 import http.client
 import io
@@ -43,11 +45,11 @@ def payload(gateway):
     return body
 
 
-def stream(*, call=None, text='{"responses":{"q1":"A"}}', model="google/gemma-4-31b-it", provider="Venice"):
+def stream(*, call=None, text='{"responses":{"q1":{"answer":"A","explanation":"Fixture evidence."}}}', model="google/gemma-4-31b-it", provider="Venice"):
     delta = {"content": text}
     if call:
         delta = {"tool_calls": [{"index": 0, "id": "call-1", "type": "function",
-                                 "function": {"name": call, "arguments": '{"responses":{"q1":"A"}}' if call == "StructuredOutput" else '{"word":"fixture"}'}}]}
+                                 "function": {"name": call, "arguments": '{"responses":{"q1":{"answer":"A","explanation":"Fixture evidence."}}}' if call == "StructuredOutput" else '{"word":"fixture"}'}}]}
     common = {"id": "fixture", "object": "chat.completion.chunk", "created": 1, "model": model, "provider": provider}
     chunks = [{**common, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
               {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if call else "stop"}],
@@ -199,7 +201,7 @@ def test_child_environment_cannot_inherit_credentials_or_customizations(monkeypa
 
 
 def messages(answer=None):
-    answer = {"responses": {"q1": "A"}} if answer is None else answer
+    answer = wire_responses({"q1": "A"}) if answer is None else answer
     return [{"info": {"sessionID": "session", "role": "assistant", "structured": answer},
              "parts": [{"type": "tool", "tool": "StructuredOutput",
                         "state": {"status": "completed", "input": answer}}]}]
@@ -283,7 +285,7 @@ def test_final_output_does_not_consume_reference_budget(monkeypatch):
     provider(monkeypatch, [stream(call="StructuredOutput")])
     with gateway(budget=Budget()) as g:
         g.completion(payload(g))
-        assert g.structured_output == {"responses": {"q1": "A"}}
+        assert g.structured_output == wire_responses({"q1": "A"})
         assert g.finished and g.tool_calls == 0 and observed == [0]
         with pytest.raises(adapters.AdapterError):
             g.completion(payload(g))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from answer_first_fixtures import wire_responses
+
 import copy
 import json
 import threading
@@ -73,7 +75,7 @@ def _message_body(
     status: str = "completed",
 ) -> dict[str, Any]:
     if text is None:
-        text = json.dumps({"responses": {"opaque-1": "A"}})
+        text = json.dumps(wire_responses({"opaque-1": "A"}))
     if output is None:
         output = [
             {

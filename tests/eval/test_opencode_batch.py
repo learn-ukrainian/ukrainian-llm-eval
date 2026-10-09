@@ -37,7 +37,7 @@ def result(custom_id, provider='Together'):
     body = {'id': 'gen-batch-fixture', 'model': batch.BASE_MODEL, 'created': 1,
             'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': None, 'tool_calls': [
                 {'id': 'call-fixture', 'type': 'function', 'function': {'name': 'StructuredOutput',
-                    'arguments': '{"responses":{"q1":"A"}}'}}]}, 'finish_reason': 'tool_calls'}]}
+                    'arguments': '{"responses":{"q1":{"answer":"A","explanation":"Fixture evidence."}}}'}}]}, 'finish_reason': 'tool_calls'}]}
     if provider is not None:
         body['provider'] = provider
     return {'id': 'batch_fixture', 'endpoint': '/v1/chat/completions', 'model': batch.BASE_MODEL,

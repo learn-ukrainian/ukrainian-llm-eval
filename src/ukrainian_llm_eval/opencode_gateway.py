@@ -329,7 +329,7 @@ class OpenCodeGateway:
                 raise adapters.AdapterError("OpenCode mixed or duplicate final output")
             self.structured_output = adapters._strict_json_loads(terminal[0]["arguments"])
             if self.packet is not None:
-                adapters._extract_responses(self.structured_output, self.packet)
+                adapters._extract_enveloped_responses(self.structured_output, self.packet)[0]
         self.tool_calls += len(references)
         if self.tool_calls > self.config["max_tool_calls"]:
             raise adapters.AdapterError("tool_limit_error")

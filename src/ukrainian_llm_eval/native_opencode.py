@@ -188,7 +188,7 @@ def parse_messages(messages: Any, packet: Mapping[str, Any], allowed: set[str]) 
         if "structured" in info:
             if terminal != [info["structured"]]:
                 raise adapters.AdapterError("OpenCode structured evidence mismatch")
-            final = adapters._extract_responses(info["structured"], packet)
+            final = adapters._extract_enveloped_responses(info["structured"], packet)[0]
         elif terminal:
             raise adapters.AdapterError("OpenCode structured output unavailable")
     if len(sessions) != 1 or final is None:
@@ -313,7 +313,7 @@ def run_opencode(packet: Mapping[str, Any], config: Mapping[str, Any], condition
             responses, session, calls = parse_messages(messages, packet, gateway.allowed)
             if calls != gateway.tool_calls or any(gateway.pending_calls.values()) or not gateway.requests:
                 raise adapters.AdapterError("OpenCode native tool evidence mismatch")
-            if adapters._extract_responses(gateway.structured_output, packet) != responses:
+            if adapters._extract_enveloped_responses(gateway.structured_output, packet)[0] != responses:
                 raise adapters.AdapterError("OpenCode final response differs from provider")
             return {"responses": responses, "identity": {
                 "adapter": "opencode", "harness": "opencode-cli", "provider": "openrouter", "model": checked["model"],

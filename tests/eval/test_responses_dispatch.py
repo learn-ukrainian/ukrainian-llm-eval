@@ -1,3 +1,5 @@
+from answer_first_fixtures import wire_responses
+
 import json
 
 import pytest
@@ -23,7 +25,7 @@ def test_responses_dispatch_binds_endpoint_and_runs_validated_packet(monkeypatch
     def transport(url, payload, **kwargs):
         sent.append(payload)
         assert url == endpoint
-        return _message_body(text=json.dumps({"responses": expected}))
+        return _message_body(text=json.dumps(wire_responses(expected)))
 
     monkeypatch.setattr(adapters, "_http_json", transport)
     result = runner.run_exam(packet, config, "closed-book")

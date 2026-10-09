@@ -180,12 +180,25 @@ def run_exam(
         capability = preflight(checked_config, condition, sources_url)
         if evidence is not None:
             evidence("preflight", capability)
+        catalog = capability.get("reference_catalog", [])
+        if condition == "sources":
+            if checked_config["adapter"] in {"claude", "agy", "codex", "cursor"}:
+                if (adapters._reference_catalog(catalog, checked_config["tools"]) != catalog
+                        or digest(catalog) != capability["tool_schema_sha256"]):
+                    raise ExamError("preflight prompt catalog differs from tool schema identity")
+            elif "reference_catalog" not in capability:
+                # Compatibility adapters keep their native preflight API.
+                catalog = adapters.prompt_reference_catalog(checked_config, condition, sources_url)
         prompt = adapters.build_prompt(
-            checked_packet, condition, max_tool_calls=checked_config["max_tool_calls"]
+            checked_packet, condition, max_tool_calls=checked_config["max_tool_calls"], reference_catalog=catalog
         )
         if evidence is not None:
-            evidence("prompt", {"text": prompt, "response_schema": adapters.response_schema(checked_packet)})
+            evidence("prompt", {"text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                                "reference_catalog_sha256": digest(catalog),
+                                "response_schema": adapters.response_schema(checked_packet)})
         evidence_options = {"evidence": evidence} if evidence is not None else {}
+        if checked_config["adapter"] in {"claude", "agy", "codex", "cursor"}:
+            evidence_options["reference_catalog"] = catalog
         if checked_config["adapter"] == "claude":
             if request_budget is not None:
                 raise ExamError("request-level budget is unavailable for the native CLI adapter")

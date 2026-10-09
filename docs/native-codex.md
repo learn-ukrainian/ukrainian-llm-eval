@@ -1,5 +1,15 @@
 # Native Codex adapter
 
+New wire answers use the shared answer-first envelope: each packet ID maps to
+`answer` followed by a nonblank `explanation`. Only the original answer value
+enters `run.responses`; explanation text stays unscored and unmodified in raw
+private evidence. The explicit final-message text must agree with the final
+streamed message, and its key order is checked before canonicalization.
+Strict native schema decoding forces the property order, so a pass proves
+schema compliance, not that the model independently chose answer-first.
+The shared logical prompt, schema and catalog are recorded before submission;
+`candidate_submission.stdin` retains the exact bytes supplied to the CLI.
+
 `ukrainian_llm_eval.native_codex` is a fail-closed, subscription-authenticated
 adapter for native Codex CLI evaluation. It has no login flow, no API-key
 fallback, no provider substitution, and no dependency on Learn Ukrainian or

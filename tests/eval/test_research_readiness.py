@@ -4,8 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from test_admission import inputs as claim_inputs
@@ -21,6 +23,36 @@ from ukrainian_llm_eval.evidence import EvidenceStore
 from ukrainian_llm_eval.segmentation import derive_segment_plan
 
 SOURCES = "https://sources.example.invalid/mcp"
+
+CATALOG = [{"name": "search_text", "description": "Synthetic reference catalog.",
+            "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}}]
+
+
+@pytest.fixture(autouse=True)
+def local_reference_catalog(monkeypatch):
+    """Admission sizes a genuine local listing; never contact external Sources."""
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            result = {"tools": CATALOG} if request["method"] == "tools/list" else {"serverInfo": {"name": "fixture"}}
+            body = json.dumps({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *_args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+    thread.start()
+    monkeypatch.setattr(sys.modules[__name__], "SOURCES", f"http://127.0.0.1:{server.server_port}/mcp")
+    try:
+        yield
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def fixture(tmp_path, *, fail_large=False, paid_state=None):
@@ -290,3 +322,31 @@ def test_sources_url_scoped_to_sources_cells_and_reference_only_policy():
     # Legacy non-reference Codex still rejects Sources entirely.
     with pytest.raises(ExamError, match="unsupported until MCP isolation"):
         readiness._condition({"adapter": "codex"}, "sources", SOURCES)
+
+
+def test_admission_size_includes_exact_catalog_even_when_probe_fails(tmp_path):
+    args, controller = fixture(tmp_path)
+    requests = []
+    class StopBeforeAdmission:
+        def __getattr__(self, name):
+            return getattr(controller, name)
+        def __call__(self, *_args, request, **_kwargs):
+            requests.append(request)
+            raise ValueError("intentional credential-free admission stop")
+    result = readiness.check_research(*args, tmp_path / "execution", evidence_root=tmp_path / "observation",
+                                     admission_probe=StopBeforeAdmission(), sources_urls={"fixture": SOURCES})
+    assert result["failed_checks"] == 6
+    assert result["representative_probes"] == 0
+    packets, segments, _manifest, plan, _configs = args
+    expected = {}
+    for condition in ("closed-book", "sources"):
+        sizes = []
+        for item in segments["ulp"]["segments"]:
+            packet = readiness.derive_segment_packet(packets["ulp"], item["item_ids"], segment_id=item["segment_id"])
+            sizes.append(len(adapters.build_prompt(packet, condition, max_tool_calls=2,
+                reference_catalog=CATALOG if condition == "sources" else []).encode()))
+        expected[condition] = max(sizes)
+    assert len(requests) == len(plan["cells"]) == 6
+    for request in requests:
+        assert request["requirements"]["input_utf8_bytes"] == expected[request["condition"]]
+    assert expected["sources"] > expected["closed-book"] + len(adapters.canonical(CATALOG).encode())

@@ -631,6 +631,8 @@ def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: 
 
     if timeout <= 0:
         raise _fail("Codex CLI timeout must be positive")
+    if evidence is not None:
+        evidence("candidate_submission", {"stdin": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
     try:
         process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, bufsize=0, start_new_session=True)
     except OSError as exc:
@@ -815,8 +817,7 @@ def _parse_events(stdout: str, packet: Mapping[str, Any], *, final_message: str 
             raise _fail("Codex CLI final output disagrees with its event stream")
         answer_content = final_message
     try:
-        payload = adapters._strict_json_loads(answer_content)
-        responses = adapters._extract_responses(payload, packet)
+        responses = adapters._extract_enveloped_responses(answer_content, packet)[0]
     except adapters.AdapterError as exc:
         return _ParsedCodexEvents(
             responses=None,
@@ -834,14 +835,14 @@ def _parse_events(stdout: str, packet: Mapping[str, Any], *, final_message: str 
     )
 
 
-def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, private_env_path: str | os.PathLike[str] | Path | None = None) -> dict[str, Any]:
+def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, private_env_path: str | os.PathLike[str] | Path | None = None, reference_catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Run one fresh Codex session, preserving unredacted CLI events via callback."""
 
     if config.get("codex_tool_policy") == "reference-only":
         from .codex_reference import run
 
         return run(packet, config, condition, sources_url=sources_url, prompt=prompt,
-                   evidence=evidence, private_env_path=private_env_path)
+                   evidence=evidence, private_env_path=private_env_path, reference_catalog=reference_catalog)
     _validate_condition(condition, sources_url)
     if not isinstance(prompt, str) or not prompt:
         raise _fail("Codex prompt must be a nonempty string")
