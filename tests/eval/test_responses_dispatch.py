@@ -1,8 +1,7 @@
-from answer_first_fixtures import wire_responses
-
 import json
 
 import pytest
+from answer_first_fixtures import wire_responses
 from test_research_scheduling import inputs
 from test_responses_http import _config, _message_body
 

@@ -16,11 +16,20 @@ from pathlib import Path
 import pytest
 import test_answer_first_contract as contract
 from test_codex_reference import _native_fixture
-from test_native_agy import config as agy_config, provision
+from test_native_agy import config as agy_config
+from test_native_agy import provision
 from test_native_validity import capture_fixture
 
-from ukrainian_llm_eval import adapters, codex_reference, core, gec_scoring, mcp_proxy
-from ukrainian_llm_eval import native_agy, native_codex, native_cursor
+from ukrainian_llm_eval import (
+    adapters,
+    codex_reference,
+    core,
+    gec_scoring,
+    mcp_proxy,
+    native_agy,
+    native_codex,
+    native_cursor,
+)
 
 branch = contract.branch
 ROUTES = ["sol", "luna", "flash", "grok", "sonnet", "opus"]
@@ -110,7 +119,7 @@ def test_all_six_readers_preserve_explanation_and_answer_only_score(branch, rout
     assert read_stream(route, raw, packet, wire) == answers
     flat, explanations, order = adapters._extract_enveloped_responses(json.dumps(wire, ensure_ascii=escaped), packet)
     assert explanations == dict.fromkeys(answers, explanation)
-    assert order == dict.fromkeys(answers, ["answer", "explanation"])
+    assert order == {key_0: ["answer", "explanation"] for key_0 in answers}
     ordinary = {"responses": {ident: {"answer": answer, "explanation": "ordinary"} for ident, answer in answers.items()}}
     ordinary_answers = adapters._extract_enveloped_responses(json.dumps(ordinary), packet)[0]
     if packet["schema"] == adapters.GEC_PACKET_SCHEMA:

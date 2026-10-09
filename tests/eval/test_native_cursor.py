@@ -11,9 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from native_validity_fixtures import staged_native_auth as staged_native_auth
-
 import pytest
+from native_validity_fixtures import staged_native_auth as staged_native_auth  # noqa: PLC0414
 
 from ukrainian_llm_eval import native_cursor
 from ukrainian_llm_eval.candidate_outcome import CANDIDATE_RESPONSE_ERROR, is_candidate_response_failure

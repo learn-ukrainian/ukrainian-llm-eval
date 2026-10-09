@@ -9,11 +9,11 @@ import hashlib
 import json
 import sys
 
-from native_validity_fixtures import staged_native_auth as staged_native_auth, synthetic_catalog as synthetic_catalog
-
 import pytest
 import test_answer_first_contract as contract
 from answer_first_fixtures import wire_responses
+from native_validity_fixtures import staged_native_auth as staged_native_auth  # noqa: PLC0414
+from native_validity_fixtures import synthetic_catalog as synthetic_catalog  # noqa: PLC0414
 from test_native_codex import _probe
 
 from ukrainian_llm_eval import adapters, codex_reference, native_agy, native_codex, native_cursor, runner

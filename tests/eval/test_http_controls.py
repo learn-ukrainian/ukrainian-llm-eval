@@ -1,9 +1,8 @@
 """Explicit provider routing and local validation of JSON-object responses."""
-from answer_first_fixtures import wire_responses
-
 import json
 
 import pytest
+from answer_first_fixtures import wire_responses
 from test_zno_nmt_runner import _config, _packet
 
 from ukrainian_llm_eval import adapters

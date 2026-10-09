@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from answer_first_fixtures import wire_responses
-
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+from answer_first_fixtures import wire_responses
 
 from ukrainian_llm_eval import adapters, runner
 from ukrainian_llm_eval.core import ExamError, digest, prepare_exam

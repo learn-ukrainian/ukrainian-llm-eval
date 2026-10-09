@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from answer_first_fixtures import wire_responses
-
 import copy
 import hashlib
 import json
@@ -16,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from answer_first_fixtures import wire_responses
 from native_validity_fixtures import emit_agy_capture
 
 from ukrainian_llm_eval import adapters, agy_hook
