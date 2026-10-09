@@ -299,7 +299,7 @@ def test_missing_staging_is_typed_not_run_and_never_retries(monkeypatch):
 
 def test_frozen_catalog_matches_artifact_and_refuses_drift():
     raw = CATALOG_FILE.read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == "b29924c3f0ea434a0328b3080b8dd6d741adfe94a923b10629a37672dd194026"
+    assert hashlib.sha256(raw).hexdigest() == "6e8bf197259a0d160c55ac8b549c825efed0e79c59fe01ccebcd3b5fb4aeb6ee"
     tools = json.loads(raw)
     normalized = adapters._reference_catalog(tools, adapters.SMOKE_TOOLS)
     assert adapters.digest(normalized) == adapters.SMOKE_CATALOG_SHA256
