@@ -261,6 +261,20 @@ Admission prompt-size estimates include that catalog. Codex retains its
 separate runtime schema/server drift checks; those are not task-prompt additions.
 Only AGY's declared JSON user-event framing differs from the logical text.
 
+Ordinary study is the default: `runner.run_exam(..., smoke_intent=False)`
+and an omitted argument produce the same prompt and comparison constants.
+The historical Sources policy still requires at least one reference call and
+stress verification for every listed option in a stress item. Catalog metadata
+and dispatcher instructions remain shared across routes.
+Only the bounded native SMOKE preflight passes `smoke_intent=True`; its Sources
+prompt additionally requires exercising every tool in the frozen catalog and
+lists those names explicitly. Closed-book exposes no Sources in either mode.
+The trial-input and prompt evidence record the intent, and comparison hashes
+bind it on success and failure. Different modes cannot form an ordinary study
+pair. This does not add retries or change the 36 native smoke cells or the
+360 study observations. Offline capture covers 72 submissions: six routes,
+three answer types, two conditions and two modes (36 per mode).
+
 Keep the evidence callback connected to the private `EvidenceStore`. Raw
 `cli_result.stdout`, Codex `cli_final_message.text`, AGY
 `agy_hook_receipts_raw.text`, and `candidate_submission.stdin` retain authentic

@@ -56,7 +56,7 @@ def _run_schema(packet: Mapping[str, Any]) -> str:
     return GEC_RUN_SCHEMA if packet.get("schema") == gec.GEC_PACKET_SCHEMA else MCQ_RUN_SCHEMA
 
 
-def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any], *, smoke_intent: bool = False) -> dict[str, Any]:
     """Stable pair constants; session identity and condition are excluded."""
     adapter_source = Path(adapters.__file__).read_bytes()
     runner_source = Path(__file__).read_bytes()
@@ -68,6 +68,7 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         endpoint = os.environ.get(endpoint_env)
         route["endpoint_sha256"] = hashlib.sha256(endpoint.encode("utf-8")).hexdigest() if endpoint else None
     constants = {
+        "smoke_intent": smoke_intent,
         "adapter": config["adapter"],
         "model": config["model"],
         "effort": config["effort"],
@@ -131,7 +132,8 @@ def _empty_metrics() -> dict[str, Any]:
     }
 
 
-def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, exc: BaseException) -> dict[str, Any]:
+def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, exc: BaseException,
+             *, smoke_intent: bool = False) -> dict[str, Any]:
     return {
         "schema": _run_schema(packet),
         "packet_sha256": packet["packet_sha256"],
@@ -149,7 +151,7 @@ def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: st
             "effective_effort": "unknown",
             "session_id": None,
         },
-        "comparison": _comparison(packet, config),
+        "comparison": _comparison(packet, config, smoke_intent=smoke_intent),
         "metrics": _empty_metrics(),
         "failure_reason": adapters.normalized_reason(exc),
     }
@@ -163,6 +165,7 @@ def run_exam(
     sources_url: str | None = None,
     evidence: Callable[[str, Any], None] | None = None,
     request_budget: Any = None,
+    smoke_intent: bool = False,
 ) -> dict[str, Any]:
     """Run exactly one fresh exam session under the requested condition.
 
@@ -172,10 +175,13 @@ def run_exam(
     """
     checked_packet = _validated_packet(packet)
     checked_config = validate_config(config)
+    if not isinstance(smoke_intent, bool):
+        raise ExamError("smoke intent must be a boolean")
     if condition not in {"closed-book", "sources"}:
         raise ExamError("condition must be closed-book or sources")
     if evidence is not None:
-        evidence("trial_input", {"packet": checked_packet, "config": checked_config, "condition": condition})
+        evidence("trial_input", {"packet": checked_packet, "config": checked_config, "condition": condition,
+                                 "smoke_intent": smoke_intent})
     try:
         capability = preflight(checked_config, condition, sources_url)
         if evidence is not None:
@@ -190,10 +196,12 @@ def run_exam(
                 # Compatibility adapters keep their native preflight API.
                 catalog = adapters.prompt_reference_catalog(checked_config, condition, sources_url)
         prompt = adapters.build_prompt(
-            checked_packet, condition, max_tool_calls=checked_config["max_tool_calls"], reference_catalog=catalog
+            checked_packet, condition, max_tool_calls=checked_config["max_tool_calls"], reference_catalog=catalog,
+            smoke_intent=smoke_intent,
         )
         if evidence is not None:
             evidence("prompt", {"text": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                                "smoke_intent": smoke_intent,
                                 "reference_catalog_sha256": digest(catalog),
                                 "response_schema": adapters.response_schema(checked_packet)})
         evidence_options = {"evidence": evidence} if evidence is not None else {}
@@ -309,7 +317,7 @@ def run_exam(
                 "status": "failed",
                 "responses": dict(trial["responses"]),
                 "identity": identity,
-                "comparison": _comparison(checked_packet, checked_config),
+                "comparison": _comparison(checked_packet, checked_config, smoke_intent=smoke_intent),
                 "metrics": dict(trial["metrics"]),
                 "failure_reason": trial["failure_reason"],
             }
@@ -320,7 +328,7 @@ def run_exam(
         budget_receipt = None
         if request_budget is not None:
             budget_receipt = request_budget.finalize("failed")
-        failure = _failure(checked_packet, checked_config, condition, exc)
+        failure = _failure(checked_packet, checked_config, condition, exc, smoke_intent=smoke_intent)
         if budget_receipt is not None:
             failure["identity"]["request_budget_receipt_sha256"] = digest(budget_receipt)
         if evidence is not None:
@@ -339,6 +347,6 @@ def run_exam(
         "status": "ok",
         "responses": trial["responses"],
         "identity": identity,
-        "comparison": _comparison(checked_packet, checked_config),
+        "comparison": _comparison(checked_packet, checked_config, smoke_intent=smoke_intent),
         "metrics": dict(trial["metrics"]),
     }

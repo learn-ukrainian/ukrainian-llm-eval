@@ -328,8 +328,11 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
 def build_prompt(
     packet: Mapping[str, Any], condition: str, *, max_tool_calls: int | None = None,
     reference_catalog: list[dict[str, Any]] | None = None,
+    smoke_intent: bool = False,
 ) -> str:
     """Create the shared, gold-free prompt used by each fresh trial."""
+    if not isinstance(smoke_intent, bool):
+        raise AdapterError("smoke intent must be a boolean")
     if condition == "closed-book":
         policy = "No tools are available. Answer from your own knowledge."
     elif condition == "sources":
@@ -374,10 +377,16 @@ def build_prompt(
         'Use exactly the packet IDs and exactly these two fields in this order. '
     )
     catalog_text = ""
-    if condition == "sources" and reference_catalog is not None:
+    if condition == "sources" and smoke_intent:
+        if not reference_catalog:
+            raise AdapterError("Sources smoke requires a frozen reference catalog")
         policy += (
             " Exercise every tool in the supplied reference catalog with schema-valid arguments before answering. "
-            "Use the runtime's reference dispatcher with the listed tool name and arguments; where required, "
+            "SMOKE tool checklist: " + ", ".join(tool["name"] for tool in reference_catalog) + "."
+        )
+    if condition == "sources" and reference_catalog is not None:
+        policy += (
+            " Use the runtime's reference dispatcher with the listed tool name and arguments; where required, "
             "provide Sources server selection and native tool metadata. No filesystem schema lookup is needed."
         )
         catalog_text = "\n\nTRUSTED REFERENCE CATALOG:\n" + canonical(reference_catalog)
