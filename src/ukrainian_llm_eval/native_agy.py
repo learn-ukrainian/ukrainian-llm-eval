@@ -281,6 +281,19 @@ class ReferenceServer:
         self.thread.join()
 
 
+def _finish_completes(prior: Mapping[str, Any], step: Mapping[str, Any]) -> bool:
+    # CLI 1.3.2 reports finish twice at one step_index: ACTIVE as a finish tool call, then DONE as a finish step.
+    prior_info = prior.get("tool_info", {})
+    step_info = step.get("tool_info", {})
+    return (prior.get("state") == "ACTIVE" and prior.get("step_type") == "tool" and prior.get("tool_name") == "finish"
+            and prior_info.get("name", "finish") == "finish"
+            and step.get("state") == "DONE" and step.get("step_type") == "finish"
+            and step.get("conversation_id") == prior.get("conversation_id")
+            and step.get("tool_name", "finish") == "finish"
+            and step_info.get("name", "finish") == "finish"
+            and step_info.get("parameters", prior_info.get("parameters")) == prior_info.get("parameters"))
+
+
 def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, Any],
                  hook_receipts: list[dict[str, Any]], calls: list[dict[str, Any]]) -> dict[str, Any]:
     if not hook_receipts or any(receipt.get("decision") != "allow" for receipt in hook_receipts):
@@ -310,6 +323,9 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
             raise adapters.AdapterError("AGY native step invalid")
         sessions.add(step.get("conversation_id"))
         prior = steps.get(step["step_index"])
+        if prior is not None and _finish_completes(prior, step):
+            steps[step["step_index"]] = {**prior, **step, "step_type": "finish"}
+            continue
         if prior is not None:
             if (prior.get("state") == "DONE" or step.get("state") != "DONE"
                     or any(prior.get(key) != step.get(key) for key in ("conversation_id", "step_type", "tool_name"))
