@@ -63,6 +63,32 @@ def _probe(binary: str = "codex-fixture") -> native_codex._CliProbe:
     )
 
 
+def test_closed_book_disables_goals_in_invocation_and_receipt_shape(tmp_path: Path) -> None:
+    argv = native_codex.build_closed_book_argv(
+        "codex-fixture", model="gpt-6.1-sol", effort="high", response_schema_path=tmp_path / "schema.json",
+    )
+    shape = native_codex._request_shape(_config(model="gpt-6.1-sol", effort="high"))
+    for arguments in (argv, shape["argv"]):
+        assert arguments.count("goals") == 1
+        assert arguments[arguments.index("goals") - 1] == "--disable"
+        assert not {"multi_agent", "multi_agent_v2", "collaboration_modes"} & set(arguments)
+    assert "goals" in shape["disabled_features"]
+    stale_shape = {**shape, "disabled_features": [name for name in shape["disabled_features"] if name != "goals"]}
+    stale_shape["argv"] = shape["argv"].copy()
+    index = stale_shape["argv"].index("goals")
+    del stale_shape["argv"][index - 1:index + 1]
+    assert native_codex.adapters.digest(shape) != native_codex.adapters.digest(stale_shape)
+
+
+@pytest.mark.parametrize("flag", ["--enable", "--disable"])
+def test_goal_feature_overrides_fail_closed(tmp_path: Path, flag: str) -> None:
+    with pytest.raises(native_codex.CodexAdapterError, match="feature argv is contradictory"):
+        native_codex.build_closed_book_argv(
+            "codex-fixture", model="gpt-6.1-sol", effort="high", response_schema_path=tmp_path / "schema.json",
+            transport_overrides=(flag, "goals"),
+        )
+
+
 def _provisioning(
     tmp_path: Path,
     config: dict[str, Any],
