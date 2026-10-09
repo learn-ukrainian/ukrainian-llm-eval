@@ -42,7 +42,7 @@ reasoning. An MCP schema hash proves a tool interface, not corpus cleanliness.
 
 ## Installation and runtime storage
 
-Install the package using the root README. Native Claude runs require an authenticated Claude CLI. Compatible HTTP runs use an explicitly configured endpoint. Offline preparation and scoring need neither provider access nor MCP.
+Install the package using the root README. Native Claude runs require existing operator-staged authentication as described below. Compatible HTTP runs use an explicitly configured endpoint. Offline preparation and scoring need neither provider access nor MCP.
 
 For reference-assisted runs, set `SOURCES_MCP_URL` privately to an authorized compatible MCP endpoint. The server must expose the configured reference tools. The evaluator does not deploy a server or include a corpus. Closed-book runs need no Sources endpoint.
 
@@ -632,3 +632,50 @@ stop exits 2, preserves the remaining denominator in `budget-stop.json`, and
 prevents a primary score report. It is an incomplete experiment, not a smaller
 successful benchmark. The original upfront-reservation mode remains available
 for existing version 1 plans.
+
+## Native preflight validity and private staging (#68/#65)
+
+Native probes and candidates run inside one fresh private attempt boundary,
+with the same child environment/workspace. No host profile, cache, session,
+API-key/OAuth override or proxy environment is inherited. Fresh HOME does not
+remove managed settings: private presence/digest evidence and actual native
+inventory checks remain necessary. Missing inventory is unknown, never fabricated.
+
+Claude reads only the runtime `UKRAINIAN_LLM_EVAL_CLAUDE_PROVISIONING_DIR`.
+The absolute current-user `0700` staged directory contains a bounded nonempty
+current-user `0600` `.credentials.json`, with trusted nonsymlink ancestors and
+one leaf hard link. Strict duplicate-key/type checks select `claudeAiOauth`;
+unrelated top-level branches are ignored. Only accessToken, true numeric
+expiresAt, supported scopes and subscription metadata are copied to the child's
+`.claude/.credentials.json`. RefreshToken is entirely omitted, including empty
+or null sentinels; refreshTokenExpiresAt and clientId are not copied. The true
+expiry must exceed the invocation deadline plus the native 300-second window
+and a 60-second margin. Installed auth-source drift fails closed. Missing or
+rejected staging and pre-model authentication failure are `auth_unavailable`
+with `execution_disposition: NOT_RUN`; no login, renewal or automatic retry is
+performed. Original staged bytes stay unchanged. Child mutation produces only
+a rotation boolean and operator alert; auth diagnostics never retain raw streams,
+tokens, credential hashes, private locations or account identifiers. Post-model
+thinking/output remains in private evidence.
+
+Cursor staging follows [its native adapter contract](native-cursor.md): an
+existing authentic subscription token pair, no copied API key, and the native
+JWT gate. Neither source-contract proof nor a status probe proves authentication
+success. Actual fresh-HOME inference still needs authorized native smoke.
+
+For the frozen five-tool treatment, the common configured order is verify_words,
+verify_stress, query_pravopys, search_style_guide, search_text. All executing
+layers compare the filtered upstream catalog with canonical SHA-256
+`702240cdf17e9e2f7a11ba51f3ee07cce2ff5e1e6eb94e823ca7fb116bdfe9b7`;
+drift fails instead of re-freezing a cell. Smoke's explicit checklist stays opt-in
+through `smoke_intent`; ordinary study prompts acquire no forced five calls.
+Metadata and content counters are independent (eight and twenty), with the same
+600-second protocol deadline. Zero-hit content success proves callability only.
+Off cells receive no Sources URL/configuration, proxy or discovery access.
+
+AGY's [checked native capture](native-agy.md) preserves diagnostics without
+repairing missing producer evidence. Fixture passes do not certify any of the
+36 native smoke cells. Independent held-out proof, exact-head cross-family review,
+CI, merged-artifact/installed-entrypoint proof and native smoke remain separate
+driver gates. Effective native output caps, corpus identity and contamination
+limitations stay unknown where unmeasured.

@@ -13,6 +13,7 @@ preflight fails closed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -21,7 +22,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -58,21 +58,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "corpus_id",
         "provider",
         "cursor_bin",
-    }
-)
-_COMMON_CHILD_ENV = frozenset(
-    {
-        "PATH",
-        "USER",
-        "LOGNAME",
-        "HOME",
-        "TMPDIR",
-        "SHELL",
-        "TERM",
-        "LANG",
-        "LC_ALL",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
     }
 )
 _REQUIRED_HELP_FLAGS = frozenset(
@@ -121,6 +106,7 @@ class _ParsedCursorStream:
     usage: dict[str, int | float | None]
     answer_failure_reason: str | None
     answer_content: str | None
+    metadata_operations: int = 0
 
 
 def _fail(message: str) -> CursorAdapterError:
@@ -231,25 +217,62 @@ def _resolve_binary(configured: str) -> Path:
     return resolved
 
 
+_CURSOR_AUTH_CONTRACT = {
+    "index.js": "39218adfc45db4c75727b3a19c61ac12ff671aa4417c94591a1b1469658c59ea",
+    "2576.index.js": "e73fc1ae6529a431ccd5278b39e4cb6bb86fbe0eed6a76684950a2b3611e3717",
+    "7000.index.js": "fd0f1f6fbc18b41bb3ff6da962c9db79f596fed6b6b0091e5c577803f2fe4382",
+}
+
+
+def _auth_contract(binary: Path) -> None:
+    # The launcher resolves the installed bundle next to itself.
+    for name, expected in _CURSOR_AUTH_CONTRACT.items():
+        try:
+            actual = hashlib.sha256((binary.parent / name).read_bytes()).hexdigest()
+        except OSError:
+            raise _fail("Cursor installed auth contract unavailable") from None
+        if actual != expected:
+            raise _fail("Cursor installed auth contract changed")
+
+
+def _provision_cursor(root: str | os.PathLike[str] | None) -> Path:
+    source = adapters._staged_auth(root, "auth.json")
+    safe = {name: adapters._auth_token(source.get(name)) for name in ("accessToken", "refreshToken")}
+    attempt = adapters._ATTEMPT.get()
+    directory = Path(attempt["env"]["XDG_CONFIG_HOME"]) / "cursor"
+    directory.mkdir(mode=0o700)
+    destination = directory / "auth.json"
+    adapters._exclusive_private_write(destination, adapters.canonical(safe).encode())
+    attempt["env"]["AGENT_CLI_CREDENTIAL_STORE"] = "file"
+    return destination
+
+
+
+@adapters._isolated_native
 def _probe_cli(binary_name: str, timeout: int) -> _CliProbe:
     binary_path = _resolve_binary(binary_name)
+    _auth_contract(binary_path)
     try:
         version_proc = subprocess.run(
             [str(binary_path), "--version"],
+            cwd=adapters._ATTEMPT.get()["cwd"], env=_child_env(),
             capture_output=True,
             text=True,
-            timeout=min(15, timeout),
+            timeout=adapters._remaining_native_deadline(min(15, timeout)),
+            umask=0o077,
             check=False,
         )
         help_proc = subprocess.run(
             [str(binary_path), "--help"],
+            cwd=adapters._ATTEMPT.get()["cwd"], env=_child_env(),
             capture_output=True,
             text=True,
-            timeout=min(15, timeout),
+            timeout=adapters._remaining_native_deadline(min(15, timeout)),
+            umask=0o077,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _fail("cursor-agent CLI capability unavailable") from exc
+    except (OSError, subprocess.TimeoutExpired):
+        raise _fail("cursor-agent CLI capability unavailable") from None
     version_out = (version_proc.stdout or "") + (version_proc.stderr or "")
     help_out = (help_proc.stdout or "") + (help_proc.stderr or "")
     if version_proc.returncode != 0 or len(version_out.encode()) > _MAX_VERSION_BYTES:
@@ -274,45 +297,16 @@ def _assert_login(binary: str, timeout: int) -> None:
             [binary, "status"],
             capture_output=True,
             text=True,
-            timeout=min(15, timeout),
+            timeout=adapters._remaining_native_deadline(min(15, timeout)),
+            umask=0o077,
             check=False,
-            env=_child_env(),
+            env=_child_env(), cwd=adapters._ATTEMPT.get()["cwd"],
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _fail("cursor-agent subscription login unavailable") from exc
+    except (OSError, subprocess.TimeoutExpired):
+        raise adapters.AuthUnavailable("auth_unavailable") from None
     text = ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
     if result.returncode != 0 or "not logged in" in text or "logged in" not in text:
-        raise _fail("cursor-agent subscription login unavailable")
-
-
-def _global_mcp_path() -> Path:
-    return Path.home() / ".cursor" / "mcp.json"
-
-
-def _assert_no_global_mcp() -> None:
-    path = _global_mcp_path()
-    try:
-        if not path.exists():
-            return
-        if path.is_symlink():
-            raise _fail("global cursor MCP config must not be a symlink")
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise _fail("global cursor MCP config unavailable") from exc
-    if not raw.strip():
-        return
-    try:
-        payload = adapters._strict_json_loads(raw)
-    except adapters.AdapterError as exc:
-        raise _fail("global cursor MCP config is invalid") from exc
-    if not isinstance(payload, Mapping):
-        raise _fail("global cursor MCP config is invalid")
-    servers = payload.get("mcpServers")
-    if servers in (None, {}):
-        return
-    if isinstance(servers, Mapping) and len(servers) == 0:
-        return
-    raise _fail("global cursor MCP config must be empty for isolated evaluation")
+        raise adapters.AuthUnavailable("auth_unavailable")
 
 
 def _settings_sha256(*, condition: str, tools: list[str], max_tool_calls: int) -> str:
@@ -327,7 +321,7 @@ def _settings_sha256(*, condition: str, tools: list[str], max_tool_calls: int) -
             "tools": tools if condition == "sources" else [],
             "max_tool_calls": max_tool_calls,
             "prompt_delivery": "stdin",
-            "isolation": "workspace-only",
+            "isolation": "fresh-home-xdg-workspace",
         }
     )
 
@@ -354,6 +348,7 @@ def _request_shape_sha256(model: str, condition: str) -> str:
     )
 
 
+@adapters._isolated_native
 def preflight_cursor(
     config: Mapping[str, Any],
     condition: str,
@@ -362,9 +357,10 @@ def preflight_cursor(
     options = validate_options(config)
     checked = options.config
     _validate_condition(condition, sources_url, checked["tools"])
-    _assert_no_global_mcp()
-    probe = _probe_cli(options.binary, checked["timeout_seconds"])
-    _assert_login(probe.binary, checked["timeout_seconds"])
+    credential_path = _provision_cursor(os.environ.get("UKRAINIAN_LLM_EVAL_CURSOR_PROVISIONING_DIR"))
+    with adapters._auth_integrity(credential_path, None):
+        probe = _probe_cli(options.binary, checked["timeout_seconds"])
+        _assert_login(probe.binary, checked["timeout_seconds"])
     tools, identity = (
         adapters._mcp_list_tools(str(sources_url), checked["timeout_seconds"])
         if condition == "sources"
@@ -447,6 +443,8 @@ def _write_sources_mcp(workspace: Path, sources_url: str, tools: list[str], max_
                         json.dumps(tools, ensure_ascii=False, separators=(",", ":")),
                         "--max-tool-calls",
                         str(max_tool_calls),
+                        "--journal", str(adapters._ATTEMPT.get()["root"] / "reference-journal.jsonl"),
+                        "--deadline", str(adapters._ATTEMPT.get()["deadline"]),
                     ],
                     "env": {"ZNO_NMT_SOURCES_URL": sources_url},
                 }
@@ -460,11 +458,10 @@ def _write_sources_mcp(workspace: Path, sources_url: str, tools: list[str], max_
 
 
 def _child_env() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in _COMMON_CHILD_ENV and value}
-    if "HOME" not in env or "USER" not in env:
-        raise _fail("cursor-agent subscription identity environment unavailable")
-    # Never forward API-key auth for this subscription route.
-    return env
+    attempt = adapters._ATTEMPT.get()
+    if attempt is None:
+        raise _fail("native attempt boundary missing")
+    return attempt["env"]
 
 
 def _build_argv(
@@ -506,6 +503,7 @@ def _run_cursor_process(
     timeout: int,
     evidence: Callable[[str, Any], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    evidence = adapters._auth_capture(evidence)
     try:
         if evidence is not None:
             evidence("candidate_submission", {"stdin": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
@@ -518,9 +516,10 @@ def _run_cursor_process(
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
+            umask=0o077,
         )
         stdout, stderr = process.communicate(prompt, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except (NameError, ProcessLookupError, OSError):
@@ -530,7 +529,9 @@ def _run_cursor_process(
             stdout, stderr = process.communicate()
             if evidence is not None:
                 evidence("cli_timeout", {"stdout": stdout, "stderr": stderr, "returncode": process.returncode})
-        raise _fail("cursor-agent CLI timeout") from exc
+        if "stdout" in locals() and not adapters._has_model_output(stdout) and adapters._auth_failure({"stdout": stdout, "stderr": stderr}):
+            raise adapters.AuthUnavailable("auth_unavailable") from None
+        raise _fail("cursor-agent CLI timeout") from None
     except OSError as exc:
         raise _fail("cursor-agent CLI invocation failed") from exc
     return subprocess.CompletedProcess(argv, process.returncode, stdout=stdout, stderr=stderr)
@@ -725,7 +726,9 @@ def _parse_stream_envelope(
     resolved_model = "unknown"
     api_key_source = "unknown"
     answer_segments: list[str] = []
-    seen_tool_ids: dict[str, tuple[str, str, bool]] = {}
+    seen_tool_ids = {}
+    completed_tool_ids = set()
+    metadata_operations = 0
     tool_calls = 0
     usage: dict[str, int | float | None] = {
         "input_tokens": None,
@@ -736,7 +739,7 @@ def _parse_stream_envelope(
     saw_init = False
     saw_result = False
     result_content: str | None = None
-    for line in stdout.splitlines():
+    for line in adapters._physical_lines(stdout):
         if not line.strip():
             continue
         try:
@@ -787,19 +790,29 @@ def _parse_stream_envelope(
                 is_meta = False
             if is_meta:
                 # Discovery only when Sources tools are configured; closed-book rejects.
-                if not allowed_tools:
+                payload = event["tool_call"][family + "ToolCall"]
+                args = payload.get("args")
+                if (not allowed_tools or not isinstance(args, dict) or not _mcp_server_fields(payload, args)
+                        or any(server != "sources" for server in _mcp_server_fields(payload, args))
+                        or set(args) - {"server", "serverIdentifier", "providerIdentifier", "toolName", "toolCallId"}
+                        or ("toolName" in args and args["toolName"] not in allowed_tools)):
                     raise _fail(_TOOL_POLICY_ERROR)
             elif normalized not in allowed_tools and name not in allowed_tools:
                 raise _fail(_TOOL_POLICY_ERROR)
-            identity = (family, normalized, is_meta)
+            payload = event.get("tool_call", {}).get(family + "ToolCall", event)
+            identity = (family, normalized, is_meta, adapters.digest(payload.get("args", {})))
             if subtype == "completed":
                 if call_id is None:
                     raise _fail("CLI tool call id is missing")
                 prior = seen_tool_ids.get(call_id)
-                if prior is None:
-                    raise _fail("CLI tool call completion without start")
+                if prior is None or call_id in completed_tool_ids:
+                    raise _fail("CLI tool call completion without start or duplicated")
                 if prior != identity:
                     raise _fail("CLI tool call identity drift")
+                native_result = payload.get("result")
+                if not isinstance(native_result, dict) or "success" not in native_result or set(native_result) != {"success"}:
+                    raise _fail("CLI tool call result missing or failed")
+                completed_tool_ids.add(call_id)
                 continue
             if subtype not in {None, "started"}:
                 raise _fail("CLI tool call surface is malformed")
@@ -808,6 +821,10 @@ def _parse_stream_envelope(
             if call_id in seen_tool_ids:
                 raise _fail("CLI emitted duplicate tool call id")
             seen_tool_ids[call_id] = identity
+            if is_meta:
+                metadata_operations += 1
+                if metadata_operations > adapters.METADATA_LIMIT:
+                    raise _fail(_TOOL_LIMIT_ERROR)
             if not is_meta:
                 tool_calls += 1
                 if tool_calls > max_tools:
@@ -852,6 +869,8 @@ def _parse_stream_envelope(
             if "session_id" in event:
                 _check_session(event, session_id)
             continue
+    if set(seen_tool_ids) != completed_tool_ids:
+        raise _fail("CLI tool call unfinished")
     if not saw_init or not saw_result or not session_id:
         raise _fail("CLI stream envelope incomplete")
     if not allowed_tools and tool_calls:
@@ -884,8 +903,27 @@ def _parse_stream_envelope(
         usage=usage,
         answer_failure_reason=answer_failure_reason,
         answer_content=answer_content,
+        metadata_operations=metadata_operations,
     )
 
+
+
+def _content_calls(stdout: str) -> list[dict]:
+    calls = []
+    for line in adapters._physical_lines(stdout):
+        event = adapters._strict_json_loads(line)
+        if event.get("type") != "tool_call" or event.get("subtype") != "completed":
+            continue
+        payload = event.get("tool_call", {}).get("mcpToolCall")
+        if not isinstance(payload, dict):
+            continue
+        args = payload.get("args", {})
+        result = payload.get("result", {})
+        success = result.get("success")
+        if not isinstance(success, dict) or "content" not in success or not isinstance(args.get("args"), dict):
+            raise _fail("CLI native content evidence missing")
+        calls.append({"name": _normalize_tool_name(_tool_name(event)), "arguments": args["args"], "output": success["content"]})
+    return calls
 
 def _identity(
     checked: Mapping[str, Any],
@@ -932,6 +970,7 @@ def _identity(
     }
 
 
+@adapters._isolated_native
 def run_cursor(
     packet: Mapping[str, Any],
     config: Mapping[str, Any],
@@ -945,13 +984,13 @@ def run_cursor(
     options = validate_options(config)
     checked = options.config
     _validate_condition(condition, sources_url, checked["tools"])
-    _assert_no_global_mcp()
-    probe = _probe_cli(options.binary, checked["timeout_seconds"])
-    _assert_login(probe.binary, checked["timeout_seconds"])
+    credential_path = _provision_cursor(os.environ.get("UKRAINIAN_LLM_EVAL_CURSOR_PROVISIONING_DIR"))
+    evidence = adapters._auth_capture(evidence)
+    with adapters._auth_integrity(credential_path, evidence):
+        probe = _probe_cli(options.binary, checked["timeout_seconds"])
+        _assert_login(probe.binary, checked["timeout_seconds"])
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="ukrainian-llm-eval-cursor-") as temp:
-        workspace = Path(temp) / "workspace"
-        workspace.mkdir(mode=0o700)
+    with contextlib.nullcontext(adapters._ATTEMPT.get()["cwd"]) as workspace:
         _assert_neutral_workspace(workspace)
         if condition == "sources":
             _write_sources_mcp(workspace, str(sources_url), checked["tools"], checked["max_tool_calls"])
@@ -972,19 +1011,25 @@ def run_cursor(
                     "prompt_bytes": len(prompt.encode("utf-8")),
                 },
             )
-        result = _run_cursor_process(
-            argv,
-            cwd=workspace,
-            env=env,
-            prompt=prompt,
-            timeout=checked["timeout_seconds"],
-            evidence=evidence,
-        )
+        with adapters._auth_integrity(credential_path, evidence):
+            result = _run_cursor_process(
+                argv,
+                cwd=workspace,
+                env=env,
+                prompt=prompt,
+                timeout=adapters._remaining_native_deadline(checked["timeout_seconds"]),
+                evidence=evidence,
+            )
+        _auth_contract(probe.binary_path)
+        if hashlib.sha256(probe.binary_path.read_bytes()).hexdigest() != probe.binary_sha256:
+            raise _fail("Cursor installed artifact changed")
         if evidence is not None:
             evidence(
                 "cli_result",
                 {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
             )
+        if not adapters._has_model_output(result.stdout) and adapters._auth_failure({"stdout": result.stdout, "stderr": result.stderr}):
+            raise adapters.AuthUnavailable("auth_unavailable")
         if result.returncode != 0:
             raise _fail("cursor-agent CLI failed")
         allowed = set(checked["tools"]) if condition == "sources" else set()
@@ -994,6 +1039,10 @@ def run_cursor(
             allowed,
             checked["max_tool_calls"],
         )
+        metadata_count = 0
+        if condition == "sources":
+            calls, metadata_count = adapters._controller_evidence(adapters._ATTEMPT.get()["root"], reference_catalog or [], evidence)
+            adapters._attest_content_calls(_content_calls(result.stdout), calls)
         identity = _identity(checked, probe, parsed, condition=condition)
         metrics = {
             "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -1002,6 +1051,8 @@ def run_cursor(
             "total_tokens": parsed.usage["total_tokens"],
             "cost_usd": parsed.usage["cost_usd"],
             "tool_calls": parsed.tool_calls,
+            "controller_metadata_operations": metadata_count,
+            "native_metadata_operations": parsed.metadata_operations,
         }
         if parsed.answer_failure_reason is not None:
             if evidence is not None:

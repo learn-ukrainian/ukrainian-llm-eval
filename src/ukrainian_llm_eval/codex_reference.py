@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sysconfig
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -135,6 +135,7 @@ def identity(config: dict, condition: str, probe: native._CliProbe, catalog_iden
     }
 
 
+@adapters._isolated_native
 def preflight(config, condition, sources_url=None, *, private_env_path=None):
     config, _root, probe, _catalog, catalog_identity, receipt = prepare(
         config, condition, sources_url, private_env_path,
@@ -156,12 +157,12 @@ def reference_overrides(config_path: Path, tools: list[str]) -> tuple[str, ...]:
 
 
 def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict], *, final_message: str | None = None):
-    if any(not isinstance(entry, dict) for entry in journal):
+    if any(not isinstance(entry, dict) or entry.get("event") == "rejected" for entry in journal):
         raise native._fail("native reference controller evidence is invalid")
     pending, completed, filtered = {}, [], []
     seen = set()
     in_turn = False
-    for line in stdout.splitlines():
+    for line in adapters._physical_lines(stdout):
         event = adapters._strict_json_loads(line)
         if not isinstance(event, dict):
             raise native._fail("native reference event is invalid")
@@ -179,9 +180,12 @@ def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict
             if event["type"] == "item.started" and key not in seen and item.get("status") == "in_progress":
                 seen.add(key)
                 pending[key] = signature
-            elif (event["type"] == "item.completed" and item.get("status") in {"completed", "failed"}
+            elif (event["type"] == "item.completed" and item.get("status") == "completed"
                   and pending.pop(key, None) == signature):
-                completed.append(signature)
+                result = item.get("result")
+                if not isinstance(result, dict) or result.get("isError") or item.get("error") or "error" in result:
+                    raise native._fail("native reference completed result missing or failed")
+                completed.append((*signature, adapters.digest(result)))
             else:
                 raise native._fail("native reference call lifecycle is invalid")
         else:
@@ -191,16 +195,20 @@ def parse_events(stdout: str, packet: dict, tools: list[str], journal: list[dict
     call_indices = [entry.get("index") for entry in journal if entry.get("event") == "call"]
     result_indices = [entry.get("index") for entry in journal if entry.get("event") == "result"]
     if (call_indices != list(range(1, len(call_indices) + 1)) or result_indices != call_indices
-            or any(not isinstance(entry, dict) or entry.get("event") not in {"ready", "call", "result", "rejected"}
+            or any(not isinstance(entry, dict) or entry.get("event") not in {"ready", "call", "result", "rejected", "metadata", "metadata_result"}
                    for entry in journal)):
         raise native._fail("native reference controller evidence is incomplete")
-    recorded = [(entry.get("tool"), entry.get("arguments_sha256")) for entry in journal
-                if entry.get("event") == "call" or entry.get("reason") == "call_cap"]
+    results = [entry for entry in journal if entry.get("event") == "result"]
+    if any(entry.get("success") is not True for entry in results):
+        raise native._fail("native reference controller lookup failed")
+    recorded = [(entry.get("tool"), entry.get("arguments_sha256"), result.get("result_sha256"))
+                for entry, result in zip((entry for entry in journal if entry.get("event") == "call"), results, strict=True)]
     if recorded != completed:
         raise native._fail("native reference controller and CLI evidence disagree")
     return native._parse_events("\n".join(filtered), packet, final_message=final_message), len(completed)
 
 
+@adapters._isolated_native
 def run(packet, config, condition, *, sources_url, prompt, evidence=None, private_env_path=None, reference_catalog=None):
     if not isinstance(prompt, str) or not prompt:
         raise native._fail("Codex prompt must be a nonempty string")
@@ -209,10 +217,8 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
         raise native._fail("native reference prompt catalog drift")
     trial_identity = identity(config, condition, probe, catalog_identity, receipt)
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="codex-reference-home-") as home_raw, tempfile.TemporaryDirectory(
-        prefix="codex-reference-cwd-"
-    ) as cwd_raw:
-        home, cwd = Path(home_raw), Path(cwd_raw)
+    with contextlib.nullcontext(adapters._ATTEMPT.get()) as attempt:
+        home, cwd = attempt["home"], attempt["cwd"]
         home.chmod(0o700)
         cwd.chmod(0o700)
         env = native._child_env(home, native._sanitized_chatgpt_auth(root))
@@ -231,6 +237,7 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
                 "url": sources_url, "tools": config["tools"], "cap": config["max_tool_calls"],
                 "timeout": min(config["timeout_seconds"], 20), "schemas": receipt["schemas"],
                 "server_sha256": receipt["source_server_sha256"], "journal": str(journal_path),
+                "deadline": attempt["deadline"],
             })
             overrides = reference_overrides(bridge_config, config["tools"])
         argv = codex_catalog.build_argv(str(probe.binary_path), model=config["model"], effort=config["effort"],
@@ -241,17 +248,28 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
             evidence("cli_invocation", {"argv": argv, "cwd": str(cwd), "env_keys": sorted(env),
                                         "condition": condition, **trial_identity})
         journal = []
+        execution_error = None
         try:
             completed = native._run_process(argv, cwd=cwd, env=env, prompt=prompt,
-                                             timeout=config["timeout_seconds"], evidence=evidence)
+                                             timeout=adapters._remaining_native_deadline(config["timeout_seconds"]), evidence=evidence)
+        except BaseException as exc:
+            execution_error = exc
+            raise
         finally:
             if journal_path.exists():
-                if journal_path.stat().st_size > native._MAX_OUTPUT_BYTES:
-                    raise native._fail("native reference journal exceeds bound")
-                raw = journal_path.read_text()
-                if evidence is not None:
-                    evidence("reference_controller", {"journal": raw})
-                journal = [adapters._strict_json_loads(line) for line in raw.splitlines()]
+                try:
+                    raw_bytes = adapters._checked_private_read(home, journal_path.name, limit=native._MAX_OUTPUT_BYTES, allow_empty=True)
+                    raw = raw_bytes.decode("utf-8")
+                    if evidence is not None:
+                        evidence("reference_controller", {"journal": raw})
+                    if raw_bytes and not raw_bytes.endswith(b"\n"):
+                        raise native._fail("native reference journal truncated")
+                    journal = [adapters._strict_json_loads(line) for line in adapters._physical_lines(raw)]
+                except (adapters.AdapterError, UnicodeError):
+                    if evidence is not None:
+                        evidence("reference_controller_capture_failure", {"reason": "native_artifact_unavailable_or_unsafe"})
+                    if execution_error is None:
+                        raise
         if evidence is not None:
             evidence("cli_result", {"returncode": completed.returncode,
                                      "stdout": completed.stdout, "stderr": completed.stderr})
@@ -272,7 +290,9 @@ def run(packet, config, condition, *, sources_url, prompt, evidence=None, privat
                                      journal, final_message=final_message)
     trial_identity["session_id"] = parsed.session_id
     trial = {"responses": parsed.responses, "identity": trial_identity,
-             "metrics": {"elapsed_seconds": time.monotonic() - started, **parsed.usage, "tool_calls": calls}}
+             "metrics": {"elapsed_seconds": time.monotonic() - started, **parsed.usage, "tool_calls": calls,
+                         "native_metadata_operations": "unknown",
+                         "controller_metadata_operations": sum(entry.get("event") == "metadata" for entry in journal)}}
     if parsed.answer_failure_reason is not None:
         trial.update(status="failed", failure_reason=CANDIDATE_RESPONSE_ERROR,
                      responses={str(item["id"]): None for item in packet["items"]})

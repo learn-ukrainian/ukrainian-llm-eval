@@ -12,6 +12,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from native_validity_fixtures import staged_native_auth as staged_native_auth
+
 import pytest
 
 from ukrainian_llm_eval import adapters, runner
@@ -186,7 +188,7 @@ def test_closed_book_http_sends_no_tools_or_runtime_secret(monkeypatch: pytest.M
         }
 
     monkeypatch.setattr(adapters, "_http_json", completion)
-    result = adapters.run_chat_http(_packet(), _config(), "closed-book", sources_url="https://sources.invalid/mcp", prompt="exam")
+    result = adapters.run_chat_http(_packet(), _config(), "closed-book", sources_url=None, prompt="exam")
     assert "tools" not in captured["payload"]
     assert "secret-never-in-prompt" not in json.dumps(captured["payload"])
     assert captured["key"] == "secret-never-in-prompt"
@@ -273,15 +275,15 @@ def test_claude_native_session_does_not_invent_fresh_identity() -> None:
     assert adapters._claude_session_identity(stream) == "native-session"
 
 
-def test_claude_child_env_keeps_local_keychain_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_child_env_excludes_ambient_keychain_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USER", "fixture-user")
     monkeypatch.setenv("LOGNAME", "fixture-login")
     monkeypatch.setenv("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "0")
-    environment = adapters._child_env(100)
-    assert environment["USER"] == "fixture-user"
-    assert environment["LOGNAME"] == "fixture-login"
-    assert environment["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] == "1"
-    assert "CLAUDE_CODE_SIMPLE" not in environment
+    with adapters._native_attempt():
+        environment = adapters._child_env(100)
+        assert "USER" not in environment and "LOGNAME" not in environment
+        assert environment["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] == "1"
+        assert "CLAUDE_CODE_SIMPLE" not in environment
 
 
 def test_structured_output_tool_is_not_counted_as_retrieval() -> None:
@@ -524,7 +526,7 @@ def test_native_timeout_kills_its_whole_process_group(monkeypatch: pytest.Monkey
         def communicate(self, _prompt: str | None = None, *, timeout: int | None = None):
             if timeout is not None:
                 raise subprocess.TimeoutExpired("claude", timeout)
-            return "partial output", "partial diagnostics"
+            return '{"type":"thinking","text":"partial output"}', "partial diagnostics"
 
         def kill(self) -> None:
             raise AssertionError("process-group kill should be preferred")
@@ -540,7 +542,7 @@ def test_native_timeout_kills_its_whole_process_group(monkeypatch: pytest.Monkey
                                     evidence=lambda kind, payload: seen.update(evidence=(kind, payload)))
     assert seen["start_new_session"] is True
     assert seen["kill"] == (321, adapters.signal.SIGKILL)
-    assert seen["evidence"] == ("cli_timeout", {"stdout": "partial output", "stderr": "partial diagnostics", "returncode": -9})
+    assert seen["evidence"] == ("cli_timeout", {"stdout": '{"type":"thinking","text":"partial output"}', "stderr": "partial diagnostics", "returncode": -9})
 
 
 def test_http_evidence_preserves_rejected_response_without_transport_credentials(monkeypatch: pytest.MonkeyPatch) -> None:

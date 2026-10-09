@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from native_validity_fixtures import staged_native_auth as staged_native_auth
+
 import pytest
 
 from ukrainian_llm_eval import native_cursor
@@ -82,6 +84,13 @@ def _stream_events() -> list[dict[str, Any]]:
 
 def _fixture_cli(tmp_path: Path, *, stream: list[dict[str, Any]] | None = None) -> Path:
     output = stream or _stream_events()
+    for event in output:
+        if event.get("type") == "tool_call" and event.get("call_id") == "call-1" and "tool_call" not in event:
+            payload = {"args": {"name": "sources-verify_word", "serverIdentifier": "sources", "args": {"word": "fixture"}}}
+            event.pop("name", None)
+            if event.get("subtype") == "completed":
+                payload["result"] = {"success": {"content": "REFERENCE"}}
+            event["tool_call"] = {"mcpToolCall": payload}
     script = tmp_path / "cursor-agent-fixture"
     script.write_text(
         "#!" + sys.executable + "\n"
@@ -101,6 +110,11 @@ def _fixture_cli(tmp_path: Path, *, stream: list[dict[str, Any]] | None = None) 
         "    assert '--output-format' in argv and argv[argv.index('--output-format') + 1] == 'stream-json'\n"
         "    assert '--mode' in argv and argv[argv.index('--mode') + 1] == 'ask'\n"
         "    assert '-' not in argv  # must not pass literal '-' as prompt\n"
+        "    if '--approve-mcps' in argv:\n"
+        "        from pathlib import Path\n"
+        "        path=Path.cwd().parent/'reference-journal.jsonl'\n"
+        "        row={'request':{'jsonrpc':'2.0','method':'tools/call','id':1,'params':{'name':'verify_word','arguments':{'word':'fixture'}}},'response':{'jsonrpc':'2.0','id':1,'result':{'content':[{'type':'text','text':'REFERENCE'}]}}}\n"
+        "        path.write_text(json.dumps(row)+'\\n'); path.chmod(0o600)\n"
         f"    events = {json.dumps(output, ensure_ascii=False)!r}\n"
         "    for event in json.loads(events):\n"
         "        print(json.dumps(event, ensure_ascii=False, separators=(',', ':')))\n",
@@ -128,10 +142,8 @@ def test_full_validator_rejects_unknown_and_contradictory_provider(tmp_path: Pat
 
 def test_preflight_records_identity_and_unknown_effective_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fixture_cli(tmp_path)
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
-    (tmp_path / "home").mkdir()
     capability = native_cursor.preflight_cursor(_config(str(binary), tools=[]), "closed-book")
     assert capability["adapter"] == "cursor"
     assert capability["capability"] == "native-cursor-workspace-isolated"
@@ -141,24 +153,23 @@ def test_preflight_records_identity_and_unknown_effective_values(tmp_path: Path,
     assert len(capability["binary_sha256"]) == 64
 
 
-def test_preflight_rejects_global_mcp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preflight_excludes_ambient_global_mcp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fixture_cli(tmp_path)
-    mcp = tmp_path / "mcp.json"
+    ambient = tmp_path / "home/.cursor"
+    ambient.mkdir(parents=True)
+    mcp = ambient / "mcp.json"
     mcp.write_text(
         json.dumps({"mcpServers": {"other": {"url": "http://127.0.0.1:9/mcp"}}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(native_cursor, "_global_mcp_path", lambda: mcp)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
-    (tmp_path / "home").mkdir()
-    with pytest.raises(native_cursor.CursorAdapterError, match="global cursor MCP"):
-        native_cursor.preflight_cursor(_config(str(binary), tools=[]), "closed-book")
+    capability = native_cursor.preflight_cursor(_config(str(binary), tools=[]), "closed-book")
+    assert capability["adapter"] == "cursor"
 
 
 def test_run_closed_book_trial_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     binary = _fixture_cli(tmp_path)
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
     (tmp_path / "home").mkdir()
@@ -182,7 +193,6 @@ def test_run_rejects_api_key_auth_source(tmp_path: Path, monkeypatch: pytest.Mon
     events = _stream_events()
     events[0]["apiKeySource"] = "env"
     binary = _fixture_cli(tmp_path, stream=events)
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
     (tmp_path / "home").mkdir()
@@ -201,7 +211,6 @@ def test_invalid_answer_preserves_candidate_failure(tmp_path: Path, monkeypatch:
     events[1]["message"]["content"][0]["text"] = "not-json"
     events[2]["result"] = "not-json"
     binary = _fixture_cli(tmp_path, stream=events)
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
     (tmp_path / "home").mkdir()
@@ -264,7 +273,6 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
         },
     ]
     binary = _fixture_cli(tmp_path, stream=events)
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USER", "fixture-user")
     (tmp_path / "home").mkdir()
@@ -285,6 +293,7 @@ def test_sources_mirrors_proxy_and_counts_tools(tmp_path: Path, monkeypatch: pyt
         "sources",
         sources_url="http://127.0.0.1:8766/mcp",
         prompt="answer as JSON",
+        reference_catalog=[{"name":"verify_word", "inputSchema":{"type":"object"}}],
     )
     assert trial["responses"] == {"opaque-1": "A"}
     assert trial["metrics"]["tool_calls"] == 1
@@ -315,6 +324,7 @@ def test_parser_counts_paired_tool_events_once() -> None:
             {
                 "type": "tool_call",
                 "subtype": "completed",
+                "result": {"success": {"content": "REFERENCE"}},
                 "call_id": "c1",
                 "name": "verify_word",
                 "session_id": "s1",
@@ -756,6 +766,7 @@ def test_parser_accepts_mcp_args_name_without_toolname() -> None:
                         "args": {
                             "name": "sources-verify_word",
                             "serverIdentifier": "sources",
+                            "args": {"word": "дім"},
                             "toolCallId": "mcp-1",
                         },
                         "result": {"success": {"content": "{}"}},

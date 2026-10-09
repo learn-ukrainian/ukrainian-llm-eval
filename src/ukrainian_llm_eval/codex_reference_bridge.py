@@ -14,31 +14,20 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters
-from .mcp_proxy import MAX_BYTES, Bridge
+from .mcp_proxy import MAX_BYTES, Bridge, normalized_catalog, validate_arguments
 
 
 def normalized_tools(tools: Any, allowed: list[str]) -> list[dict]:
-    if not isinstance(tools, list):
-        raise TypeError("invalid reference tool listing")
-    indexed = {}
-    for tool in tools:
-        if (not isinstance(tool, dict) or not isinstance(tool.get("name"), str)
-                or not isinstance(tool.get("inputSchema"), dict) or tool["name"] in indexed):
-            raise ValueError("invalid or duplicate reference tool schema")
-        indexed[tool["name"]] = tool
-    if not set(allowed) <= indexed.keys():
-        raise ValueError("required reference tool missing")
-    # Descriptions and annotations are model-visible and therefore hash-bound too.
-    return [indexed[name] for name in allowed]
+    return normalized_catalog(tools, allowed)
 
 
 class ReferenceBridge(Bridge):
     def __init__(self, url: str, allowed: list[str], *, timeout: float, max_tool_calls: int,
                  expected_tools: list[dict] | None = None, expected_server: str | None = None,
-                 journal: Path | None = None):
+                 journal: Path | None = None, deadline: float | None = None):
         if type(max_tool_calls) is not int or max_tool_calls < 1:
             raise ValueError("invalid reference call cap")
-        super().__init__(url, allowed, timeout, max_tool_calls)
+        super().__init__(url, allowed, timeout, max_tool_calls, deadline=deadline)
         self.expected_tools = expected_tools
         self.expected_server = expected_server
         self.journal = journal
@@ -63,10 +52,23 @@ class ReferenceBridge(Bridge):
         return result
 
     def handle(self, message: dict) -> dict | None:
+        try:
+            return self._handle_reference(message)
+        except Exception:
+            self.record({"event": "rejected", "method": message.get("method"), "forwarded": False})
+            raise
+
+    def _handle_reference(self, message: dict) -> dict | None:
         ident, method, params = message.get("id"), message.get("method"), message.get("params", {})
         if (message.get("jsonrpc") != "2.0" or not isinstance(params, dict)
                 or (ident is not None and (type(ident) not in (str, int)))):
             raise ValueError("invalid reference request envelope")
+        if method in {"initialize", "notifications/initialized", "ping", "tools/list", "resources/list"}:
+            self.charge_metadata(method, params)
+            self.record({"event": "metadata", "method": method, "index": self.metadata_operations})
+        if method == "resources/list":
+            self.record({"event": "metadata_result", "method": method, "unsupported": True, "forwarded": False})
+            return {"jsonrpc": "2.0", "id": ident, "error": {"code": -32601, "message": "Method not permitted"}}
         if method not in {"initialize", "notifications/initialized", "ping", "tools/list", "tools/call"}:
             self.record({"event": "rejected", "method": method, "forwarded": False})
             return None if ident is None else self.reject(ident, "Method not permitted")
@@ -98,6 +100,7 @@ class ReferenceBridge(Bridge):
             if not isinstance(body, dict) or body.get("nextCursor"):
                 raise ValueError("reference listing incomplete")
             self.observed_tools = normalized_tools(body.get("tools"), self.allowed)
+            self.schemas = {tool["name"]: tool for tool in self.observed_tools}
             if self.expected_tools is not None and self.observed_tools != self.expected_tools:
                 raise ValueError("reference tool schema drift")
             self.ready = True
@@ -111,6 +114,10 @@ class ReferenceBridge(Bridge):
             if not self.ready or name not in self.allowed or not isinstance(params.get("arguments", {}), dict):
                 self.record({"event": "rejected", "method": method, "forwarded": False})
                 return self.reject(ident, "Tool not permitted")
+            import time
+            if time.monotonic() >= self.deadline:
+                raise ValueError("reference deadline reached")
+            validate_arguments(params.get("arguments", {}), self.schemas[name]["inputSchema"])
             if self.calls >= self.max_tool_calls:
                 self.record({"event": "rejected", "method": method, "reason": "call_cap", "forwarded": False,
                              "tool": name, "arguments_sha256": adapters.digest(params.get("arguments", {}))})
@@ -118,6 +125,7 @@ class ReferenceBridge(Bridge):
             self.calls += 1  # Charge before network I/O; failures consume the cap.
             self.record({"event": "call", "index": self.calls, "tool": name,
                          "arguments_sha256": adapters.digest(params.get("arguments", {}))})
+            result = {}
             try:
                 result = self.request(method, params, ident)
                 body = result.get("result")
@@ -125,7 +133,8 @@ class ReferenceBridge(Bridge):
                     raise TypeError("invalid reference result")
             except Exception:  # noqa: BLE001 - raw upstream diagnostics stay private
                 body = {"isError": True, "content": [{"type": "text", "text": "Reference lookup failed"}]}
-            self.record({"event": "result", "index": self.calls, "result_sha256": adapters.digest(body)})
+            self.record({"event": "result", "index": self.calls, "result_sha256": adapters.digest(body),
+                         "success": not body.get("isError", False) and "error" not in result})
             return {"jsonrpc": "2.0", "id": ident, "result": body}
         if method == "notifications/initialized":
             self.request(method, {}, None)
@@ -161,7 +170,7 @@ def main() -> int:
         journal.chmod(0o600)
         bridge = ReferenceBridge(config["url"], config["tools"], timeout=config["timeout"],
                                  max_tool_calls=config["cap"], expected_tools=config["schemas"],
-                                 expected_server=config["server_sha256"], journal=journal)
+                                 expected_server=config["server_sha256"], journal=journal, deadline=config.get("deadline"))
         while True:
             line = sys.stdin.buffer.readline(MAX_BYTES + 1)
             if not line:

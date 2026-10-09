@@ -133,7 +133,7 @@ def test_schema_drift_and_reinitialization_fail_closed(upstream):
 
 def test_missing_duplicate_and_paginated_schemas_rejected(upstream, monkeypatch):
     _, tools = upstream
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(ValueError, match="does not expose"):
         reference.normalized_tools([], ["verify_word"])
     with pytest.raises(ValueError, match="duplicate"):
         reference.normalized_tools(tools + tools, ["verify_word"])
@@ -218,8 +218,10 @@ def test_reference_run_preserves_failed_answers_and_partial_controller_evidence(
             {"event": "call", "index": 1, "tool": "verify_word", "arguments_sha256": adapter.adapters.digest(arguments)},
         ]
         if not interrupted:
-            journal.append({"event": "result", "index": 1, "result_sha256": "e" * 64})
-        Path(controller["journal"]).write_text("\n".join(json.dumps(entry) for entry in journal))
+            journal.append({"event": "result", "index": 1, "result_sha256": adapter.adapters.digest({"content": []}), "success": True})
+        journal_path = Path(controller["journal"])
+        journal_path.write_text("\n".join(json.dumps(entry) for entry in journal) + "\n")
+        journal_path.chmod(0o600)
         if interrupted:
             raise native_codex.CodexAdapterError("fixture interruption")
         item = {"id": "call-1", "type": "mcp_tool_call", "server": "sources", "tool": "verify_word",
@@ -227,7 +229,7 @@ def test_reference_run_preserves_failed_answers_and_partial_controller_evidence(
         events = [
             {"type": "thread.started", "thread_id": "fixture-session"}, {"type": "turn.started"},
             {"type": "item.started", "item": item},
-            {"type": "item.completed", "item": {**item, "status": "completed"}},
+            {"type": "item.completed", "item": {**item, "status": "completed", "result": {"content": []}}},
             {"type": "item.completed", "item": {"type": "agent_message", "text": "Malformed answer"}},
             {"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}},
         ]

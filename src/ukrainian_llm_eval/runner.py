@@ -36,6 +36,8 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
     try:
         return adapters.preflight(config, condition, sources_url)
     except adapters.AdapterError as exc:
+        if isinstance(exc, adapters.AuthUnavailable):
+            raise ExamError("auth_unavailable") from None
         raise ExamError(str(exc)) from exc
 
 
@@ -75,6 +77,8 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any], *, smoke_i
         "timeout_seconds": config["timeout_seconds"],
         "max_output_tokens": config["max_output_tokens"],
         "max_tool_calls": config["max_tool_calls"],
+        "max_metadata_operations": adapters.METADATA_LIMIT,
+        "frozen_smoke_catalog_sha256": adapters.SMOKE_CATALOG_SHA256,
         "repeats": config["repeats"],
         # Bind the actual prompt implementation and response-schema generator,
         # while deliberately excluding the only paired variable: tool policy.
@@ -154,6 +158,7 @@ def _failure(packet: Mapping[str, Any], config: Mapping[str, Any], condition: st
         "comparison": _comparison(packet, config, smoke_intent=smoke_intent),
         "metrics": _empty_metrics(),
         "failure_reason": adapters.normalized_reason(exc),
+        "execution_disposition": "NOT_RUN" if adapters.normalized_reason(exc) == "auth_unavailable" else "FAILED",
     }
 
 

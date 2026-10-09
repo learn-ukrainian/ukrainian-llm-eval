@@ -9,6 +9,8 @@ import hashlib
 import json
 import sys
 
+from native_validity_fixtures import staged_native_auth as staged_native_auth, synthetic_catalog as synthetic_catalog
+
 import pytest
 import test_answer_first_contract as contract
 from answer_first_fixtures import wire_responses
@@ -49,6 +51,9 @@ elif ADAPTER == 'cursor':
 else:
     sources = {'sources': True} if any(arg.startswith('mcp_servers.sources.args=') for arg in argv) else {}
 Path(CAPTURE).with_suffix('.sources.json').write_text(json.dumps(sources))
+if sources and ADAPTER in ('claude','cursor'):
+    journal=Path.cwd().parent/'reference-journal.jsonl'
+    journal.write_text(''); journal.chmod(0o600)
 def emit(value):
     print(json.dumps(value, ensure_ascii=False))
 schema = None
@@ -72,10 +77,16 @@ elif ADAPTER == 'agy':
     command=hooks['evaluator-gate']['PreToolUse'][0]['hooks'][0]['command']
     gate=Path(shlex.split(command)[-1])
     gate.with_suffix('.jsonl').write_text(json.dumps({'call':{'name':'finish','args':WIRE},'decision':'allow','count_before':0})+'\\n')
+    session='00000000-0000-0000-0000-000000000001'
+    log=Path(argv[argv.index('--log-file')+1])
+    log.write_text('Created conversation '+session+'\\n'); log.chmod(0o600)
+    transcript=Path(os.environ['HOME'])/'.gemini/antigravity-cli/brain'/session/'.system_generated/logs/transcript.jsonl'
+    transcript.parent.mkdir(parents=True,mode=0o700)
+    transcript.write_text('{\"type\":\"USER_INPUT\"}\\n'); transcript.chmod(0o600)
     emit({'event':'init','init':{'model':MODEL,'agent':'ukrainian-eval-reference-only','json_schema':schema}})
     for i,kind in enumerate(('user_input','finish')):
-        emit({'event':'step_update','step_update':{'conversation_id':'fixture','step_index':i,'state':'DONE','step_type':kind}})
-    emit({'event':'result','result':{'conversation_id':'fixture','num_turns':1,'status':'SUCCESS',
+        emit({'event':'step_update','step_update':{'conversation_id':session,'step_index':i,'state':'DONE','step_type':kind}})
+    emit({'event':'result','result':{'conversation_id':session,'num_turns':1,'status':'SUCCESS',
           'structured_output':WIRE,'json_schema':schema,'usage':{'input_tokens':1,'output_tokens':1,'total_tokens':2}}})
 elif ADAPTER == 'codex':
     Path(argv[argv.index('--output-last-message')+1]).write_text(raw)
@@ -126,7 +137,6 @@ def mock_probes(monkeypatch, tmp_path, binary):
     monkeypatch.setattr(adapters, "_claude_capabilities", lambda *_a, **_k: (str(binary), "fixture"))
     monkeypatch.setattr(native_agy, "_credential", lambda *_: b"synthetic-test-only")
     monkeypatch.setattr(native_agy, "_binary", lambda *_: (str(binary), binary_hash))
-    monkeypatch.setattr(native_cursor, "_assert_no_global_mcp", lambda: None)
     monkeypatch.setattr(native_cursor, "_assert_login", lambda *_: None)
     monkeypatch.setattr(native_cursor, "_probe_cli", lambda *_: native_cursor._CliProbe(str(binary), binary, binary_hash, "fixture"))
     monkeypatch.setattr(native_codex, "_sanitized_chatgpt_auth", lambda *_: b'{"auth_mode":"chatgpt"}')

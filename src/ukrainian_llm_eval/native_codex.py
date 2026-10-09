@@ -18,6 +18,7 @@ capability, not an exam cheat.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -28,7 +29,6 @@ import shutil
 import signal
 import stat
 import subprocess
-import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -70,7 +70,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "max_tool_calls", "repeats", "tools", "corpus_id", "provider", "codex_bin", "codex_tool_policy",
     }
 )
-_SAFE_CHILD_ENV = frozenset({"PATH", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"})
+_SAFE_CHILD_ENV = adapters._NATIVE_ENV | {"TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"}
 _REQUIRED_HELP_FLAGS = frozenset(
     {
         "--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check",
@@ -244,9 +244,9 @@ def _secret_text(value: Any, label: str) -> str:
 def _sanitized_chatgpt_auth(root: Path) -> bytes:
     """Return the current Codex ChatGPT auth subset without exposing secrets."""
 
-    path = _private_file(root, CODEX_AUTH_FILE, "private Codex auth")
+    _private_file(root, CODEX_AUTH_FILE, "private Codex auth")
     try:
-        parsed = adapters._strict_json_loads(path.read_text(encoding="utf-8"))
+        parsed = adapters._strict_json_loads(adapters._checked_private_read(root, CODEX_AUTH_FILE, limit=_MAX_PRIVATE_FILE_BYTES).decode("utf-8"))
     except (OSError, UnicodeDecodeError, adapters.AdapterError) as exc:
         raise _fail("private Codex auth is invalid") from exc
     if not isinstance(parsed, Mapping):
@@ -277,9 +277,11 @@ def validate_options(config: Mapping[str, Any], *, private_env_path: str | os.Pa
     return NativeCodexOptions(config=checked, private_env_path=root, binary=checked["codex_bin"])
 
 
+@adapters._isolated_native
 def _run_checked(argv: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
+        return subprocess.run(argv, cwd=adapters._ATTEMPT.get()["cwd"], env=adapters._ATTEMPT.get()["env"],
+                              capture_output=True, text=True, check=False, timeout=adapters._remaining_native_deadline(timeout), umask=0o077)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise _fail("Codex CLI capability probe failed") from exc
 
@@ -356,6 +358,7 @@ def _native_runtime_for(entrypoint: Path) -> Path:
     return runtime
 
 
+@adapters._isolated_native
 def _probe_cli(binary: str, timeout: int) -> _CliProbe:
     path = shutil.which(binary) if os.path.sep not in binary else binary
     if not path:
@@ -522,6 +525,7 @@ def _validate_condition(condition: str, sources_url: str | None) -> None:
         raise _fail("closed-book does not accept a Sources URL")
 
 
+@adapters._isolated_native
 def preflight_codex(config: Mapping[str, Any], condition: str, sources_url: str | None = None, *, private_env_path: str | os.PathLike[str] | Path | None = None) -> dict[str, Any]:
     """Verify only installed surface and private, mock-captured handler evidence."""
 
@@ -549,14 +553,18 @@ def preflight_codex(config: Mapping[str, Any], condition: str, sources_url: str 
 
 
 def _child_env(home: Path, auth_bytes: bytes) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in _SAFE_CHILD_ENV}
-    env["HOME"] = str(home)
-    env["CODEX_HOME"] = str(home / "codex-home")
+    attempt = adapters._ATTEMPT.get()
+    if attempt is None:
+        # Standalone control fixtures still create their own supplied home.
+        env = adapters._isolated_environment(home, home)
+        env["CODEX_HOME"] = str(home / "codex-home")
+    else:
+        if home != attempt["home"]:
+            raise _fail("native attempt HOME mismatch")
+        env = attempt["env"]
     codex_home = Path(env["CODEX_HOME"])
-    codex_home.mkdir(mode=0o700)
-    destination = codex_home / CODEX_AUTH_FILE
-    destination.write_bytes(auth_bytes)
-    destination.chmod(0o600)
+    codex_home.mkdir(mode=0o700, exist_ok=True)
+    adapters._exclusive_private_write(codex_home / CODEX_AUTH_FILE, auth_bytes)
     return env
 
 
@@ -628,13 +636,17 @@ def _close_selector_stream(selector: selectors.BaseSelector, stream: Any) -> Non
 
 def _run_process(argv: list[str], *, cwd: Path, env: Mapping[str, str], prompt: str, timeout: int, evidence: Callable[[str, Any], None] | None) -> subprocess.CompletedProcess[str]:
     """Run one CLI process while bounding both streams and the input deadline."""
+    attempt = adapters._ATTEMPT.get()
+    if attempt is not None and argv[1:4] == ["debug", "models", "--bundled"]:
+        cwd, env = attempt["cwd"], attempt["env"]
+
 
     if timeout <= 0:
         raise _fail("Codex CLI timeout must be positive")
     if evidence is not None:
         evidence("candidate_submission", {"stdin": prompt, "sha256": hashlib.sha256(prompt.encode()).hexdigest()})
     try:
-        process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, bufsize=0, start_new_session=True)
+        process = subprocess.Popen(argv, cwd=str(cwd), env=dict(env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False, bufsize=0, start_new_session=True, umask=0o077)
     except OSError as exc:
         raise _fail("Codex CLI invocation failed") from exc
     assert process.stdin is not None and process.stdout is not None and process.stderr is not None
@@ -758,7 +770,7 @@ def _parse_events(stdout: str, packet: Mapping[str, Any], *, final_message: str 
     turn_completed = False
     messages: list[str] = []
     usage: dict[str, int | None] = {"input_tokens": None, "output_tokens": None, "total_tokens": None, "cost_usd": None}
-    for index, line in enumerate(stdout.splitlines()):
+    for index, line in enumerate(adapters._physical_lines(stdout)):
         try:
             event = adapters._strict_json_loads(line)
         except adapters.AdapterError as exc:
@@ -835,6 +847,7 @@ def _parse_events(stdout: str, packet: Mapping[str, Any], *, final_message: str 
     )
 
 
+@adapters._isolated_native
 def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None, prompt: str, evidence: Callable[[str, Any], None] | None = None, private_env_path: str | os.PathLike[str] | Path | None = None, reference_catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Run one fresh Codex session, preserving unredacted CLI events via callback."""
 
@@ -851,8 +864,8 @@ def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: s
     control_receipt = _load_control(options, probe)
     control_receipt_sha256 = adapters.digest(control_receipt)
     auth_bytes = _sanitized_chatgpt_auth(options.private_env_path)
-    with tempfile.TemporaryDirectory(prefix="codex-eval-home-") as home_temp, tempfile.TemporaryDirectory(prefix="codex-eval-cwd-") as cwd_temp:
-        home, cwd = Path(home_temp), Path(cwd_temp)
+    with contextlib.nullcontext(adapters._ATTEMPT.get()) as attempt:
+        home, cwd = attempt["home"], attempt["cwd"]
         home.chmod(0o700)
         cwd.chmod(0o700)
         response_schema = adapters.response_schema(packet)
@@ -870,7 +883,7 @@ def run_codex(packet: Mapping[str, Any], config: Mapping[str, Any], condition: s
         if evidence is not None:
             evidence("cli_invocation", {"argv": argv, "cwd": str(cwd), "env_keys": sorted(env), "condition": condition, "settings_sha256": _settings_hash(options.config), "response_schema_sha256": response_schema_sha256, "control_receipt_sha256": control_receipt_sha256, "entrypoint_sha256": probe.entrypoint_sha256, "native_runtime_sha256": probe.native_runtime_sha256})
         started = time.monotonic()
-        completed = _run_process(argv, cwd=cwd, env=env, prompt=prompt, timeout=options.config["timeout_seconds"], evidence=evidence)
+        completed = _run_process(argv, cwd=cwd, env=env, prompt=prompt, timeout=adapters._remaining_native_deadline(options.config["timeout_seconds"]), evidence=evidence)
         elapsed = time.monotonic() - started
         if evidence is not None:
             evidence("cli_result", {"returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr})

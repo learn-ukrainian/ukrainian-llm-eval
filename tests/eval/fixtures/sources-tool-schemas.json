@@ -1,0 +1,149 @@
+[
+  {
+    "name": "search_text",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query in Ukrainian (e.g., 'як утворюється минулий час')"
+        },
+        "subject": {
+          "type": "string",
+          "description": "Optional canonical textbook subject slug. Examples: 'ukrmova', 'ukrlit', 'istoriya', 'bukvar'.",
+          "enum": [
+            "ukrmova",
+            "ukrlit",
+            "istoriya",
+            "bukvar",
+            "lexicon",
+            "informatyka",
+            "matematyka",
+            "algebra",
+            "heometriya",
+            "fizyka",
+            "khimiya",
+            "biolohiya",
+            "heohrafiya",
+            "astronomiya",
+            "ekonomika",
+            "pravoznavstvo",
+            "hromadianska",
+            "zakhyst",
+            "mystetstvo",
+            "vsesvitnia",
+            "zarlit",
+            "pryroda",
+            "zdorovia",
+            "etyka",
+            "finansova",
+            "foreign_language",
+            "ya_doslidzhuiu_svit",
+            "tekhnolohiyi"
+          ]
+        },
+        "include_superseded": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly include retained superseded transcriptions (default false)."
+        },
+        "source_file": {
+          "type": "string",
+          "description": "Optional exact textbook source file to scope the search."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results to return (default 5, max 20)",
+          "default": 5
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "verify_words",
+    "inputSchema": {
+      "properties": {
+        "words": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of Ukrainian word forms to verify (e.g., ['кращий', 'гірший', 'більший'])"
+        },
+        "pos_filter": {
+          "type": "string",
+          "description": "Optional POS filter applied to all words (e.g., 'adj', 'noun')."
+        }
+      },
+      "required": [
+        "words"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "verify_stress",
+    "inputSchema": {
+      "properties": {
+        "word": {
+          "type": "string",
+          "description": "Ukrainian word to check: bare lemma, inflected form, or U+0301/U+0300-marked form (e.g., 'замок', 'любов'ю', 'за́мок')"
+        },
+        "lemma": {
+          "type": "string",
+          "description": "Optional lemma; a source-stressed lemma distinguishes lexical homographs."
+        },
+        "pos": {
+          "type": "string",
+          "description": "Optional POS to help disambiguate a heteronym (e.g. 'NOUN' or 'upos=NOUN')."
+        },
+        "tags": {
+          "type": "string",
+          "description": "Optional additional dictionary tags to help disambiguate, comma-separated (e.g. 'Case=Nom,Gender=Masc') — same vocabulary as each match's required_tags."
+        }
+      },
+      "required": [
+        "word"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "query_pravopys",
+    "inputSchema": {
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "Topic keyword (e.g., 'апостроф', 'м’який знак', 'у-в', 'подвоєння', 'велика буква', 'префікси') or § number as string (e.g., '7' or '§ 82')"
+        }
+      },
+      "required": [
+        "topic"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_style_guide",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Ukrainian phrase or word to check for calques/Russianisms"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results (default 3)",
+          "default": 3
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  }
+]

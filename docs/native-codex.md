@@ -321,3 +321,21 @@ hash.
 `max_output_tokens` is retained as configuration metadata but is currently
 **not forwarded as a native output limit**. Its effective value is unknown;
 this prototype cannot establish a hard token bound for benchmark admission.
+
+## Shared pre-execution boundary (#68)
+
+Capability/version probes, bundled model metadata and candidate execution now
+share a single real private attempt root and identical child HOME/CWD/TMPDIR,
+four XDG directories and native profile path. The allowlisted environment
+excludes inherited settings, MCP, cache, session and credential overrides.
+Authentication remains a separate runtime-only staged input; no host profile
+is copied. Control receipts must be renewed after implementation changes through
+the existing authorized control procedure; old receipts do not prove this head.
+
+The Sources catalog uses the common normalization and frozen five-tool schema
+identity. Controller metadata has an independent eight-operation ceiling and
+shares the attempt deadline. Resources listing remains truthful unsupported
+metadata, with no upstream forwarding. A content call passes only with valid
+arguments, a genuine completed native result and the exact matching controller
+result digest; failed, interrupted, duplicated or altered calls cannot count
+as coverage. Native discovery not emitted in telemetry remains unknown.

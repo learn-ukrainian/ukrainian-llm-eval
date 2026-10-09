@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from native_validity_fixtures import emit_agy_capture
 
 from ukrainian_llm_eval import adapters, agy_hook
 from ukrainian_llm_eval import native_agy as native
@@ -150,16 +151,26 @@ def test_complete_native_evidence(sources):
 @pytest.mark.parametrize("failure", ["model", "schema", "final", "extra_turn", "tool_error", "subagent", "output", "arguments", "unfinished", "missing_step"])
 def test_native_drift_or_failure_never_becomes_success(failure):
     value = events(True)
-    if failure == "model": value[0]["init"]["model"] = "other"
-    elif failure == "schema": value[-1]["result"]["json_schema"] = {}
-    elif failure == "final": value[-1]["result"]["structured_output"] = '```json\n{"responses":{"q1":"A"}}\n```'
-    elif failure == "extra_turn": value[-1]["result"]["num_turns"] = 2
-    elif failure == "tool_error": value[2]["step_update"]["tool_info"]["error"] = {"type": "failure"}
-    elif failure == "subagent": value[2]["step_update"]["subagent_info"] = {"subagents": [{}]}
-    elif failure == "output": value[2]["step_update"]["tool_info"]["output"] = "FORGED"
-    elif failure == "arguments": value[2]["step_update"]["tool_info"]["parameters"]["Arguments"] = {"word": "other"}
-    elif failure == "unfinished": value[2]["step_update"]["state"] = "ACTIVE"
-    elif failure == "missing_step": value.pop(2)
+    if failure == "model":
+        value[0]["init"]["model"] = "other"
+    elif failure == "schema":
+        value[-1]["result"]["json_schema"] = {}
+    elif failure == "final":
+        value[-1]["result"]["structured_output"] = '```json\n{"responses":{"q1":"A"}}\n```'
+    elif failure == "extra_turn":
+        value[-1]["result"]["num_turns"] = 2
+    elif failure == "tool_error":
+        value[2]["step_update"]["tool_info"]["error"] = {"type": "failure"}
+    elif failure == "subagent":
+        value[2]["step_update"]["subagent_info"] = {"subagents": [{}]}
+    elif failure == "output":
+        value[2]["step_update"]["tool_info"]["output"] = "FORGED"
+    elif failure == "arguments":
+        value[2]["step_update"]["tool_info"]["parameters"]["Arguments"] = {"word": "other"}
+    elif failure == "unfinished":
+        value[2]["step_update"]["state"] = "ACTIVE"
+    elif failure == "missing_step":
+        value.pop(2)
     with pytest.raises(adapters.AdapterError):
         native.parse_events(serialize(value), packet(), config(), hook_receipts(True), call_receipts(True))
 
@@ -195,7 +206,14 @@ def test_native_runner_copies_only_credentials_and_one_prompt(monkeypatch, tmp_p
         command = hooks["evaluator-gate"]["PreToolUse"][0]["hooks"][0]["command"]
         gate = Path(shlex.split(command)[-1])
         gate.with_suffix(".jsonl").write_text(serialize(hook_receipts()))
-        return subprocess.CompletedProcess(argv, 0, serialize(events()), "")
+        session = emit_agy_capture(cwd.parent)
+        value = events()
+        for event in value:
+            if "step_update" in event:
+                event["step_update"]["conversation_id"] = session
+            if "result" in event:
+                event["result"]["conversation_id"] = session
+        return subprocess.CompletedProcess(argv, 0, serialize(value), "")
     monkeypatch.setattr(adapters, "_run_claude_process", run)
     result = native.run_agy(packet(), config(), "closed-book", sources_url=None, prompt="packet", private_env_path=root)
     assert result["responses"] == {"q1": "A"}
@@ -216,7 +234,9 @@ def test_effort_changes_comparison():
 def test_expired_reference_setup_never_launches_candidate(monkeypatch, tmp_path):
     root = provision(tmp_path)
     clock = [0.0]
-    monkeypatch.setattr(native, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    shared_clock = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(native, "time", shared_clock)
+    monkeypatch.setattr(adapters, "time", shared_clock)
     monkeypatch.setattr(native, "_binary", lambda _config: ("fixture", "a" * 64))
     original_enter = native.ReferenceServer.__enter__
     def delayed_reference(self):

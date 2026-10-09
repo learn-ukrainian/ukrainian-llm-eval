@@ -7,16 +7,18 @@ AGY's hook and the parent MCP bridge independently limit reference calls.
 from __future__ import annotations
 
 import hashlib
+import base64
+import contextlib
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
-import stat
 import subprocess
-import tempfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,8 +31,6 @@ PROVIDER = "managed:antigravity-subscription"
 AUTH_FILE = "antigravity-oauth-token"
 PROFILE_NAME = "ukrainian-evaluation"
 MAX_BYTES = 2_000_000
-_ENV = frozenset({"PATH", "USER", "LOGNAME", "TMPDIR", "SHELL", "TERM", "LANG", "LC_ALL",
-                  "SSL_CERT_FILE", "SSL_CERT_DIR"})
 
 
 def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,11 +52,8 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def child_env(home: Path) -> dict[str, str]:
-    result = {key: value for key, value in os.environ.items() if key in _ENV}
-    result.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
-                  XDG_DATA_HOME=str(home / ".local/share"), XDG_CACHE_HOME=str(home / ".cache"),
-                  XDG_STATE_HOME=str(home / ".local/state"))
-    return result
+    attempt = adapters._ATTEMPT.get()
+    return attempt["env"] if attempt is not None else adapters._isolated_environment(home, home)
 
 
 def profile(condition: str) -> str:
@@ -82,39 +79,32 @@ def control_hash(config: Mapping[str, Any], condition: str) -> str:
 
 
 def _credential(private_env_path: str | os.PathLike[str] | None) -> bytes:
-    if private_env_path is None:
-        raise adapters.AdapterError("AGY private authentication provisioning missing")
-    root = Path(private_env_path)
-    path = root / AUTH_FILE
     try:
-        for item in (root, path):
-            value = item.lstat()
-            if item.is_symlink() or value.st_uid != os.getuid() or value.st_mode & 0o077:
-                raise adapters.AdapterError("AGY authentication must be owner-only")
-        value = path.stat()
-        if not root.is_dir() or not stat.S_ISREG(value.st_mode) or not 0 < value.st_size < MAX_BYTES:
-            raise adapters.AdapterError("AGY authentication file invalid")
-        return path.read_bytes()
-    except OSError as exc:
-        raise adapters.AdapterError("AGY authentication unavailable") from exc
+        if private_env_path is None:
+            raise adapters.AdapterError("missing")
+        return adapters._checked_private_read(Path(private_env_path), AUTH_FILE, limit=MAX_BYTES)
+    except (adapters.AdapterError, OSError, TypeError):
+        raise adapters.AuthUnavailable("AGY authentication must be owner-only and safely staged") from None
 
 
+@adapters._isolated_native
 def _binary(config: Mapping[str, Any]) -> tuple[str, str]:
     binary = shutil.which(config["agy_bin"])
     if not binary:
         raise adapters.AdapterError("AGY CLI unavailable")
-    with tempfile.TemporaryDirectory(prefix="agy-probe-") as temp:
-        home = Path(temp)
-        result = subprocess.run([binary, "--help"], cwd=home, env=child_env(home),
-                                capture_output=True, text=True, timeout=min(15, config["timeout_seconds"]), check=False)
+    attempt = adapters._ATTEMPT.get()
+    result = subprocess.run([binary, "--help"], cwd=attempt["cwd"], env=child_env(attempt["home"]),
+                            capture_output=True, text=True, timeout=adapters._remaining_native_deadline(min(15, config["timeout_seconds"])),
+                            umask=0o077, check=False)
     output = result.stdout + result.stderr
     required = {"--agent", "--model", "--effort", "--json-schema", "--input-format", "--output-format",
-                "--disable-slash-commands", "--print-timeout"}
+                "--disable-slash-commands", "--print-timeout", "--log-file"}
     if result.returncode or len(output) > 100000 or any(flag not in output for flag in required):
         raise adapters.AdapterError("AGY CLI capability unavailable")
     return binary, hashlib.sha256(Path(binary).resolve().read_bytes()).hexdigest()
 
 
+@adapters._isolated_native
 def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None = None, *,
               private_env_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     checked = validate_config(config)
@@ -137,6 +127,69 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
 INPUT_FRAME_PREFIX = '{"event":"user","message":{"content":'
 INPUT_FRAME_SUFFIX = "}}\n"
 
+ARTIFACT_LIMIT = 16 * 1024 * 1024
+_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+_CONVERSATION = re.compile(r"\b(?:Created|found) conversation\s+(" + _UUID + r")\b")
+_POINTER = re.compile(r"file://[^\s\"'<>]+")
+
+
+def capture_native_artifacts(root: Path, log: Path, app_data: Path, evidence) -> str:
+    """Retain only the unique log-bound conversation; diagnostics cannot attest tools.
+
+    No transcript field has yet been proved to bind complete results to exact
+    native call IDs. The retained bytes are deliberately never parser backfill.
+    """
+    def retain(path: Path, label: str) -> bytes:
+        try:
+            relative = path.relative_to(root).as_posix()
+            raw = adapters._checked_private_read(root, relative, limit=ARTIFACT_LIMIT,
+                                                 mode=None, allow_empty=False)
+        except (ValueError, adapters.AdapterError):
+            raise adapters.AdapterError("AGY native artifact unavailable or unsafe") from None
+        if evidence is not None:
+            evidence("agy_native_artifact", {"kind": label, "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw), "raw_base64": base64.b64encode(raw).decode("ascii")})
+        return raw
+
+    try:
+        raw_log = retain(log, "log")
+        identities = _CONVERSATION.findall(raw_log.decode("utf-8", errors="strict"))
+        if len(identities) != 1:
+            raise adapters.AdapterError("AGY native conversation binding missing or ambiguous")
+        session = identities[0]
+        conversation = app_data / "brain" / session
+        transcript = conversation / ".system_generated/logs/transcript.jsonl"
+        raw = retain(transcript, "transcript")
+        text = raw.decode("utf-8", errors="strict")
+        if not raw.endswith(b"\n"):
+            raise adapters.AdapterError("AGY native transcript incomplete")
+        rows = [adapters._strict_json_loads(line) for line in adapters._physical_lines(text)]
+        if not rows or any(not isinstance(row, dict) for row in rows):
+            raise adapters.AdapterError("AGY native transcript malformed")
+        # Only literal producer pointers under this conversation's steps roots.
+        # They are retained verbatim, never stripped, inlined or paired by order.
+        result_texts = [row.get("content", "") for row in rows if row.get("type") in {"GENERIC", "MCP_TOOL"}
+                        and isinstance(row.get("content"), str)]
+        for uri in set(uri for content in result_texts for uri in _POINTER.findall(content)):
+            parsed = urllib.parse.urlsplit(uri)
+            if parsed.netloc or parsed.query or parsed.fragment:
+                raise adapters.AdapterError("AGY native result pointer unsafe")
+            path = Path(urllib.parse.unquote(parsed.path))
+            relative = path.relative_to(conversation)
+            if not (relative.parts[:1] == ("steps",) or relative.parts[:2] == (".system_generated", "steps")):
+                raise adapters.AdapterError("AGY native result pointer unsafe")
+            retain(path, "tool-result")
+        if evidence is not None:
+            evidence("agy_native_capture", {"conversation_id": session, "diagnostic_only": True,
+                                            "complete_tool_provenance": "unknown"})
+        return session
+    except (UnicodeError, ValueError, OSError) as exc:
+        if evidence is not None:
+            evidence("agy_native_capture_failure", {"reason": "native_artifact_unavailable_or_unsafe"})
+        if isinstance(exc, adapters.AdapterError):
+            raise
+        raise adapters.AdapterError("AGY native artifact unavailable or unsafe") from None
+
 
 class ReferenceServer:
     """Authenticated loopback bridge with serialized calls and private evidence."""
@@ -147,7 +200,13 @@ class ReferenceServer:
         self.token = secrets.token_urlsafe(32)
         self.error: Exception | None = None
         self.calls: list[dict[str, Any]] = []
+        self.metadata: list[dict[str, Any]] = []
         self.lock = threading.Lock()
+        self.server = None
+        self.thread = None
+        if self.bridge is None:
+            return
+        self.bridge.deadline = deadline
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -173,6 +232,8 @@ class ReferenceServer:
                         if evidence is not None:
                             evidence("agy_mcp_request", body)
                         reply = owner.bridge.handle(body)
+                        if body.get("method") != "tools/call":
+                            owner.metadata.append({"request": body, "response": reply})
                         if evidence is not None:
                             evidence("agy_mcp_response", reply)
                         if body.get("method") == "tools/call":
@@ -202,13 +263,18 @@ class ReferenceServer:
 
     @property
     def url(self) -> str:
+        if self.server is None:
+            raise adapters.AdapterError("closed-book has no reference proxy")
         return f"http://127.0.0.1:{self.server.server_port}/mcp"
 
     def __enter__(self) -> Self:
-        self.thread.start()
+        if self.thread is not None:
+            self.thread.start()
         return self
 
     def __exit__(self, *_args: object) -> None:
+        if self.server is None:
+            return
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
@@ -218,7 +284,7 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
                  hook_receipts: list[dict[str, Any]], calls: list[dict[str, Any]]) -> dict[str, Any]:
     if not hook_receipts or any(receipt.get("decision") != "allow" for receipt in hook_receipts):
         raise adapters.AdapterError("tool_policy_error")
-    events = [adapters._strict_json_loads(line) for line in stdout.splitlines() if line.strip()]
+    events = [adapters._strict_json_loads(line) for line in adapters._physical_lines(stdout) if line.strip()]
     if not events or any(not isinstance(event, dict) for event in events):
         raise adapters.AdapterError("AGY native response missing")
     if events[0].get("event") != "init" or events[-1].get("event") != "result":
@@ -242,6 +308,14 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
         if step.get("state") not in {"ACTIVE", "DONE"} or type(step.get("step_index")) is not int:
             raise adapters.AdapterError("AGY native step invalid")
         sessions.add(step.get("conversation_id"))
+        prior = steps.get(step["step_index"])
+        if prior is not None:
+            if (prior.get("state") == "DONE" or step.get("state") != "DONE"
+                    or any(prior.get(key) != step.get(key) for key in ("conversation_id", "step_type", "tool_name"))
+                    or prior.get("tool_info", {}).get("parameters") != step.get("tool_info", {}).get("parameters")
+                    or ("output" in prior.get("tool_info", {})
+                        and prior["tool_info"]["output"] != step.get("tool_info", {}).get("output"))):
+                raise adapters.AdapterError("AGY duplicate or conflicting native step")
         steps[step["step_index"]] = step
     if any(step.get("state") != "DONE" for step in steps.values()):
         raise adapters.AdapterError("AGY unfinished native step")
@@ -259,7 +333,11 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
     responses = parsed[0]
     finish = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "finish"]
     refs = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "call_mcp_tool"]
-    if len(finish) != 1 or len(hook_receipts) != len(refs) + 1 or hook_receipts[-1] != finish[0]:
+    metadata = [receipt for receipt in hook_receipts if receipt.get("call", {}).get("name") == "list_resources"]
+    if (len(metadata) > adapters.METADATA_LIMIT or any(not config["tools"] or receipt["call"].get("args") != {"ServerName": "sources"}
+                                                      for receipt in metadata)):
+        raise adapters.AdapterError("tool_policy_error")
+    if len(finish) != 1 or len(hook_receipts) != len(refs) + len(metadata) + 1 or hook_receipts[-1] != finish[0]:
         raise adapters.AdapterError("AGY hook evidence incomplete")
     args = finish[0]["call"].get("args", {})
     finish_payload = {key: value for key, value in args.items() if key not in {"toolSummary", "toolAction"}}
@@ -267,7 +345,11 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
         raise adapters.AdapterError("AGY native structured evidence mismatch")
     if adapters._extract_enveloped_responses(finish_payload, packet) != parsed:
         raise adapters.AdapterError("AGY native structured evidence mismatch")
-    native_refs = [step for step in steps.values() if step.get("step_type") == "tool"]
+    native_meta = [step for step in steps.values() if step.get("step_type") == "tool" and step.get("tool_name") == "list_resources"]
+    if len(native_meta) != len(metadata) or any(step.get("tool_info", {}).get("parameters") != {"ServerName": "sources"}
+                                               or "output" not in step.get("tool_info", {}) for step in native_meta):
+        raise adapters.AdapterError("AGY native metadata evidence missing or changed")
+    native_refs = [step for step in steps.values() if step.get("step_type") == "tool" and step not in native_meta]
     if len(native_refs) != len(calls) or len(refs) != len(calls) or len(calls) > config["max_tool_calls"]:
         raise adapters.AdapterError("AGY reference count mismatch")
     for hook, step, call in zip(refs, native_refs, calls, strict=True):
@@ -278,18 +360,23 @@ def parse_events(stdout: str, packet: Mapping[str, Any], config: Mapping[str, An
                 or params != {"ServerName": "sources", "ToolName": call["name"], "Arguments": call["arguments"]}):
             raise adapters.AdapterError("AGY reference evidence mismatch")
         content = call["result"].get("content", [])
-        if not isinstance(content, list) or any(item.get("type") != "text" for item in content):
+        if call["result"].get("isError") or not isinstance(content, list) or any(item.get("type") != "text" for item in content):
             raise adapters.AdapterError("AGY reference result type unsupported")
         expected_output = "\n".join(item["text"] for item in content)
         if step["tool_info"].get("output") != expected_output:
             raise adapters.AdapterError("AGY reference result evidence mismatch")
+    signatures = [adapters.digest({"name": call["name"], "arguments": call["arguments"]}) for call in calls]
+    if len(set(signatures)) != len(signatures):
+        raise adapters.AdapterError("AGY repeated call lacks unique producer correlation")
     usage = final.get("usage", {})
     metrics = {name: usage.get(name) for name in ("input_tokens", "output_tokens", "total_tokens")}
     if any(type(value) is not int or value < 0 for value in metrics.values()):
         raise adapters.AdapterError("AGY usage unavailable")
-    return {"responses": responses, "session_id": session, "metrics": {**metrics, "cost_usd": None, "tool_calls": len(calls)}}
+    return {"responses": responses, "session_id": session, "metrics": {**metrics, "cost_usd": None,
+            "tool_calls": len(calls), "native_metadata_operations": len(metadata)}}
 
 
+@adapters._isolated_native
 def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str, *, sources_url: str | None,
             prompt: str, private_env_path: str | os.PathLike[str] | None = None,
             evidence: Callable[[str, Any], None] | None = None,
@@ -303,26 +390,23 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             "sha256": hashlib.sha256((INPUT_FRAME_PREFIX + INPUT_FRAME_SUFFIX).encode()).hexdigest(),
             "condition": condition})
     started = time.monotonic()
-    deadline = started + checked["timeout_seconds"]
-    with tempfile.TemporaryDirectory(prefix="agy-eval-") as temp:
-        root = Path(temp)
-        root.chmod(0o700)
-        home, workspace = root / "home", root / "workspace"
-        home.mkdir(mode=0o700)
-        workspace.mkdir(mode=0o700)
+    deadline = adapters._ATTEMPT.get()["deadline"]
+    with contextlib.nullcontext(adapters._ATTEMPT.get()) as attempt:
+        root, home, workspace = attempt["root"], attempt["home"], attempt["cwd"]
         subprocess.run(["git", "init", "-q", str(workspace)], cwd=root, env=child_env(home),
-                       capture_output=True, check=True, timeout=5)
+                       capture_output=True, check=True, timeout=adapters._remaining_native_deadline(5), umask=0o077)
+        (home / ".gemini").mkdir(mode=0o700)
         auth = home / ".gemini/antigravity-cli" / AUTH_FILE
         auth.parent.mkdir(parents=True, mode=0o700)
-        auth.write_bytes(credential)
-        auth.chmod(0o600)
+        adapters._exclusive_private_write(auth, credential)
         (auth.parent / "settings.json").write_text(adapters.canonical(settings(checked, condition)))
         native = home / ".gemini/config"
         (native / "agents").mkdir(parents=True, mode=0o700)
         (native / "agents" / (PROFILE_NAME + ".md")).write_text(profile(condition))
         gate = root / "reference-gate.json"
         gate.write_text(adapters.canonical({"tools": checked["tools"] if condition == "sources" else [],
-                                           "max_tool_calls": checked["max_tool_calls"], "deadline": deadline}))
+                                           "max_tool_calls": checked["max_tool_calls"],
+                                           "max_metadata_operations": adapters.METADATA_LIMIT, "deadline": deadline}))
         command = shlex.join([str(adapters._PROJECT_PYTHON), str(Path(__file__).with_name("agy_hook.py")), str(gate)])
         (native / "hooks.json").write_text(adapters.canonical({"evaluator-gate": {"PreToolUse": [
             {"matcher": "*", "hooks": [{"type": "command", "command": command, "timeout": 5}]}]}}))
@@ -336,6 +420,9 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
                     "--agent", PROFILE_NAME, "--model", checked["model"], "--effort", checked["effort"],
                     "--json-schema", str(schema_path), "--disable-slash-commands",
                     "--print-timeout", str(checked["timeout_seconds"]) + "s"]
+            log = root / "native-log.txt"
+            adapters._exclusive_private_write(log, b"")
+            argv.extend(["--log-file", str(log)])
             env = child_env(home)
             if evidence is not None:
                 evidence("cli_invocation", {"argv": argv, "env_keys": sorted(env), "binary_sha256": binary_hash,
@@ -343,15 +430,32 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise adapters.AdapterError("AGY timeout before candidate execution")
-            result = adapters._run_claude_process(argv, cwd=workspace, env=env,
-                prompt=INPUT_FRAME_PREFIX + json.dumps(prompt, ensure_ascii=False, allow_nan=False) + INPUT_FRAME_SUFFIX,
-                timeout=remaining, evidence=evidence)
+            execution_error = None
+            try:
+                result = adapters._run_claude_process(argv, cwd=workspace, env=env,
+                    prompt=INPUT_FRAME_PREFIX + json.dumps(prompt, ensure_ascii=False, allow_nan=False) + INPUT_FRAME_SUFFIX,
+                    timeout=remaining, evidence=evidence)
+                if not adapters._has_model_output(result.stdout) and adapters._auth_failure({"stdout": result.stdout, "stderr": result.stderr}):
+                    raise adapters.AuthUnavailable("auth_unavailable")
+            except BaseException as exc:
+                execution_error = exc
+                raise
+            finally:
+                if isinstance(execution_error, adapters.AuthUnavailable):
+                    if evidence is not None:
+                        evidence("agy_native_capture_failure", {"reason": "auth_unavailable"})
+                else:
+                    try:
+                        captured_session = capture_native_artifacts(root, log, home / ".gemini/antigravity-cli", evidence)
+                    except adapters.AdapterError:
+                        if execution_error is None:
+                            raise
             if evidence is not None:
                 evidence("cli_result", {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
             receipt_text = gate.with_suffix(".jsonl").read_text() if gate.with_suffix(".jsonl").exists() else ""
             if evidence is not None:
                 evidence("agy_hook_receipts_raw", {"text": receipt_text})
-            receipts = [adapters._strict_json_loads(line) for line in receipt_text.splitlines()]
+            receipts = [adapters._strict_json_loads(line) for line in adapters._physical_lines(receipt_text)]
             if evidence is not None:
                 evidence("agy_hook_receipts", receipts)
             if result.returncode or reference.error is not None or len(result.stdout.encode()) > MAX_BYTES:
@@ -359,6 +463,9 @@ def run_agy(packet: Mapping[str, Any], config: Mapping[str, Any], condition: str
             if hashlib.sha256(Path(binary).resolve().read_bytes()).hexdigest() != binary_hash:
                 raise adapters.AdapterError("AGY binary changed during execution")
             parsed = parse_events(result.stdout, packet, checked, receipts, reference.calls)
+            if parsed["session_id"] != captured_session:
+                raise adapters.AdapterError("AGY log/native conversation identity conflict")
+            parsed["metrics"]["controller_metadata_operations"] = len(reference.metadata)
             return {"responses": parsed["responses"], "metrics": {
                 **parsed["metrics"], "elapsed_seconds": time.monotonic() - started}, "identity": {
                     "adapter": "agy", "harness": "agy-cli", "provider": PROVIDER, "model": checked["model"],

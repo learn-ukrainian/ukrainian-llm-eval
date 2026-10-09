@@ -4,7 +4,9 @@ The `agy` adapter runs the existing Antigravity subscription route. It supports
 `gemini-3.8-flash-low`, `gemini-3.8-flash-medium` and `gemini-3.8-flash-high`,
 with a matching `effort`. It does not use the Gemini API or add a paid fallback.
 
-Each attempt creates an empty home, neutral Git workspace and one conversation.
+Each attempt creates one private root with fresh HOME, CWD, TMPDIR and all
+four XDG directories before capability probes. Probes and inference share
+that exact child environment/workspace; the candidate has one conversation.
 Only a supplied OAuth token is copied into that home. Existing settings, rules,
 plugins, skills, conversations and API-key environment variables are excluded.
 The generated settings disable G1 credit fallback. No login, credit purchase,
@@ -13,7 +15,13 @@ or original-home change is performed.
 The native profile exposes `finish` and, in Sources mode, the native MCP
 dispatcher. AGY's initial inventory can list additional built-in descriptors;
 it is not proof that those actions are callable. An installed `PreToolUse`
-hook permits only `finish` and configured `sources` reference calls. It denies
+hook permits `finish`, configured `sources` reference calls, and native
+`list_resources` with exactly `ServerName=sources` in Sources cells. Discovery
+has an independent eight-operation limit; native-only discovery has no
+invented controller receipt. The proxy truthfully returns unsupported
+`resources/list` (-32601) without forwarding it or advertising resources.
+Unsupported metadata is capability disclosure, not successful content coverage.
+The hook denies
 all other tool actions and enforces the total reference-call cap under a file
 lock. A separate authenticated parent MCP bridge filters schemas and calls and
 enforces the same cap. The trusted catalog is supplied in the prompt because
@@ -49,9 +57,9 @@ events remain failures; the adapter never synthesizes terminal evidence.
 
 ## Provisioning and configuration
 
-Authenticate in your normal AGY session first. Create an owner-only private
-provisioning directory containing `antigravity-oauth-token`, copied from your
-existing `~/.gemini/antigravity-cli/antigravity-oauth-token`. The directory must
+Use an already operator-staged owner-only private provisioning directory
+containing `antigravity-oauth-token`. The evaluator never logs in, discovers
+host credential stores, mints tokens or changes the original staging. The directory must
 have mode `0700`, and the token must be a regular file with mode `0600`.
 Point `UKRAINIAN_LLM_EVAL_AGY_PROVISIONING_DIR` at that directory. It is a
 runtime-only input; never commit it or token contents. Other files in that
@@ -110,3 +118,23 @@ References: [AGY headless mode](https://antigravity.google/docs/cli/headless/),
 [hooks](https://antigravity.google/docs/hooks/),
 [MCP configuration](https://antigravity.google/docs/cli/mcp/),
 [credit fallback settings](https://antigravity.google/docs/cli/credits/).
+
+## Same-attempt diagnostic capture (#65)
+
+The supported `--log-file` mechanism binds a unique prelaunch log beneath the
+trusted private attempt root. Exactly one unambiguous created/found conversation
+binds its transcript. Only that log, transcript and producer result pointers
+inside the bound conversation's steps directories are retained. Each artifact
+has a 16 MiB byte bound and checked no-follow FD-relative reads; symlinks,
+hard links, special files, escaping pointers, mutation, incomplete JSONL and
+ambiguous conversation bindings fail closed. Full bytes and digests are saved
+privately before temporary cleanup on success or failure. No HOME/auth archive,
+latest/prompt/time lookup, truncation, FIFO pairing or metadata stripping occurs.
+Closed-book does not start a reference proxy.
+
+Capture is diagnostic only. The supported producer contract does not yet prove
+exact call/step/arguments/full-result correlation for supplementary transcript
+results, so those bytes never backfill inline results or synthesize events.
+Missing native DONE output remains failed. The observed missing-output producer
+cause and issue #65 closure require further evidence owned by the driver;
+fixture tests and retained bytes are not native runtime success.

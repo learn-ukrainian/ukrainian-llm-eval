@@ -11,11 +11,11 @@ def test_tool_surface_and_forbidden_execution(monkeypatch):
 
     def upstream(method, params, ident=1):
         requested.append(method)
-        return {"result": {"tools": [{"name": "verify_word"}, {"name": "search_external"}]}}
+        return {"result": {"tools": [{"name": "verify_word", "inputSchema": {"type": "object"}}, {"name": "search_external", "inputSchema": {"type": "object"}}]}}
 
     monkeypatch.setattr(bridge, "request", upstream)
     result = bridge.handle({"id": 1, "method": "tools/list"})
-    assert result["result"]["tools"] == [{"name": "verify_word"}]
+    assert result["result"]["tools"] == [{"name": "verify_word", "inputSchema": {"type": "object"}}]
     for method, params in [("tools/call", {"name": "search_external"}), ("resources/read", {"uri": "key"})]:
         assert "error" in bridge.handle({"id": 2, "method": method, "params": params})
     assert requested == ["tools/list"]
@@ -30,6 +30,7 @@ def test_call_budget_blocks_before_upstream(monkeypatch):
         return {"result": {"content": []}}
 
     monkeypatch.setattr(bridge, "request", upstream)
+    bridge.schemas = {"verify_word": {"inputSchema": {"type": "object"}}}
     message = {"id": 1, "method": "tools/call", "params": {"name": "verify_word", "arguments": {"word": "x"}}}
     assert "result" in bridge.handle(message)
     assert "error" in bridge.handle(message)
@@ -39,7 +40,7 @@ def test_call_budget_blocks_before_upstream(monkeypatch):
 def test_unavailable_tool_refuses_instead_of_weakening(monkeypatch):
     bridge = Bridge("http://example.invalid/mcp", ["verify_word"])
     monkeypatch.setattr(bridge, "request", lambda *args: {"result": {"tools": []}})
-    with pytest.raises(ValueError, match="unavailable"):
+    with pytest.raises(ValueError, match="does not expose"):
         bridge.handle({"id": 1, "method": "tools/list"})
 
 

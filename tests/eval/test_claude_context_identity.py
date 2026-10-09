@@ -5,6 +5,8 @@ from answer_first_fixtures import wire_responses
 import json
 import subprocess
 
+from native_validity_fixtures import staged_native_auth as staged_native_auth
+
 import pytest
 
 from ukrainian_llm_eval import adapters
