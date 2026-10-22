@@ -24,7 +24,7 @@ REFERENCE_TOOLS = frozenset({
 MAX_BYTES = 2_000_000
 
 SMOKE_TOOLS = ["verify_words", "verify_stress", "query_pravopys", "search_style_guide", "search_text"]
-SMOKE_CATALOG_SHA256 = "63cb16b7233e298814b0dc5a85e6f27cc27c7b6fd112123a48c365ab11a4fba3"
+SMOKE_CATALOG_SHA256 = "a1b393942a3ecc52165441b914fcf07461e16606f3076e12b53365b5a12915ef"
 
 
 def canonical(value: object) -> str:

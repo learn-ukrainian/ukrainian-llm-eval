@@ -705,11 +705,14 @@ success. Actual fresh-HOME inference still needs authorized native smoke.
 For the frozen five-tool treatment, the common configured order is verify_words,
 verify_stress, query_pravopys, search_style_guide, search_text. All executing
 layers compare the filtered upstream catalog with canonical SHA-256
-`63cb16b7233e298814b0dc5a85e6f27cc27c7b6fd112123a48c365ab11a4fba3`;
+`a1b393942a3ecc52165441b914fcf07461e16606f3076e12b53365b5a12915ef`;
 drift fails instead of re-freezing a cell. Smoke's explicit checklist stays opt-in
 through `smoke_intent`; ordinary study prompts acquire no forced five calls.
 Metadata and content counters are independent (eight and twenty), with the same
 600-second protocol deadline. Zero-hit content success proves callability only.
+The pin comes from Sources `tools/list` metadata selected in the order above.
+This refresh changes only `search_style_guide.description`; argument schemas and
+annotations are unchanged for all five tools.
 Off cells receive no Sources URL/configuration, proxy or discovery access.
 
 AGY's [checked native capture](native-agy.md) preserves diagnostics without
