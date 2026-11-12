@@ -60,10 +60,25 @@ def serialize(value):
     return "\n".join(json.dumps(item) for item in value)
 
 
-@pytest.mark.parametrize("effort", ["low", "medium", "high"])
-def test_exact_model_effort_config(effort):
-    value = config(model="gemini-3.8-flash-" + effort, effort=effort)
+@pytest.mark.parametrize(("model", "effort"), [
+    ("gemini-3.8-flash-low", "low"),
+    ("gemini-3.8-flash-medium", "medium"),
+    ("gemini-3.8-flash-high", "high"),
+    ("gemini-4-hydrogen-low", "low"),
+    ("gemini-4-hydrogen-medium", "medium"),
+    ("gemini-4-hydrogen-high", "high"),
+    ("gemini-4-hydrogen-xhigh", "xhigh"),
+])
+def test_exact_model_effort_config(model, effort):
+    value = config(model=model, effort=effort)
     assert adapters.validate_config(value) == value
+    for wrong_effort in (None, "low", "medium", "high", "xhigh", "max"):
+        if wrong_effort != effort:
+            with pytest.raises(adapters.AdapterError):
+                adapters.validate_config(config(model=model, effort=wrong_effort))
+    for unsupported_model in ("gemini-3.8-flash-xhigh", "gemini-4-hydrogen-max"):
+        with pytest.raises(adapters.AdapterError):
+            adapters.validate_config(config(model=unsupported_model, effort=effort))
     with pytest.raises(adapters.AdapterError):
         adapters.validate_config(config(model="gemini-3.8-flash-other", effort=effort))
 

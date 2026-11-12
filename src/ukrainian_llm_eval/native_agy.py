@@ -42,7 +42,15 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     checked["adapter"] = "claude"
     checked = adapters.validate_config(checked)
     effort = checked["effort"]
-    if effort not in {"low", "medium", "high"} or checked["model"] != "gemini-3.8-flash-" + effort:
+    if (checked["model"], effort) not in {
+        ("gemini-3.8-flash-low", "low"),
+        ("gemini-3.8-flash-medium", "medium"),
+        ("gemini-3.8-flash-high", "high"),
+        ("gemini-4-hydrogen-low", "low"),
+        ("gemini-4-hydrogen-medium", "medium"),
+        ("gemini-4-hydrogen-high", "high"),
+        ("gemini-4-hydrogen-xhigh", "xhigh"),
+    }:
         raise adapters.AdapterError("AGY model and effort configuration conflict")
     if checked.get("provider") != PROVIDER:
         raise adapters.AdapterError("AGY requires its native subscription provider")

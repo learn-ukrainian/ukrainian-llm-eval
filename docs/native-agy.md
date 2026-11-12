@@ -1,7 +1,9 @@
 # Gemini through native AGY CLI
 
 The `agy` adapter runs the existing Antigravity subscription route. It supports
-`gemini-3.8-flash-low`, `gemini-3.8-flash-medium` and `gemini-3.8-flash-high`,
+`gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`,
+`gemini-4-hydrogen-low`, `gemini-4-hydrogen-medium`, `gemini-4-hydrogen-high`
+and `gemini-4-hydrogen-xhigh`,
 with a matching `effort`. It does not use the Gemini API or add a paid fallback.
 
 Each attempt creates an empty home, neutral Git workspace and one conversation.
