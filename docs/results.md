@@ -238,3 +238,96 @@ Update this document after each completed scored cell, paired comparison or mate
 5. At each release, link an immutable report revision and downloadable evidence manifest from the release notes. Keep this document as the evolving view without rewriting historical artifacts or moving tags.
 
 No public study evidence archive exists yet. The current historical pilot is supported by its linked PR summary, not a publicly downloadable raw trace. See the [benchmark protocol](benchmarks.md), [research execution](research-scheduling.md) and [release procedure](releasing.md).
+
+## Bounded Hydrogen, Carbon and Sol comparison, 13 November 2026
+
+**Recommendation: make no writer routing change from this pilot; prioritize Sol high for the next controlled writing trial and Carbon medium for a Sources-assisted reviewer trial.** No free-writing winner was established. All three writing sections passed the measured structural checks; Sol tied one peer comparison and won the other, but those unreplicated model opinions do not establish writing quality. Sol is a trial candidate because of that limited writing signal and its lower observed valid-call list-price equivalent. Its GEC lead concerns sentence correction, not free writing. Carbon found all ten planted errors and supplied more verifiable modern source references than Sol, supporting a reviewer trial rather than admission. These are recommendations for a subsequent routing decision; no route changes are authorized here. Hydrogen remains a drafting candidate, with lower published token rates but a higher observed valid-batch equivalent than Sol. Its review cited only SUM-11, which this project excludes as a modern normative authority.
+
+This exploratory batch has observations and scores for **12/12 cells**, with **0 unscored cells** and **0 quota refusals**. It is not the primary study or a qualified admission test. It does not close [reviewer validation #79](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/79) or authorize a production route. The evaluation lead was a separate Sol process, never a candidate arm.
+
+### Results
+
+The three routes were `agy --model gemini-4-hydrogen-medium`, `agy --model gemini-4-carbon-medium`, and `codex exec --model gpt-6.1-sol` with high reasoning through the subscription CLI. Each generation used a fresh process and conversation. The ZNO/GEC/writing user prompt was byte-identical across arms; the corrected review prompt was also byte-identical. Peer prompts necessarily contained different pairs of texts. No AGY orchestrator or paid API fallback was used. CLI model/effort selections were recorded; AGY's backend-effective effort was not independently attested.
+
+| Arm | ZNO exact accuracy, 40 items | GEC F0.5, 30 sentences: annotator 0 / annotator 1 / max | Writing, one section | Seeded review, 10 errors |
+| --- | --- | --- | --- | --- |
+| Hydrogen medium | 40/40 (100.0%) | 0.3261 / 0.4124 / **0.4124** | 165 Ukrainian words; 12 English; targets 8/8; structure 5/5; VESUM unknowns 0; shadow hits 0 | Recall 10/10; false positives 0; modern primary references 0/10 |
+| Carbon medium | 40/40 (100.0%) | 0.2664 / 0.3740 / **0.3740** | 210 Ukrainian words; 24 English; targets 8/8; structure 5/5; VESUM unknowns 0; shadow hits 0 | Recall 10/10; false positives 0; modern primary references 9/10 |
+| Sol high | 39/40 (97.5%) | 0.3365 / 0.4587 / **0.4587** | 190 Ukrainian words; 0 English; targets 8/8; structure 5/5; VESUM unknowns 0; shadow hits 0 | Recall 9/10; false positives 0; modern primary references 6/9 |
+
+The inherited ZNO sampler includes literature questions and did not separate language from literature. These are mixed-packet scores, not a pure language subscore. The frozen 40-item denominator was preserved. Sol's single error is insufficient to establish a general ZNO ranking. All 30 GEC responses per arm were scored against both original annotators; the displayed max is the maximum of the two corpus-level F0.5 values, not a choice of annotator per sentence. GEC edit counts were respectively TP/FP/FN 12/28/12 and 16/24/18 for Hydrogen, 13/42/11 and 19/36/15 for Carbon, and 14/32/10 and 20/26/14 for Sol. Gold-span false positives include edits that fail to match the references; they are not all independently established linguistic mistakes.
+
+The writing spec fixed an A1 section with an A2 bridge, buying fruit and water at a market, eight target expressions, 150–220 Ukrainian words, at most 60 English words, a heading, reading, four or more dialogue turns, three questions and three answers. English support was allowed, not required. In-process `scripts.verification.check_text` ran VESUM and Russian-shadow checks on the actual outputs. Literal target coverage and structural counts passed for all three. These checks do not establish grammatical, semantic or pedagogical correctness, and shadow absence is not a complete Russianism check.
+
+The review used a 255-word human-authored textbook passage, sourced through Sources MCP from Vashulenko's grade-2 reader, pages 9–10. Exactly ten substitutions covered case/agreement, spelling without stress marks, a Russianism and aspect. VESUM verified the forms and tags; Pravopys and textbook evidence supported the constructions. The Russianism check also used shadow and heritage tools and both Antonenko search interfaces. Sol missed the same locative spelling error in both fixture versions. No additional definite findings appeared on the corrected fixture, so false positives were 0 for each arm; tentative style comments were not counted as definite findings.
+
+“Modern primary references” counts findings with at least one supporting modern primary source verified through Sources, not every locator in the candidate's citation string. Carbon had nine such findings and one additional SUM-20 citation supported only by an unverified mirror. Sol had six, with three remaining findings relying exclusively on SUM-11; Hydrogen's ten all relied exclusively on SUM-11. Those historical references were excluded from modern normative evidence. Their individual entry support remains unverified, so these numbers must not be read as zero real publications for Hydrogen or as proof of fabricated citations. Carbon also misnumbered the Pravopys division in several citations. Real reference names therefore did not imply citation precision. The prompts did not teach the project's authority hierarchy, so this is a workflow-fit observation, not a test of obedience to that policy.
+
+### Blind peer preferences
+
+Each arm judged only the other two texts. Labels were shuffled with seed 12983. The rubric scored morphology/syntax, natural phrasing/calques, A1 accessibility/English support and spec coverage from 0 to 4 each; ties were allowed.
+
+| Judge | Unblinded preference and scores out of 16 |
+| --- | --- |
+| Hydrogen | Carbon 15 = Sol 15 |
+| Carbon | Sol 14 > Hydrogen 13 |
+| Sol | Hydrogen 14 > Carbon 13 |
+
+There were no repeated judgments of the same pair, so inter-rater agreement cannot be estimated. Two strict preferences and one tie do not establish a shared strict ranking. The peer explanations are model opinions, including unverified claims about calques; they were not promoted to source-verified language findings.
+
+### Cost and execution
+
+The valid subtotal covers three generations per arm: the combined ZNO/GEC/writing response, corrected seeded review, and peer ranking. “Output” already includes thinking; thinking is shown as a subset and is not charged twice. Cache-read counts were zero. Tokens include each CLI's own context overhead, so identical user prompts did not produce identical input-token counts. Per-test allocation inside the combined call is unknown.
+
+| Arm | Valid input tokens | Valid output tokens | Thinking subset | Cumulative valid process wall time | Valid list-price equivalent | All attempts, including invalid fixture |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hydrogen | 56,132 | 29,595 | 25,817 | 122.5 s | $0.3062 | $0.3698 |
+| Carbon | 53,830 | 40,525 | 35,151 | 447.3 s | $0.5129 | $0.6202 |
+| Sol | 86,694 | 10,599 | 7,000 | 307.7 s | $0.2794 | $0.3730 |
+
+Published standard text rates per million input/output tokens were [Hydrogen $1.50/$7.50](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/), [Carbon $2/$10, introductory pricing](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-4-carbon-now-available/), and [Sol $2/$10](https://developers.openai.com/api/docs/models/gpt-6.1-sol), checked on 13 November. These are API list-price equivalents, not subscription charges or marginal cash costs. The corrected review calls alone were $0.0565, $0.1598 and $0.0775 respectively. Carbon's additional review expense bought one more detected seed than Sol and more modern source references in this sample. Hydrogen's lower token rate did not make its valid batch cheaper than Sol's observed batch. This is a cost-aware recommendation from one sample, not a cost-efficiency law or a speed benchmark.
+
+The prescribed meters ran before and after every generation, and CodexBar was probed. Gemini snapshots intermittently reported zero and apparent increases, so arm-specific Gemini meter deltas are **unknown**. One stable Carbon review interval showed remaining quota 99.9% to 99.8%, but that alone cannot establish attribution. Codex weekly usage read 13% before Sol's first call and 14% after its last; the observed increase occurred during the invalid-fixture call, with concurrent fleet usage confounding attribution. Sol's three valid-call windows each showed no change at integer precision. All snapshots are retained; no zero reading was treated as a quota refusal. The candidate CLIs and eight AGY native logs contained no quota-refusal markers.
+
+Timings are cumulative subprocess wall observations from one sequential batch, excluding meter/setup/scoring time. There were no repeats intended to measure speed, no cache controls and no bottleneck study, so no speedup or latency superiority is established.
+
+### Protocol, repairs and limitations
+
+The predecessor's six published input hashes all matched before the first model call. Additional hashes froze the keys, selected M2 references and selection records without regenerating data. Candidate prompts contained no answer keys or GEC references. Raw prompts, outputs, keys, scoring inputs, source receipts and attempt records remain in evaluator-held task artifacts, outside Git; hashes alone do not make this a publicly reproducible evidence release.
+
+The first review extraction dropped a page-transition dialogue dash and collapsed paragraphs, introducing an extra punctuation defect. All three original attempts remain preserved as construction diagnostics and their costs are included above. A recorded version-2 correction restored only source formatting, verified against Pravopys 2019 §167. An automated check proved identical normalized words and identical ten seed substitutions. All three arms then received the corrected prompt once in fresh conversations; no attempt was selected for a better score. This repair is a protocol deviation, not an independent replication.
+
+Docker was unavailable, so the GEC computation used the exact hash-verified official UNLP script with the repository's pinned dependencies and tokenizer resources in an isolated temporary environment. All 22 resource hashes matched. Six existing semantic controls passed against their literal expected TP/FP/FN counts. Predictions were tokenized with the pinned Stanza model, then the official script ran with `--no-tokenize` separately for each annotator. The resulting F0.5 values were independently recomputed from the preserved aggregate edit counts. This was a native scorer execution, not a container-parity certification.
+
+The two pre-provider launch failures were preserved verbatim:
+
+```text
+Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined
+FileNotFoundError: [Errno 2] No such file or directory: 'agy'
+```
+
+Both occurred before a candidate provider process started. The supported user-bus environment and absolute CLI path resolved them. No model refused a cell. The optional code-review item was not run. A separate local lint probe used an older shared Ruff and reported `Found 51 errors.` on unchanged files; the CI-matching Ruff 0.17.5 passed without source or configuration changes.
+
+The main uncertainty is generalization: one section and ten planted defects cannot establish deployment reliability or clean-text specificity. Public ZNO/UA-GEC exposure and contamination cannot be excluded. Candidates were explicitly closed-book with no tool calls, so this does not certify a live Sources-assisted review route. There was no independent pre-run prompt critique, and source-citation verification remains partial as described above. Broader held-out reviewer validation, clean controls, the routing decision and any new run authorization remain with the lead for #79. No automatic rerun is authorized by this report.
+
+### Frozen hashes
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Protocol v1 | `194eaa19fc0220f602411b616c25cd46519e5f42e8603dd499a3893f22f50b2c` |
+| Protocol v2, formatting repair | `5ebdb8c3d0ac8dfa3eac3eee9077150e664116b41990caa4e62aa1e4e93f55b3` |
+| ZNO questions | `54a56f0011922870b00ad7f0ec4ac67c8000eb11394736b98fccdda2de32fb06` |
+| GEC questions | `def26a45a9b11b4c89dbdc75117a33deb290ec0417e1f6b33a005c4b83185503` |
+| GEC selected M2, both annotators | `ebb95f67298402a8d7e3866edbfe9b150f8e6fbd95256e2ed5903e5b02b6a4d6` |
+| ZNO key | `a52232b3d6783f406cb9009901603e3179f377e54ad3af0822235cb9bc4111c0` |
+| GEC key | `f7929a087a3d2ca0c7f47beda5a85feafa4b04bdfa5f78c443979a32ebb70dbb` |
+| Writing spec | `939684d995501ff813bf173c1f68f677753690a46d129e340fd9dd66c2427b1b` |
+| Peer rubric | `f33563715e4852d0ba3c0235e4603ef4abffb82a151736433299041a42ed97a5` |
+| Combined prompt | `5279eef4ef911b1ff39e5339d70eb9cb67cae8a057dbb063f4499a524b44e1b8` |
+| Original review prompt, invalid extraction | `f2f216990908a5acbaf658fec5a7fb9d8761e96858bb191c77b1f74ca40c3eaa` |
+| Corrected review prompt | `bb0d28e909d96f7d4d97eb642d9ff7b39c26f69e75d8978af0abd2ae8246c598` |
+| Review key, unchanged by repair | `7da5fa636984358f66cb1f2f306c8e8e9759cc1e568ce04965ba434f8c6c579d` |
+| Hydrogen peer prompt | `a65db2d22d91a1c3bb8af501ded65bb8248fa580a6f0fa4118f3e9cca424c8b3` |
+| Carbon peer prompt | `afd17cb9b5add3e12ba12a087843deb9063e46b7f3f7ec60cd758100ec948b05` |
+| Sol peer prompt | `71c9f44ee91f6889c8e89425e90339845ffdd8dc1d97df34102bd88978ff5b62` |
+| Official UNLP scoring script | `6e37b7a41a3a3c303647ca29507cd51b4b6deb9b0952c2a62d8e0b0374fae31a` |
