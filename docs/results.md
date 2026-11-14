@@ -331,3 +331,80 @@ The main uncertainty is generalization: one section and ten planted defects cann
 | Carbon peer prompt | `afd17cb9b5add3e12ba12a087843deb9063e46b7f3f7ec60cd758100ec948b05` |
 | Sol peer prompt | `71c9f44ee91f6889c8e89425e90339845ffdd8dc1d97df34102bd88978ff5b62` |
 | Official UNLP scoring script | `6e37b7a41a3a3c303647ca29507cd51b4b6deb9b0952c2a62d8e0b0374fae31a` |
+
+## Held-out reviewer recall: Carbon, Hydrogen, Flash and Sol, 14 November 2026
+
+**Recommendation (proposal only; any routing change needs model-assignment approval): do not move the Ukrainian review seat to Gemini 4 Carbon, and stop using planted micro-excerpt sets as reviewer-admission evidence.** On 58 planted, source-verified defects, all four seats found 58/58 in their primary runs. Carbon, Hydrogen and Sol supported every hit with a traced modern source; Flash supported 57 of 58. The set therefore detects no recall difference between any pair: there are no discordant items for raw recall and one for supported recall. Carbon cost about 4–5 times as much as Hydrogen or Flash and took about 27 minutes per run against 4–6 minutes, its price doubles after 30 November, and one of its two runs ended with an AGY stream error after the report. Hydrogen matched Flash at a slightly lower cost, so it is the Gemini candidate worth carrying into a harder test, not a replacement now. The pilot's citation gap (PR 81: Hydrogen cited no modern source) did not reappear once every seat had Sources and the stated authority rules. The only discriminating signal came from two supposedly clean controls that are in fact defective under Антоненко-Давидович: Sol caught both, Carbon caught one in one run, and Hydrogen and Flash caught neither in any run. Two items cannot establish a ranking, but they point to where reviewers differ: subtle, unplanted Russianisms in real text. The next admission test should be whole-lesson review with real, unplanted defects. This data is consistent with the existing designated decision (Sol 6.1 high with Sources for Claude- and Gemini-authored content) and gives no reason to reverse it.
+
+This measurement answers [#79](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/79) AC-01 and AC-02 for these four seats. It is AI measurement, not human review, certification or a review of record.
+
+### Set, prompt and critique (AC-01)
+
+- **78 items: 58 planted defects and 20 controls**, all excerpts from published learn-ukrainian curriculum files (A2/B1 vocabulary headwords, translations and example sentences; A1/A2/B1 module prose) at product commit `1d5d606` (content identical at `92fb436`). Each defect item has exactly one planted defect.
+- Classes (defects + controls): wrong gloss 12 + 4; wrong stress 12 + 4; wrong morphology 12 + 4; Russianism/calque 10 + 4; immersion-band violation 12 + 4. Immersion items quote the binding band rule from the project's immersion policy verbatim. The Russianism class has 10 defects because only candidates with positive Антоненко-Давидович evidence were kept; candidates without it were dropped rather than guessed.
+- The evaluator (Claude Opus 5.5, not an arm) verified every item before freezing with **147 captured Sources calls**, 68 of them cited by the private key: VESUM, the stress oracle, СУМ-20 (official and labelled mirror rows), ULIF, e2u, Антоненко-Давидович through both `search_style_guide` and source-scoped `search_text`, and `check_text` over every non-stress item.
+- **Why N = 58.** Arms review the same items, so they are compared item by item with a paired exact McNemar test. Six one-sided discordant items give two-sided p = 0.031, so a consistent 10-point recall gap of the PR 81 size is detectable. This is conditional detectability, not a power calculation.
+- **Pre-run critique.** A Sol 6.1 high critic (non-Anthropic; methodology and item fairness only, no key access) returned CHANGES in round 1. The fixes were: one ambiguous control replaced, source-precedence and rule-exception sentences added to the prompt, citation eligibility and denominator frozen, run 1 made every arm's primary run, power wording corrected, and key isolation specified. Round 2 approved, bound to the protocol, prompt and runner hashes below.
+
+### Arms and execution (AC-02)
+
+Every arm received the identical prompt bytes and item order in a fresh session with Sources. The three Gemini arms used one evaluator runner around the native AGY CLI: an empty home holding only the OAuth token copy, a Sources-only MCP configuration, credit fallback disabled, and only read-only Sources tools allowed. Shell, file-read, file-write and URL tools were denied; a canary confirmed the denial before the runs. The project dispatcher was not used for Gemini because it refuses `gemini-4-carbon` for review-typed work (`holds no review, critique or approval role in the model catalog`) and has no `gemini-4-hydrogen-medium` entry. Sol ran through the project dispatcher's read-only Codex sandbox. That route also loads the project's always-on rules, which contain the same source rules the prompt states inline. During every run the private key directory was mode 000. A post-run audit of every trace found no reads of the key, task records, logs or GitHub; the denied attempts were only on the arms' own MCP schema files and the public client.
+
+The first launch of the three Gemini units failed before any process started (`Failed to connect to user scope bus via local transport`, the failure PR 81 also recorded). They were relaunched once with the user-bus environment, as the protocol allows for pre-session failures.
+
+### Results
+
+Primary runs decide; second Gemini runs are robustness evidence only. Every run covered 78/78 IDs with 0 BLOCKED and 0 missing. "Modern citation" counts supported hits on the 46 language-class defects that cite an authority actually queried (VESUM, СУМ-20, ULIF, stress oracle, e2u/Балла, Правопис, UA-GEC, check_text, or Антоненко-Давидович for Russianisms).
+
+| Run | Raw recall | Supported recall | Modern citation | False positives, frozen key | Real defects caught in the 2 mislabelled controls | Sources calls | Wall time | List-price estimate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Carbon medium, primary | 58/58 | 58/58 | 46/46 | 1/20 | 1/2 | 274 native | 1,661 s | $2.60 |
+| Hydrogen medium, primary | 58/58 | 58/58 | 46/46 | 0/20 | 0/2 | 117 native | 310 s | $0.49 |
+| Flash high, primary | 58/58 | 57/58 | 45/46 | 0/20 | 0/2 | 135 native | 257 s | $0.57 |
+| Sol 6.1 high, primary | 58/58 | 58/58 | 46/46 | 2/20 | 2/2 | 87 via client | 719 s | $0.86 |
+| Carbon medium, robustness | 58/58 | 58/58 | 46/46 | 0/20 | 0/2 | 275 native | 1,599 s | $2.18 |
+| Hydrogen medium, robustness | 58/58 | 58/58 | 46/46 | 0/20 | 0/2 | 126 native | 279 s | $0.43 |
+| Flash high, robustness | 58/58 | 57/58 | 45/46 | 0/20 | 0/2 | 150 native | 360 s | $0.90 |
+
+Per class, every primary run scored 12/12 gloss, 12/12 stress, 12/12 morphology and 12/12 immersion. Russianism scored 10/10 for Carbon, Hydrogen and Sol and 9/10 supported for Flash. Both Flash runs failed to support the same Russianism hit, the "самий" superlative. The primary run cited an Антоненко-Давидович search whose returned passage (the book's preface) states no such rule; the robustness run cited a Правопис lookup whose text did not contain it. Carbon and Hydrogen cited the passage that does state the rule. Review of record found the primary-run credit, which the first-pass scorer had wrongly granted. A follow-up sweep of every run then checked that each stress, morphology and gloss hit's correct form or meaning appears in a traced modern-tool output, and that each Russianism hit cites a passage containing the rule. It found no other wrongly granted credit.
+
+**Mislabelled controls.** Two items frozen as clean controls are defective under the project's binding Russianism authority. One gave посміхатися the plain gloss "to smile"; Антоненко-Давидович distinguishes its ironic sense from friendly усміхатися, and СУМ-20 (mirror) also marks it as usually ironic. The other described tablets "від головного болю"; Антоненко-Давидович states that medicines take "проти". The evaluator had verified the controls with check_text and СУМ-20 but had not queried Антоненко-Давидович on them, which was an evaluator error. Post-run captured calls confirm both points. Under the frozen key, Sol (2/20) and Carbon's primary run (1/20) fail the pre-stated bar of 0/20 false positives, while Hydrogen and Flash meet it. Under the evidence-corrected key (18 clean controls), all four seats meet the bar, and these rejections are correct catches. Both readings are reported, and the key was not edited.
+
+**Between-seat tests.** No pair has a discordant defect item for raw recall. For supported recall and modern citation, Flash differs from each other seat on one item (exact McNemar p = 1.0). No difference is detected. On the two mislabelled controls, Sol 2/2 against 0/2 for Hydrogen and Flash is too small to test.
+
+**Cost and time.** Estimates use list prices checked on 14 November on Google's [pricing page](https://aistudio.google.com/docs/pricing): Carbon $2 input, $0.10 cache read and $10 output per million tokens (introductory, to 30 November; doubling from 1 December); Hydrogen $1.50/$0.075/$7.50; Flash $0.75/$0.075/$3.75. Output includes thinking. Sol uses the catalog rates $2 input, $0.10 cached and $10 output. Each estimate is uncached input × input rate + cached input × cache rate + output × output rate. AGY reports cache reads separately from input. Codex's input counter includes cached tokens, so Sol's uncached input is 3,181,614 − 3,013,376 = 168,238. Subscription runs have no per-run bill; these are equivalents, not spend. Native counters for the primary runs:
+
+- Carbon: input 485,944; cache read 5,885,081; output 104,309 (thinking 52,343).
+- Hydrogen: input 113,748; cache read 1,136,908; output 30,950 (thinking 14,931).
+- Flash: input 248,579; cache read 2,750,290; output 46,607 (thinking 30,441).
+- Sol: input 3,181,614 (cached 3,013,376); output 22,211 (reasoning 9,462).
+
+Wall times are runner or dispatcher durations from one parallel batch, not latency benchmarks. Carbon's primary run returned AGY status `ERROR` ("The stream was interrupted…") after a complete 78-item report with its closing coverage statement; it was scored as complete.
+
+### Limitations
+
+- The set is at ceiling. Single-field micro-excerpts with one planted defect are now solved by every frontier seat that has Sources and explicit authority rules, so this design cannot rank them. Whole-lesson review with unplanted defects is harder and is not measured here.
+- The evaluator is Anthropic-family and built, verified and scored the set.
+- Support for items the first-pass scorer did not flag was checked mechanically, then by the class-specific sweep described above. Every flagged item, every Sol item and every run's "самий" item were read by hand against the trace. Supplemental claims beyond the rejection itself were not audited proposition by proposition, so unsupported supplemental claims may be undercounted for every arm.
+- Sol cited through abbreviations defined in its report; each was resolved to traced calls.
+- Effective backend effort is not attested for AGY or Codex. AGY init events named each requested model.
+- The key, item-level answers, traces and adjudications stay private. The two mislabelled controls are described above because they carry the main finding.
+
+### Frozen hashes
+
+Frozen at 2026-11-14T06:29:45Z, before the first arm, and re-verified unchanged after the runs.
+
+| Artifact | SHA-256 |
+|---|---|
+| Private answer key | `73338e4281c35145b345af7b9a112a623411a92f9c43fb505b885c7636f8dc2a` |
+| Shared review prompt (78 items) | `4e0b23213b2667cc272d272cee8b72d9910b20c7b7556570f5fdfd181cf99847` |
+| Protocol | `c7d7278a64b462d54d87d7e1d05632c7d5061044caf1d8ad337c4a0456c2723f` |
+| Scorer | `e1df391089f19662f91100fd433ae8e74cec927557087cffe314e25b80286755` |
+| AGY trace extractor | `4c553c774d1b392d2073b0660bc963a96c189c4d53458cbbdcee48b972936fcb` |
+| Set builder | `e29d50907367f3e514e10e838151ea40a357d9ea6eeb1354640ea19b09f90009` |
+| Gemini arm runner | `8f1394524bd21d0d39296530c1393f97e20aecba62fa86a9007ad32213ec6da3` |
+| Fallback Sources client | `0f893dc3828588559f8800705d204e8fef3d0c2ee3d7fb1919e2edcc2aedbe2b` |
+| Evidence manifest (147 calls) | `cec090766d3a9d05c3af1996844c44bdd01ca4841b298a0a3a59e22fcd9b0cc5` |
+| Post-run adjudication record (after review round 1) | `f89416d3faf1c8ea6bd283e430ca6592d8a284ca0a1eb82fd38f2daafc7c2fce` |
+
+Run identifiers: Sol dispatch `cto-414d-ukrecall-sol-r1` (nonce `c4e041a2540840c0ad09cb1a5f012929`); critic rounds `cto-414d-ukrecall-critic-sol` and `-r2`. Gemini stream SHA-256 values: Carbon primary `875ccda4…`, robustness `477912ec…`; Hydrogen primary `f9488ede…`, robustness `52a6e850…`; Flash primary `9c29fb33…`, robustness `3175a8ef…`.
