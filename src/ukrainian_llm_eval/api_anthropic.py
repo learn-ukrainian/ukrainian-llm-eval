@@ -97,7 +97,7 @@ def read_answers(raw: Mapping[str, Any], packet: Mapping[str, Any], config: Mapp
     texts = []
     for block in content:
         kind = block.get("type") if isinstance(block, Mapping) else None
-        if kind in _TEXT_FREE_BLOCKS:
+        if isinstance(kind, str) and kind in _TEXT_FREE_BLOCKS:
             continue
         if kind != "text" or not isinstance(block.get("text"), str):
             raise AdapterError("API response content is invalid")
@@ -136,12 +136,20 @@ def batch_ended(client: Any, batch_id: str) -> bool:
 
 
 def _entry_outcome(entry: Any) -> tuple[Any, api_suite.BatchOutcome, Any]:
+    """Classify one batch entry; a malformed entry never affects its siblings."""
+    if isinstance(entry, str):
+        try:
+            entry = adapters._strict_json_loads(entry)
+        except AdapterError:
+            return None, (None, "batch_invalid_result"), {"unparseable_line": entry}
     try:
         value = api_suite.as_dict(entry)
-    except AdapterError:
+    except (AdapterError, TypeError, ValueError):
         return None, (None, "batch_invalid_result"), {"unreadable_entry": True}
     result = value.get("result")
     kind = result.get("type") if isinstance(result, Mapping) else None
+    if not isinstance(kind, str):
+        kind = None
     if kind == "succeeded" and isinstance(result.get("message"), Mapping):
         outcome: api_suite.BatchOutcome = (dict(result["message"]), None)
     elif kind in {"errored", "canceled", "expired"}:
@@ -152,12 +160,20 @@ def _entry_outcome(entry: Any) -> tuple[Any, api_suite.BatchOutcome, Any]:
 
 
 def batch_results(client: Any, batch_id: str) -> tuple[dict[str, api_suite.BatchOutcome], list[Any]]:
-    """Map each custom id to its message or a normalised failure; return unattributable entries."""
+    """Map each custom id to its message or a normalised failure; return unattributable entries.
+
+    The SDK's JSONL decoder stops at the first malformed line, so the raw
+    lines are read from its HTTP response and classified one at a time.
+    """
     try:
-        entries = list(client.messages.batches.results(batch_id))
+        decoded = client.messages.batches.results(batch_id)
+        response = getattr(decoded, "http_response", None)
+        entries = list(response.iter_lines()) if response is not None else list(decoded)
     except Exception as exc:
         raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
-    return api_suite.attribute_batch([_entry_outcome(entry) for entry in entries])
+    return api_suite.attribute_batch(
+        [_entry_outcome(entry) for entry in entries if not (isinstance(entry, str) and not entry.strip())]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

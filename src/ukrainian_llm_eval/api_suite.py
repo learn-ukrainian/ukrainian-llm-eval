@@ -301,6 +301,16 @@ def attribute_batch(entries: list[tuple[Any, BatchOutcome, Any]]) -> tuple[dict[
     return results, unattributed
 
 
+def parse(reader: Callable[..., Any], *args: Any) -> Any:
+    """Run a provider reader on untrusted response data; any malformation is an AdapterError."""
+    try:
+        return reader(*args)
+    except AdapterError:
+        raise
+    except (TypeError, KeyError, AttributeError, ValueError) as exc:
+        raise AdapterError("API response output is invalid") from exc
+
+
 def settings(config: Mapping[str, Any]) -> dict[str, Any]:
     """The fixed per-call settings recorded with every result."""
     return {
@@ -355,10 +365,10 @@ def run_api_trial(
         raise AdapterError("API response " + sdk_reason(exc)) from exc
     if evidence is not None:
         evidence("api_response", raw)
-    usage = provider.read_usage(raw)
+    usage = parse(provider.read_usage, raw)
     metrics = _metrics(usage, usage_cost(checked, usage, batch=False), time.monotonic() - started)
     try:
-        answer = provider.read_answers(raw, packet, checked)
+        answer = parse(provider.read_answers, raw, packet, checked)
     except AdapterError as exc:
         # The response was billed: keep its usage, cost and settings in a failed trial.
         returned = raw.get("model")
@@ -490,12 +500,12 @@ def _row(request: dict[str, Any], config: dict[str, Any], mode: str, raw: Any, f
     session = None
     if raw is not None:
         try:
-            usage = provider.read_usage(raw)
+            usage = parse(provider.read_usage, raw)
             cost = usage_cost(config, usage, batch=mode == "batch")
         except AdapterError as exc:
             failure = failure or adapters.normalized_reason(exc)
         try:
-            answer = provider.read_answers(raw, unit_packet, config)
+            answer = parse(provider.read_answers, raw, unit_packet, config)
             responses, effective, session = answer["responses"], answer["model"], answer["id"]
         except AdapterError as exc:
             failure = failure or adapters.normalized_reason(exc)

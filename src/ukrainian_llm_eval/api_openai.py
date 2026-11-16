@@ -89,6 +89,7 @@ def read_answers(raw: Mapping[str, Any], packet: Mapping[str, Any], config: Mapp
     texts = []
     for item in output:
         kind = item.get("type") if isinstance(item, Mapping) else None
+        kind = kind if isinstance(kind, str) else None
         if kind == "reasoning":
             continue
         if kind != "message" or item.get("role") != "assistant" or not isinstance(item.get("content"), list):

@@ -88,6 +88,7 @@ class FakeAnthropic:
         self.status = "in_progress"
         self.batch_outcomes: dict[str, str] = {}
         self.extra_entries: list[dict] = []
+        self.extra_lines: list[str] = []
 
         def create(**kwargs):
             kwargs.pop("timeout")
@@ -106,7 +107,9 @@ class FakeAnthropic:
                 if outcome == "succeeded":
                     result["message"] = _claude_message(request["params"])
                 entries.append({"custom_id": request["custom_id"], "result": result})
-            return entries + self.extra_entries
+            # Like the SDK's JSONL decoder: the raw lines are on its HTTP response.
+            lines = [json.dumps(entry) for entry in entries + self.extra_entries] + self.extra_lines
+            return SimpleNamespace(http_response=SimpleNamespace(iter_lines=lambda: iter(lines)))
 
         self.messages = SimpleNamespace(create=create, batches=SimpleNamespace(
             create=batch_create, retrieve=lambda _id: {"id": _id, "processing_status": self.status},
@@ -251,11 +254,14 @@ def test_anthropic_batch_submit_collect_maps_out_of_order_and_failed_results(tmp
     # One entry without an id and one duplicated id must not discard the other valid results.
     duplicate = {"custom_id": "r002-seg-0001", "result": {"type": "succeeded",
                                                           "message": _claude_message(client.batch_requests[2]["params"])}}
-    client.extra_entries = [{"result": {"type": "succeeded"}}, duplicate]
+    client.extra_entries = [{"result": {"type": "succeeded"}}, duplicate,
+                            {"custom_id": "r009-x", "result": {"type": []}}]
+    client.extra_lines = ["not json", ""]
     assert api_anthropic.main(["collect", "--out-dir", str(out)]) == 2
     summary = _last_json(capsys)
-    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 3)
-    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 3
+    # Unattributed: the id-less entry, both duplicates, the unparseable line and the unknown id.
+    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 5)
+    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 5
     first = json.loads((out / "runs" / "repeat-001.json").read_text())
     assert first["status"] == "ok" and score_run(packet, key, first)["raw_points"] == 2
     assert first["identity"]["harness"] == "anthropic-message-batches"
