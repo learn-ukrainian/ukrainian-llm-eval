@@ -105,6 +105,14 @@ def _comparison(packet: Mapping[str, Any], config: Mapping[str, Any]) -> dict[st
         constants["http_adapter_implementation_sha256"] = hashlib.sha256(
             Path(adapters.__file__).with_name("responses_http.py").read_bytes()
         ).hexdigest()
+    elif config["adapter"] in {"anthropic-api", "openai-api"}:
+        module = "api_anthropic.py" if config["adapter"] == "anthropic-api" else "api_openai.py"
+        constants["api_adapter_implementation_sha256"] = {
+            filename: hashlib.sha256(Path(adapters.__file__).with_name(filename).read_bytes()).hexdigest()
+            for filename in ("api_suite.py", module)
+        }
+        # The one fixed sampling setting outside the shared constants above.
+        constants["temperature"] = config.get("temperature")
     if packet.get("schema") == gec.GEC_PACKET_SCHEMA:
         gec_source = Path(gec.__file__).read_bytes()
         adapter_hash = hashlib.sha256(adapter_source).hexdigest()
@@ -262,6 +270,12 @@ def run_exam(
             ):
                 if trial["identity"].get(field) != capability.get(field):
                     raise ExamError("native Cursor configuration changed after preflight")
+        elif checked_config["adapter"] in {"anthropic-api", "openai-api"}:
+            from .api_suite import run_api_trial
+
+            if request_budget is not None:
+                raise ExamError("request-level budget is unavailable for the direct API adapter")
+            trial = run_api_trial(checked_packet, checked_config, condition, prompt=prompt, **evidence_options)
         else:
             budget_options = {"request_budget": request_budget} if request_budget is not None else {}
             if checked_config["adapter"] == "responses-http":
