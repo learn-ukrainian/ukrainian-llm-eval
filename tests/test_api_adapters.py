@@ -87,6 +87,7 @@ class FakeAnthropic:
         self.batch_requests: list[dict] = []
         self.status = "in_progress"
         self.batch_outcomes: dict[str, str] = {}
+        self.extra_entries: list[dict] = []
 
         def create(**kwargs):
             kwargs.pop("timeout")
@@ -105,7 +106,7 @@ class FakeAnthropic:
                 if outcome == "succeeded":
                     result["message"] = _claude_message(request["params"])
                 entries.append({"custom_id": request["custom_id"], "result": result})
-            return entries
+            return entries + self.extra_entries
 
         self.messages = SimpleNamespace(create=create, batches=SimpleNamespace(
             create=batch_create, retrieve=lambda _id: {"id": _id, "processing_status": self.status},
@@ -247,16 +248,22 @@ def test_anthropic_batch_submit_collect_maps_out_of_order_and_failed_results(tmp
     assert _last_json(capsys)["status"] == "in_progress"
     client.status = "ended"
     client.batch_outcomes = {"r002-seg-0002": "errored"}
+    # One entry without an id and one duplicated id must not discard the other valid results.
+    duplicate = {"custom_id": "r002-seg-0001", "result": {"type": "succeeded",
+                                                          "message": _claude_message(client.batch_requests[2]["params"])}}
+    client.extra_entries = [{"result": {"type": "succeeded"}}, duplicate]
     assert api_anthropic.main(["collect", "--out-dir", str(out)]) == 2
     summary = _last_json(capsys)
-    assert (summary["ok"], summary["failed"]) == (3, 1)
+    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 3)
+    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 3
     first = json.loads((out / "runs" / "repeat-001.json").read_text())
     assert first["status"] == "ok" and score_run(packet, key, first)["raw_points"] == 2
     assert first["identity"]["harness"] == "anthropic-message-batches"
     assert first["metrics"]["cost_usd"] == pytest.approx(2 * float((Decimal(1000) * 2 + Decimal(500) * 10) / 10**6))
     second = json.loads((out / "runs" / "repeat-002.json").read_text())
-    assert second["status"] == "failed" and second["failure_reason"] == "batch_errored"
-    assert list(second["responses"].values()) == ["A", None]
+    assert second["status"] == "failed" and second["failure_reason"] == "batch_duplicate_result"
+    assert list(second["responses"].values()) == [None, None]
+    assert json.loads((out / "rows" / "r002-seg-0002.json").read_text())["failure_reason"] == "batch_errored"
 
 
 def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_path, monkeypatch, capsys):
@@ -275,7 +282,7 @@ def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_pa
             return SimpleNamespace(text=json.dumps({"custom_id": row["custom_id"], "error": None, "response": {
                 "status_code": 200, "body": _openai_response(row["body"])}}) + "\n")
         return SimpleNamespace(text=json.dumps({"custom_id": rows[1]["custom_id"], "error": {"code": "x"},
-                                                "response": {"status_code": 400, "body": {}}}) + "\n")
+                                                "response": {"status_code": 400, "body": {}}}) + "\nnot json\n")
 
     client = SimpleNamespace(
         files=SimpleNamespace(create=lambda file, purpose: uploads.append(file[1]) or {"id": "file_1"},
@@ -298,7 +305,7 @@ def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_pa
     state["status"] = "completed"
     assert api_openai.main(["collect", "--out-dir", str(out)]) == 2
     summary = _last_json(capsys)
-    assert (summary["ok"], summary["failed"]) == (1, 2)
+    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (1, 2, 1)
     reasons = [json.loads((out / "rows" / f"r00{index}-all.json").read_text())["failure_reason"] for index in (1, 2, 3)]
     assert reasons == [None, "http_status_400", "batch_missing_result"]
     ok_row = json.loads((out / "rows" / "r001-all.json").read_text())
@@ -312,10 +319,12 @@ def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path
     replies = iter([
         lambda params: _claude_message(params, stop="max_tokens", answers={}),
         lambda params: _claude_message(params, model="claude-sonnet-5-5"),
+        lambda params: _claude_message(params, model="claude-opus-5-5-other-model"),
+        lambda params: _claude_message(params, model="claude-opus-5-5-20261101"),
     ])
     client = FakeAnthropic(reply=lambda params: next(replies)(params))
     _use_client(monkeypatch, api_anthropic, client)
-    config = _config("anthropic-api", "claude-opus-5-5", repeats=2)
+    config = _config("anthropic-api", "claude-opus-5-5", repeats=4)
     assert api_anthropic.main(["suite", "--config", str(_write(tmp_path, "c.json", config)), "--questions",
                                str(_write(tmp_path, "q.json", packet)), "--out-dir", str(tmp_path / "out"),
                                "--max-usd", "1"]) == 2
@@ -324,6 +333,10 @@ def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path
     assert limited["metrics"]["output_tokens"] == 500 and limited["metrics"]["cost_usd"] > 0
     drifted = json.loads((tmp_path / "out" / "rows" / "r002-all.json").read_text())
     assert drifted["status"] == "failed" and drifted["failure_reason"] == "model_error"
+    suffixed = json.loads((tmp_path / "out" / "rows" / "r003-all.json").read_text())
+    assert suffixed["status"] == "failed" and suffixed["failure_reason"] == "model_error"
+    snapshot = json.loads((tmp_path / "out" / "rows" / "r004-all.json").read_text())
+    assert snapshot["status"] == "ok" and snapshot["identity"]["effective_model"] == "claude-opus-5-5-20261101"
 
 
 def test_runner_path_requires_trial_cap_and_returns_standard_run(monkeypatch):
@@ -341,3 +354,10 @@ def test_runner_path_requires_trial_cap_and_returns_standard_run(monkeypatch):
                        sources_url="http://127.0.0.1:9")
     assert sources["status"] == "failed" and sources["failure_reason"] == "capability_error"
     assert len(client.created) == 1
+    # A billed response whose answers fail keeps its usage and cost in the failed run.
+    _use_client(monkeypatch, api_anthropic, FakeAnthropic(
+        reply=lambda params: _claude_message(params, stop="max_tokens", answers={})))
+    limited = run_exam(packet, _config("anthropic-api", "claude-opus-5-5", max_usd_per_trial=1), "closed-book")
+    assert limited["status"] == "failed" and limited["failure_reason"] == "output_error"
+    assert limited["metrics"]["output_tokens"] == 500 and limited["metrics"]["cost_usd"] > 0
+    assert set(limited["responses"]) == {item["id"] for item in packet["items"]}

@@ -20,6 +20,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import time
 from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
@@ -255,15 +256,49 @@ def sdk_reason(exc: BaseException) -> str:
     return adapters.normalized_reason(exc)
 
 
+_SNAPSHOT_SUFFIX = re.compile(r"-(?:\d{4}-\d{2}-\d{2}|\d{8})")
+
+
 def _model_matches(requested: str, effective: Any) -> bool:
-    """Accept the requested id or its dated snapshot, never another model."""
-    return isinstance(effective, str) and (effective == requested or effective.startswith(requested + "-"))
+    """Accept the requested id or its dated snapshot (-YYYY-MM-DD or -YYYYMMDD), never another model."""
+    if not isinstance(effective, str):
+        return False
+    return effective == requested or (
+        effective.startswith(requested) and _SNAPSHOT_SUFFIX.fullmatch(effective[len(requested):]) is not None
+    )
 
 
 def check_model(config: Mapping[str, Any], effective: Any) -> str:
     if not _model_matches(config["model"], effective):
         raise AdapterError("API model drift")
     return effective
+
+
+BatchOutcome = tuple[dict[str, Any] | None, str | None]
+
+
+def attribute_batch(entries: list[tuple[Any, BatchOutcome, Any]]) -> tuple[dict[str, BatchOutcome], list[Any]]:
+    """Map batch entries to custom ids without letting one bad entry discard the rest.
+
+    An entry without a usable id cannot be attributed and is returned for the
+    evidence record.  An id seen more than once is ambiguous: it fails, and all
+    its entries are kept as evidence.  Missing ids are failed by the caller.
+    """
+    by_id: dict[str, list[tuple[BatchOutcome, Any]]] = {}
+    unattributed: list[Any] = []
+    for custom_id, outcome, raw in entries:
+        if isinstance(custom_id, str) and custom_id:
+            by_id.setdefault(custom_id, []).append((outcome, raw))
+        else:
+            unattributed.append(raw)
+    results: dict[str, BatchOutcome] = {}
+    for custom_id, found in by_id.items():
+        if len(found) == 1:
+            results[custom_id] = found[0][0]
+        else:
+            results[custom_id] = (None, "batch_duplicate_result")
+            unattributed.extend(raw for _outcome, raw in found)
+    return results, unattributed
 
 
 def settings(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -321,11 +356,24 @@ def run_api_trial(
     if evidence is not None:
         evidence("api_response", raw)
     usage = provider.read_usage(raw)
-    answer = provider.read_answers(raw, packet, checked)
+    metrics = _metrics(usage, usage_cost(checked, usage, batch=False), time.monotonic() - started)
+    try:
+        answer = provider.read_answers(raw, packet, checked)
+    except AdapterError as exc:
+        # The response was billed: keep its usage, cost and settings in a failed trial.
+        returned = raw.get("model")
+        return {
+            "status": "failed",
+            "failure_reason": adapters.normalized_reason(exc),
+            "responses": {str(item["id"]): None for item in packet["items"]},
+            "identity": _identity(checked, effective_model=returned if isinstance(returned, str) else "unknown",
+                                  session_id=raw.get("id") if isinstance(raw.get("id"), str) else None, mode="sync"),
+            "metrics": metrics,
+        }
     return {
         "responses": answer["responses"],
         "identity": _identity(checked, effective_model=answer["model"], session_id=answer["id"], mode="sync"),
-        "metrics": _metrics(usage, usage_cost(checked, usage, batch=False), time.monotonic() - started),
+        "metrics": metrics,
     }
 
 
@@ -623,10 +671,15 @@ def _collect(args: argparse.Namespace, provider: ModuleType) -> int:
             print(json.dumps({"status": "in_progress", "batch_id": batch_id}))
             return 3
         time.sleep(min(60.0, max(1.0, deadline - time.monotonic())))
-    results = {custom_id: (raw, failure, None)
-               for custom_id, (raw, failure) in provider.batch_results(client, batch_id).items()}
+    outcomes, unattributed = provider.batch_results(client, batch_id)
+    expected = {request["custom_id"] for request in suite["requests"]}
+    unattributed += [{"custom_id": custom_id, "outcome": list(outcome)}
+                     for custom_id, outcome in outcomes.items() if custom_id not in expected]
+    if unattributed:  # kept as evidence; the affected requests fail as missing or duplicate
+        write_private_json(args.out_dir / "batch-unattributed.json", unattributed)
+    results = {custom_id: (raw, failure, None) for custom_id, (raw, failure) in outcomes.items()}
     summary = _finish(args.out_dir, suite, provider, results)
-    print(json.dumps({**summary, "batch_id": batch_id}))
+    print(json.dumps({**summary, "batch_id": batch_id, "unattributed_entries": len(unattributed)}))
     return 0 if summary["status"] == "ok" else 2
 
 

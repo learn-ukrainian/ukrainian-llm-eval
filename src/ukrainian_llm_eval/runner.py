@@ -295,7 +295,10 @@ def run_exam(
             )
         if trial.get("status") == "failed":
             expected_ids = [str(item["id"]) for item in checked_packet["items"]]
-            if not is_candidate_response_failure(trial, expected_response_ids=expected_ids):
+            # A direct API trial fails this way only after a billed response, keeping its usage and cost.
+            direct_api = checked_config["adapter"] in {"anthropic-api", "openai-api"} and set(
+                trial.get("responses", {})) == set(expected_ids) and not any(trial["responses"].values())
+            if not direct_api and not is_candidate_response_failure(trial, expected_response_ids=expected_ids):
                 raise ExamError("candidate response failure evidence is invalid")
             identity = dict(trial["identity"])
             if request_budget is not None:

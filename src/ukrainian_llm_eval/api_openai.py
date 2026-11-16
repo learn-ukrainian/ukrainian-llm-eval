@@ -147,41 +147,39 @@ def batch_ended(client: Any, batch_id: str) -> bool:
     return _retrieve(client, batch_id)["status"] in _BATCH_ENDED
 
 
-def _file_lines(client: Any, file_id: Any) -> list[dict[str, Any]]:
+def _file_text(client: Any, file_id: Any) -> str:
     if file_id is None:
-        return []
+        return ""
     try:
         content = client.files.content(file_id)
-        text = content.text if isinstance(getattr(content, "text", None), str) else content.read().decode("utf-8")
+        return content.text if isinstance(getattr(content, "text", None), str) else content.read().decode("utf-8")
     except Exception as exc:
         raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
-    rows = []
-    for line in text.splitlines():
-        if line.strip():
-            row = adapters._strict_json_loads(line)
-            if not isinstance(row, dict):
-                raise AdapterError("API batch results are invalid")
-            rows.append(row)
-    return rows
 
 
-def batch_results(client: Any, batch_id: str) -> dict[str, tuple[dict[str, Any] | None, str | None]]:
-    """Map each custom id to its response body, or to a normalised failure."""
+def _line_outcome(line: str) -> tuple[Any, api_suite.BatchOutcome, Any]:
+    try:
+        row = adapters._strict_json_loads(line)
+    except AdapterError:
+        return None, (None, "batch_invalid_result"), {"unparseable_line": line}
+    if not isinstance(row, dict):
+        return None, (None, "batch_invalid_result"), {"unparseable_line": line}
+    response = row.get("response")
+    status = response.get("status_code") if isinstance(response, Mapping) else None
+    if status == 200 and row.get("error") is None and isinstance(response.get("body"), Mapping):
+        outcome: api_suite.BatchOutcome = (dict(response["body"]), None)
+    elif isinstance(status, int) and not isinstance(status, bool):
+        outcome = (None, f"http_status_{status}")
+    else:
+        outcome = (None, "batch_errored")
+    return row.get("custom_id"), outcome, row
+
+
+def batch_results(client: Any, batch_id: str) -> tuple[dict[str, api_suite.BatchOutcome], list[Any]]:
+    """Map each custom id to its response body or a normalised failure; return unattributable lines."""
     batch = _retrieve(client, batch_id)
-    results: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
-    for row in _file_lines(client, batch.get("output_file_id")) + _file_lines(client, batch.get("error_file_id")):
-        custom_id = row.get("custom_id")
-        if not isinstance(custom_id, str) or custom_id in results:
-            raise AdapterError("API batch results are invalid")
-        response = row.get("response")
-        status = response.get("status_code") if isinstance(response, Mapping) else None
-        if status == 200 and row.get("error") is None and isinstance(response.get("body"), Mapping):
-            results[custom_id] = (dict(response["body"]), None)
-        elif isinstance(status, int) and not isinstance(status, bool):
-            results[custom_id] = (None, f"http_status_{status}")
-        else:
-            results[custom_id] = (None, "batch_errored")
-    return results
+    text = _file_text(client, batch.get("output_file_id")) + "\n" + _file_text(client, batch.get("error_file_id"))
+    return api_suite.attribute_batch([_line_outcome(line) for line in text.splitlines() if line.strip()])
 
 
 def main(argv: list[str] | None = None) -> int:

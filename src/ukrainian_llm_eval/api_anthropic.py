@@ -135,28 +135,29 @@ def batch_ended(client: Any, batch_id: str) -> bool:
     return status == "ended"
 
 
-def batch_results(client: Any, batch_id: str) -> dict[str, tuple[dict[str, Any] | None, str | None]]:
-    """Map each custom id to its message, or to a normalised failure."""
-    results: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
+def _entry_outcome(entry: Any) -> tuple[Any, api_suite.BatchOutcome, Any]:
     try:
-        entries = [api_suite.as_dict(entry) for entry in client.messages.batches.results(batch_id)]
+        value = api_suite.as_dict(entry)
     except AdapterError:
-        raise
+        return None, (None, "batch_invalid_result"), {"unreadable_entry": True}
+    result = value.get("result")
+    kind = result.get("type") if isinstance(result, Mapping) else None
+    if kind == "succeeded" and isinstance(result.get("message"), Mapping):
+        outcome: api_suite.BatchOutcome = (dict(result["message"]), None)
+    elif kind in {"errored", "canceled", "expired"}:
+        outcome = (None, f"batch_{kind}")
+    else:
+        outcome = (None, "batch_invalid_result")
+    return value.get("custom_id"), outcome, value
+
+
+def batch_results(client: Any, batch_id: str) -> tuple[dict[str, api_suite.BatchOutcome], list[Any]]:
+    """Map each custom id to its message or a normalised failure; return unattributable entries."""
+    try:
+        entries = list(client.messages.batches.results(batch_id))
     except Exception as exc:
         raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
-    for entry in entries:
-        custom_id = entry.get("custom_id")
-        result = entry.get("result")
-        if not isinstance(custom_id, str) or custom_id in results or not isinstance(result, Mapping):
-            raise AdapterError("API batch results are invalid")
-        kind = result.get("type")
-        if kind == "succeeded" and isinstance(result.get("message"), Mapping):
-            results[custom_id] = (dict(result["message"]), None)
-        elif kind in {"errored", "canceled", "expired"}:
-            results[custom_id] = (None, f"batch_{kind}")
-        else:
-            raise AdapterError("API batch results are invalid")
-    return results
+    return api_suite.attribute_batch([_entry_outcome(entry) for entry in entries])
 
 
 def main(argv: list[str] | None = None) -> int:
