@@ -293,10 +293,12 @@ def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path
         lambda params: _claude_message(params, model="claude-opus-5-5-20261101"),
         lambda params: {**_claude_message(params), "content": [{"type": []}], "usage": {"input_tokens": 1000,
                                                                                         "output_tokens": 500}},
+        lambda params: {**_claude_message(params), "usage": {"input_tokens": 10**400, "output_tokens": 500}},
+        lambda params: {**_claude_message(params), "content": [{"type": "text", "text": chr(0xD800)}]},
     ])
     client = FakeAnthropic(reply=lambda params: next(replies)(params))
     _use_client(monkeypatch, api_anthropic, client)
-    config = _config("anthropic-api", "claude-opus-5-5", repeats=5)
+    config = _config("anthropic-api", "claude-opus-5-5", repeats=7)
     assert api_anthropic.main(["--config", str(_write(tmp_path, "c.json", config)), "--questions",
                                str(_write(tmp_path, "q.json", packet)), "--out-dir", str(tmp_path / "out"),
                                "--max-usd", "1"]) == 2
@@ -311,6 +313,10 @@ def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path
     assert row(4)["status"] == "ok" and row(4)["identity"]["effective_model"] == "claude-opus-5-5-20261101"
     # A malformed block type is a failed row with its billed cost, never a crash.
     assert row(5)["status"] == "failed" and row(5)["metrics"]["cost_usd"] > 0
+    # An oversized usage count or unencodable text is a failed row, and the later requests still run.
+    assert row(6)["status"] == "failed" and row(6)["metrics"]["cost_usd"] is None
+    assert row(7)["status"] == "failed" and row(7)["metrics"]["cost_usd"] > 0
+    assert len(client.created) == 7 and len(list((tmp_path / "out" / "runs").iterdir())) == 7
 
 
 def test_runner_path_requires_trial_cap_and_returns_standard_run(monkeypatch):

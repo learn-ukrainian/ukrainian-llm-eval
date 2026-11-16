@@ -228,14 +228,50 @@ def usage_cost(config: Mapping[str, Any], usage: Mapping[str, Any]) -> Decimal:
     return (tokens_in * price_in + usage["output_tokens"] * price_out) / _MILLION
 
 
+# Largest integer JSON readers exchange exactly (I-JSON, RFC 7493 section 2.2); keeps derived costs finite.
+MAX_TOKEN_COUNT = 2**53 - 1
+# Marks a provider string that is not valid UTF-8 (a lone surrogate); the value is its ASCII-escaped JSON.
+UNENCODABLE_STRING = "unencodable_string_json"
+
+
+def token_count(value: Any) -> int:
+    """A provider-reported token count: a JSON-interoperable nonnegative integer."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKEN_COUNT:
+        raise AdapterError("API usage is invalid")
+    return value
+
+
+def _utf8(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _encodable(value: Any) -> Any:
+    """Keep every provider string; one canonical UTF-8 cannot hold becomes a lossless ASCII-escaped form."""
+    if isinstance(value, str):
+        return value if _utf8(value) else {UNENCODABLE_STRING: json.dumps(value)}
+    if isinstance(value, list):
+        return [_encodable(item) for item in value]
+    if isinstance(value, dict):
+        return {key if _utf8(key) else json.dumps(key): _encodable(item) for key, item in value.items()}
+    return value
+
+
 def as_dict(value: Any) -> dict[str, Any]:
-    """Convert an SDK model (or a plain test mapping) to JSON data."""
+    """Convert an SDK model (or a plain test mapping) to JSON data the evidence writer can always persist."""
     if isinstance(value, Mapping):
-        return json.loads(adapters.canonical(value))
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json")
-    raise AdapterError("API response object is invalid")
+        data = json.loads(adapters.canonical(value))
+    else:
+        dump = getattr(value, "model_dump", None)
+        if not callable(dump):
+            raise AdapterError("API response object is invalid")
+        data = dump(mode="json")
+    data = _encodable(data)
+    adapters.canonical(data).encode("utf-8")  # fails here, inside the per-request boundary, never at persistence
+    return data
 
 
 def sdk_reason(exc: BaseException) -> str:

@@ -60,10 +60,7 @@ def read_usage(raw: Mapping[str, Any]) -> dict[str, int]:
         raise AdapterError("API usage is missing")
     result = {}
     for field in ("input_tokens", "output_tokens", "total_tokens"):
-        value = usage.get(field)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise AdapterError("API usage is invalid")
-        result[field] = value
+        result[field] = api_suite.token_count(usage.get(field))
     return result
 
 

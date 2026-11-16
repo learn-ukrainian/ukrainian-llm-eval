@@ -63,9 +63,7 @@ def _count(usage: Mapping[str, Any], field: str, *, required: bool) -> int:
     value = usage.get(field)
     if value is None and not required:
         return 0
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise AdapterError("API usage is invalid")
-    return value
+    return api_suite.token_count(value)
 
 
 def read_usage(raw: Mapping[str, Any]) -> dict[str, int]:
