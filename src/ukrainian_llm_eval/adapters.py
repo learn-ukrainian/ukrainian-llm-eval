@@ -141,6 +141,10 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         from .native_cursor import validate_config as validate_cursor_config
 
         return validate_cursor_config(config)
+    if adapter in {"anthropic-api", "openai-api"}:
+        from .api_suite import validate_api_config
+
+        return validate_api_config(config)
     base = {
         "schema",
         "adapter",
@@ -290,6 +294,10 @@ def preflight(config: Mapping[str, Any], condition: str, sources_url: str | None
         from .native_cursor import preflight as cursor_preflight
 
         return cursor_preflight(checked, condition, sources_url)
+    if checked["adapter"] in {"anthropic-api", "openai-api"}:
+        from .api_suite import preflight as api_preflight
+
+        return api_preflight(checked, condition)
     _condition_policy(checked, condition, sources_url)
     capability: dict[str, Any] = {
         "schema": "zno-nmt.capability.v1",

@@ -21,6 +21,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# Direct paid API adapters (api_anthropic, api_openai); tests use fakes and need neither.
+api = [
+  "anthropic>=0.108",
+  "openai>=1.109",
+]
 dev = [
   "build",
   "pytest",
@@ -31,6 +36,8 @@ dev = [
 ukrainian-llm-eval = "ukrainian_llm_eval.__main__:main"
 ukrainian-llm-eval-mcp-proxy = "ukrainian_llm_eval.mcp_proxy:main"
 ukrainian-llm-eval-codex-reference = "ukrainian_llm_eval.codex_reference_bridge:main"
+ukrainian-llm-eval-anthropic = "ukrainian_llm_eval.api_anthropic:main"
+ukrainian-llm-eval-openai = "ukrainian_llm_eval.api_openai:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
