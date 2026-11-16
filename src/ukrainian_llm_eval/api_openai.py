@@ -153,17 +153,14 @@ def _file_text(client: Any, file_id: Any) -> str:
         return ""
     try:
         content = client.files.content(file_id)
-        return content.text if isinstance(getattr(content, "text", None), str) else content.read().decode("utf-8")
+        return content.text if isinstance(getattr(content, "text", None), str) else content.read().decode("utf-8", errors="replace")
     except Exception as exc:
         raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
 
 
 def _line_outcome(line: str) -> tuple[Any, api_suite.BatchOutcome, Any]:
-    try:
-        row = adapters._strict_json_loads(line)
-    except AdapterError:
-        return None, (None, "batch_invalid_result"), {"unparseable_line": line}
-    if not isinstance(row, dict):
+    row = api_suite.batch_line(line)
+    if row is None:
         return None, (None, "batch_invalid_result"), {"unparseable_line": line}
     response = row.get("response")
     status = response.get("status_code") if isinstance(response, Mapping) else None

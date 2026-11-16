@@ -138,13 +138,13 @@ def batch_ended(client: Any, batch_id: str) -> bool:
 def _entry_outcome(entry: Any) -> tuple[Any, api_suite.BatchOutcome, Any]:
     """Classify one batch entry; a malformed entry never affects its siblings."""
     if isinstance(entry, str):
-        try:
-            entry = adapters._strict_json_loads(entry)
-        except AdapterError:
-            return None, (None, "batch_invalid_result"), {"unparseable_line": entry}
+        line = entry
+        entry = api_suite.batch_line(line)
+        if entry is None:
+            return None, (None, "batch_invalid_result"), {"unparseable_line": line}
     try:
         value = api_suite.as_dict(entry)
-    except (AdapterError, TypeError, ValueError):
+    except api_suite.MALFORMED:
         return None, (None, "batch_invalid_result"), {"unreadable_entry": True}
     result = value.get("result")
     kind = result.get("type") if isinstance(result, Mapping) else None

@@ -301,14 +301,29 @@ def attribute_batch(entries: list[tuple[Any, BatchOutcome, Any]]) -> tuple[dict[
     return results, unattributed
 
 
+# Malformed untrusted data can raise any of these: invalid or duplicate JSON,
+# an integer beyond the digit limit (ValueError), deep nesting (RecursionError),
+# or an unexpected type or shape.
+MALFORMED = (TypeError, KeyError, AttributeError, ValueError, RecursionError)
+
+
 def parse(reader: Callable[..., Any], *args: Any) -> Any:
     """Run a provider reader on untrusted response data; any malformation is an AdapterError."""
     try:
         return reader(*args)
     except AdapterError:
         raise
-    except (TypeError, KeyError, AttributeError, ValueError) as exc:
+    except MALFORMED as exc:
         raise AdapterError("API response output is invalid") from exc
+
+
+def batch_line(line: str) -> dict[str, Any] | None:
+    """Decode one untrusted batch result line; None when it is not one JSON object."""
+    try:
+        value = adapters._strict_json_loads(line)
+    except MALFORMED:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def settings(config: Mapping[str, Any]) -> dict[str, Any]:

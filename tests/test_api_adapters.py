@@ -256,12 +256,12 @@ def test_anthropic_batch_submit_collect_maps_out_of_order_and_failed_results(tmp
                                                           "message": _claude_message(client.batch_requests[2]["params"])}}
     client.extra_entries = [{"result": {"type": "succeeded"}}, duplicate,
                             {"custom_id": "r009-x", "result": {"type": []}}]
-    client.extra_lines = ["not json", ""]
+    client.extra_lines = ["not json", "", '{"extra":' + "9" * 5000 + "}"]
     assert api_anthropic.main(["collect", "--out-dir", str(out)]) == 2
     summary = _last_json(capsys)
-    # Unattributed: the id-less entry, both duplicates, the unparseable line and the unknown id.
-    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 5)
-    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 5
+    # Unattributed: the id-less entry, both duplicates, two undecodable lines and the unknown id.
+    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 6)
+    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 6
     first = json.loads((out / "runs" / "repeat-001.json").read_text())
     assert first["status"] == "ok" and score_run(packet, key, first)["raw_points"] == 2
     assert first["identity"]["harness"] == "anthropic-message-batches"
@@ -288,7 +288,8 @@ def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_pa
             return SimpleNamespace(text=json.dumps({"custom_id": row["custom_id"], "error": None, "response": {
                 "status_code": 200, "body": _openai_response(row["body"])}}) + "\n")
         return SimpleNamespace(text=json.dumps({"custom_id": rows[1]["custom_id"], "error": {"code": "x"},
-                                                "response": {"status_code": 400, "body": {}}}) + "\nnot json\n")
+                                                "response": {"status_code": 400, "body": {}}}) + "\nnot json\n"
+                               + '{"extra":' + "9" * 5000 + "}\n")
 
     client = SimpleNamespace(
         files=SimpleNamespace(create=lambda file, purpose: uploads.append(file[1]) or {"id": "file_1"},
@@ -311,7 +312,7 @@ def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_pa
     state["status"] = "completed"
     assert api_openai.main(["collect", "--out-dir", str(out)]) == 2
     summary = _last_json(capsys)
-    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (1, 2, 1)
+    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (1, 2, 2)
     reasons = [json.loads((out / "rows" / f"r00{index}-all.json").read_text())["failure_reason"] for index in (1, 2, 3)]
     assert reasons == [None, "http_status_400", "batch_missing_result"]
     ok_row = json.loads((out / "rows" / "r001-all.json").read_text())
