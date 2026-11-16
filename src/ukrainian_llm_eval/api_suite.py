@@ -230,8 +230,6 @@ def usage_cost(config: Mapping[str, Any], usage: Mapping[str, Any]) -> Decimal:
 
 # Largest integer JSON readers exchange exactly (I-JSON, RFC 7493 section 2.2); keeps derived costs finite.
 MAX_TOKEN_COUNT = 2**53 - 1
-# Marks a provider string that is not valid UTF-8 (a lone surrogate); the value is its ASCII-escaped JSON.
-UNENCODABLE_STRING = "unencodable_string_json"
 
 
 def token_count(value: Any) -> int:
@@ -241,27 +239,8 @@ def token_count(value: Any) -> int:
     return value
 
 
-def _utf8(text: str) -> bool:
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return True
-
-
-def _encodable(value: Any) -> Any:
-    """Keep every provider string; one canonical UTF-8 cannot hold becomes a lossless ASCII-escaped form."""
-    if isinstance(value, str):
-        return value if _utf8(value) else {UNENCODABLE_STRING: json.dumps(value)}
-    if isinstance(value, list):
-        return [_encodable(item) for item in value]
-    if isinstance(value, dict):
-        return {key if _utf8(key) else json.dumps(key): _encodable(item) for key, item in value.items()}
-    return value
-
-
 def as_dict(value: Any) -> dict[str, Any]:
-    """Convert an SDK model (or a plain test mapping) to JSON data the evidence writer can always persist."""
+    """Convert an SDK model (or a plain test mapping) to JSON data."""
     if isinstance(value, Mapping):
         data = json.loads(adapters.canonical(value))
     else:
@@ -269,9 +248,30 @@ def as_dict(value: Any) -> dict[str, Any]:
         if not callable(dump):
             raise AdapterError("API response object is invalid")
         data = dump(mode="json")
-    data = _encodable(data)
-    adapters.canonical(data).encode("utf-8")  # fails here, inside the per-request boundary, never at persistence
+    adapters.canonical(data)  # too deep or an oversized integer fails here, inside the per-request boundary
     return data
+
+
+def _persistable(value: Any) -> bool:
+    """Whether canonical UTF-8 JSON, the evidence and row format, can hold ``value``."""
+    try:
+        adapters.canonical(value).encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate, from JSON escapes such as \\ud800
+        return False
+    return True
+
+
+def unencodable_response(raw: Any) -> dict[str, str] | None:
+    """For a response that canonical UTF-8 cannot hold, its lossless ASCII-escaped JSON; otherwise None.
+
+    Callers record it under the separate event kind ``api_response_unencodable``, so it is never
+    mistaken for response data.
+    """
+    return None if _persistable(raw) else {"raw_ascii_json": json.dumps(raw, sort_keys=True)}
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and _persistable(value) else None
 
 
 def sdk_reason(exc: BaseException) -> str:
@@ -312,13 +312,19 @@ _MALFORMED = (TypeError, KeyError, AttributeError, ValueError, RecursionError)
 
 
 def parse(reader: Callable[..., Any], *args: Any) -> Any:
-    """Run a provider reader on untrusted response data; any malformation is an AdapterError."""
+    """Run a provider reader on untrusted response data; any malformation is an AdapterError.
+
+    A result must also be persistable: answer text decoded from embedded JSON can hold a lone surrogate.
+    """
     try:
-        return reader(*args)
+        result = reader(*args)
     except AdapterError:
         raise
     except _MALFORMED as exc:
         raise AdapterError("API response output is invalid") from exc
+    if not _persistable(result):
+        raise AdapterError("API response output is invalid")
+    return result
 
 
 def settings(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -374,20 +380,20 @@ def run_api_trial(
     except Exception as exc:  # SDK errors are normalised; their text may hold request detail
         raise AdapterError("API response " + sdk_reason(exc)) from exc
     if evidence is not None:
-        evidence("api_response", raw)
+        escaped = unencodable_response(raw)
+        evidence(*(("api_response", raw) if escaped is None else ("api_response_unencodable", escaped)))
     usage = parse(provider.read_usage, raw)
     metrics = _metrics(usage, usage_cost(checked, usage), time.monotonic() - started)
     try:
         answer = parse(provider.read_answers, raw, packet, checked)
     except AdapterError as exc:
         # The response was billed: keep its usage, cost and settings in a failed trial.
-        returned = raw.get("model")
         return {
             "status": "failed",
             "failure_reason": adapters.normalized_reason(exc),
             "responses": {str(item["id"]): None for item in packet["items"]},
-            "identity": _identity(checked, effective_model=returned if isinstance(returned, str) else "unknown",
-                                  session_id=raw.get("id") if isinstance(raw.get("id"), str) else None),
+            "identity": _identity(checked, effective_model=_text(raw.get("model")) or "unknown",
+                                  session_id=_text(raw.get("id"))),
             "metrics": metrics,
         }
     return {
@@ -614,7 +620,13 @@ def _run_suite(args: argparse.Namespace, provider: ModuleType) -> int:
                 raw, failure = None, sdk_reason(exc)
             elapsed = time.monotonic() - started
             # Persist every billed response at once, so an interrupted run keeps it.
-            attempt.append("api_response", {"request_id": request["request_id"], "raw": raw, "transport_failure": failure})
+            escaped = unencodable_response(raw)
+            if escaped is None:
+                attempt.append("api_response", {"request_id": request["request_id"], "raw": raw,
+                                                "transport_failure": failure})
+            else:
+                attempt.append("api_response_unencodable", {"request_id": request["request_id"], **escaped,
+                                                            "transport_failure": failure})
             row = _row(request, config, raw, failure, elapsed, provider, units[request["unit"]]["packet"])
             write_private_json(out / "rows" / f"{request['request_id']}.json", row)
             rows.append(row)
