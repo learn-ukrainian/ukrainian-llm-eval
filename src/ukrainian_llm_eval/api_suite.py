@@ -318,12 +318,11 @@ def parse(reader: Callable[..., Any], *args: Any) -> Any:
     """
     try:
         result = reader(*args)
+        adapters.canonical(result).encode("utf-8")  # UnicodeEncodeError is a ValueError
     except AdapterError:
         raise
     except _MALFORMED as exc:
         raise AdapterError("API response output is invalid") from exc
-    if not _persistable(result):
-        raise AdapterError("API response output is invalid")
     return result
 
 
