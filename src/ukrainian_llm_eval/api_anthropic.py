@@ -1,4 +1,4 @@
-"""Direct Anthropic Messages API adapter (closed-book), with Message Batches.
+"""Direct Anthropic Messages API adapter (closed-book, synchronous).
 
 Run ``python -m ukrainian_llm_eval.api_anthropic --help``.  The official
 ``anthropic`` SDK reads ``ANTHROPIC_API_KEY`` itself; this module never reads
@@ -29,7 +29,7 @@ def make_client() -> Any:
     except ImportError as exc:
         raise AdapterError("API SDK unavailable; install ukrainian-llm-eval[api]") from exc
     try:
-        # A retried create could submit a second paid request or batch.
+        # A retried create could submit a second paid request.
         return anthropic.Anthropic(max_retries=0)
     except Exception as exc:  # missing key: the SDK message is not echoed
         raise AdapterError("API authentication unavailable") from exc
@@ -39,7 +39,7 @@ def build_request(packet: Mapping[str, Any], config: Mapping[str, Any], prompt: 
     """Messages API parameters for one fresh, single-turn trial."""
     schema = api_suite.api_schema(packet, enum_nulls=True)
     if api_suite.union_parameters(schema) > api_suite.MAX_UNION_PARAMETERS:
-        # The API would reject the whole request (or batch line); refuse while planning.
+        # The API would reject the request; refuse while planning, before any paid call.
         raise AdapterError("API schema exceeds 16 union-typed answers; use a segment plan")
     output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
     if config["effort"] is not None:
@@ -110,70 +110,6 @@ def read_answers(raw: Mapping[str, Any], packet: Mapping[str, Any], config: Mapp
         raise AdapterError("API response schema mismatch") from exc
     message_id = raw.get("id")
     return {"responses": responses, "model": model, "id": message_id if isinstance(message_id, str) else None}
-
-
-def submit_batch(client: Any, requests: list[tuple[str, Mapping[str, Any]]]) -> str:
-    try:
-        batch = client.messages.batches.create(
-            requests=[{"custom_id": custom_id, "params": dict(params)} for custom_id, params in requests]
-        )
-    except Exception as exc:
-        raise AdapterError("API batch submission " + api_suite.sdk_reason(exc)) from exc
-    batch_id = api_suite.as_dict(batch).get("id")
-    if not isinstance(batch_id, str) or not batch_id:
-        raise AdapterError("API batch response is invalid")
-    return batch_id
-
-
-def batch_ended(client: Any, batch_id: str) -> bool:
-    try:
-        status = api_suite.as_dict(client.messages.batches.retrieve(batch_id)).get("processing_status")
-    except Exception as exc:
-        raise AdapterError("API batch status " + api_suite.sdk_reason(exc)) from exc
-    if status not in {"in_progress", "canceling", "ended"}:
-        raise AdapterError("API batch status is invalid")
-    return status == "ended"
-
-
-def _entry_outcome(entry: Any) -> tuple[Any, api_suite.BatchOutcome, Any]:
-    """Classify one batch entry; a malformed entry never affects its siblings."""
-    if isinstance(entry, str):
-        line = entry
-        entry = api_suite.batch_line(line)
-        if entry is None:
-            return None, (None, "batch_invalid_result"), {"unparseable_line": line}
-    try:
-        value = api_suite.as_dict(entry)
-    except api_suite.MALFORMED:
-        return None, (None, "batch_invalid_result"), {"unreadable_entry": True}
-    result = value.get("result")
-    kind = result.get("type") if isinstance(result, Mapping) else None
-    if not isinstance(kind, str):
-        kind = None
-    if kind == "succeeded" and isinstance(result.get("message"), Mapping):
-        outcome: api_suite.BatchOutcome = (dict(result["message"]), None)
-    elif kind in {"errored", "canceled", "expired"}:
-        outcome = (None, f"batch_{kind}")
-    else:
-        outcome = (None, "batch_invalid_result")
-    return value.get("custom_id"), outcome, value
-
-
-def batch_results(client: Any, batch_id: str) -> tuple[dict[str, api_suite.BatchOutcome], list[Any]]:
-    """Map each custom id to its message or a normalised failure; return unattributable entries.
-
-    The SDK's JSONL decoder stops at the first malformed line, so the raw
-    lines are read from its HTTP response and classified one at a time.
-    """
-    try:
-        decoded = client.messages.batches.results(batch_id)
-        response = getattr(decoded, "http_response", None)
-        entries = list(response.iter_lines()) if response is not None else list(decoded)
-    except Exception as exc:
-        raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
-    return api_suite.attribute_batch(
-        [_entry_outcome(entry) for entry in entries if not (isinstance(entry, str) and not entry.strip())]
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

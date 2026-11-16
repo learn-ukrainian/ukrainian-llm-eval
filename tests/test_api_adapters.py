@@ -39,6 +39,7 @@ _EXAM = {
 }
 
 
+
 def _config(adapter: str, model: str, **extra) -> dict:
     return {"schema": "zno-nmt.config.v1", "adapter": adapter, "model": model, "effort": "high",
             "timeout_seconds": 60, "max_output_tokens": 2000, "max_tool_calls": 1, "repeats": 1,
@@ -71,49 +72,32 @@ def _claude_message(params: dict, *, model: str | None = None, stop: str = "end_
             "usage": {"input_tokens": 1000, "output_tokens": 500}}
 
 
-def _openai_response(params: dict, *, model: str | None = None) -> dict:
+def _openai_response(params: dict, *, status: str = "completed") -> dict:
     text = json.dumps({"responses": _answers_for(params, _GOLD)})
-    return {"id": "resp_1", "object": "response", "model": model or params["model"] + "-2026-11-01",
-            "status": "completed", "output": [
-                {"type": "reasoning", "id": "rs_1", "summary": []},
-                {"type": "message", "role": "assistant", "status": "completed",
-                 "content": [{"type": "output_text", "text": text, "annotations": []}]}],
+    return {"id": "resp_1", "object": "response", "model": params["model"] + "-2026-11-01", "status": status,
+            "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
+            "output": [{"type": "reasoning", "id": "rs_1", "summary": []},
+                       {"type": "message", "role": "assistant", "status": "completed",
+                        "content": [{"type": "output_text", "text": text, "annotations": []}]}],
             "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500}}
 
 
 class FakeAnthropic:
+    """Records every create call; ``reply`` may raise to simulate an SDK error."""
+
     def __init__(self, reply=_claude_message):
         self.created: list[dict] = []
-        self.batch_requests: list[dict] = []
-        self.status = "in_progress"
-        self.batch_outcomes: dict[str, str] = {}
-        self.extra_entries: list[dict] = []
-        self.extra_lines: list[str] = []
 
         def create(**kwargs):
             kwargs.pop("timeout")
             self.created.append(kwargs)
             return reply(kwargs)
 
-        def batch_create(requests):
-            self.batch_requests = requests
-            return {"id": "msgbatch_1", "processing_status": "in_progress"}
+        self.messages = SimpleNamespace(create=create)
 
-        def results(_batch_id):
-            entries = []
-            for request in reversed(self.batch_requests):  # results are not in request order
-                outcome = self.batch_outcomes.get(request["custom_id"], "succeeded")
-                result = {"type": outcome}
-                if outcome == "succeeded":
-                    result["message"] = _claude_message(request["params"])
-                entries.append({"custom_id": request["custom_id"], "result": result})
-            # Like the SDK's JSONL decoder: the raw lines are on its HTTP response.
-            lines = [json.dumps(entry) for entry in entries + self.extra_entries] + self.extra_lines
-            return SimpleNamespace(http_response=SimpleNamespace(iter_lines=lambda: iter(lines)))
 
-        self.messages = SimpleNamespace(create=create, batches=SimpleNamespace(
-            create=batch_create, retrieve=lambda _id: {"id": _id, "processing_status": self.status},
-            results=results))
+class ServerError(Exception):
+    status_code = 529
 
 
 def _use_client(monkeypatch, module, client) -> None:
@@ -135,6 +119,14 @@ def _write(tmp_path: Path, name: str, value) -> Path:
 
 def _last_json(capsys) -> dict:
     return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+def _cost(input_price: int, output_price: int) -> float:
+    return float((Decimal(1000) * input_price + Decimal(500) * output_price) / Decimal(1_000_000))
+
+
+def _plan(packet: dict) -> dict:
+    return derive_segment_plan(packet, suite_id="ulp", protocol_sha256="0" * 64, denominator={"items": 2, "points": 2})
 
 
 def test_request_shapes_fix_settings_and_drop_unsupported_schema_keywords():
@@ -161,7 +153,7 @@ def test_request_shapes_fix_settings_and_drop_unsupported_schema_keywords():
     }
     gec_schema = canonical(api_suite.api_schema({"schema": GEC_PACKET_SCHEMA, "items": [{"id": "q0001"}]}))
     assert "minLength" not in gec_schema and "pattern" in gec_schema and "anyOf" not in gec_schema
-    # Anthropic rejects more than 16 union-typed parameters; refuse while planning, not after submission.
+    # Anthropic rejects more than 16 union-typed parameters; refuse while planning, before any paid call.
     wide = {"schema": "zno-nmt.questions.v1", "items": [{"id": f"q{index:04d}", "kind": "single", "options": []}
                                                         for index in range(17)]}
     with pytest.raises(ValueError, match="16 union"):
@@ -178,20 +170,20 @@ def test_sync_suite_records_settings_usage_cost_and_scores_with_existing_scorer(
     client = FakeAnthropic()
     _use_client(monkeypatch, api_anthropic, client)
     config = _config("anthropic-api", "claude-sonnet-5-5", temperature=0.2, repeats=2)
-    args = ["suite", "--config", str(_write(tmp_path, "c.json", config)),
+    args = ["--config", str(_write(tmp_path, "c.json", config)),
             "--questions", str(_write(tmp_path, "q.json", packet)), "--out-dir", str(tmp_path / "out"),
             "--max-usd", "1"]
     assert api_anthropic.main(args) == 0
     summary = _last_json(capsys)
     assert (summary["status"], summary["requests"], summary["ok"]) == ("ok", 2, 2)
+    assert summary["cost_usd"] == pytest.approx(2 * _cost(2, 10))
     assert len(client.created) == 2 and client.created[0]["temperature"] == 0.2
     row = json.loads((tmp_path / "out" / "rows" / "r001-all.json").read_text())
-    expected_cost = float((Decimal(1000) * 2 + Decimal(500) * 10) / Decimal(1_000_000))
     assert row["settings"] == {"model": "claude-sonnet-5-5", "effort": "high", "temperature": 0.2,
                                "max_output_tokens": 2000, "timeout_seconds": 60}
     assert row["identity"]["effective_model"] == "claude-sonnet-5-5"
     assert (row["metrics"]["input_tokens"], row["metrics"]["output_tokens"]) == (1000, 500)
-    assert row["metrics"]["cost_usd"] == pytest.approx(expected_cost)
+    assert row["metrics"]["cost_usd"] == pytest.approx(_cost(2, 10))
     run = json.loads((tmp_path / "out" / "runs" / "repeat-002.json").read_text())
     assert run["repeat"] == 2 and run["identity"]["temperature"] == 0.2
     assert score_run(packet, key, run)["raw_points"] == 2
@@ -203,7 +195,7 @@ def test_max_usd_is_required_and_refuses_before_any_client_or_file(tmp_path, mon
     """Defect class: a paid run that starts although its estimate exceeds the cap."""
     packet, _key = _packet_and_key()
     _forbid_client(monkeypatch, api_openai)
-    base = ["suite", "--config", str(_write(tmp_path, "c.json", _config("openai-api", "gpt-6.1-sol"))),
+    base = ["--config", str(_write(tmp_path, "c.json", _config("openai-api", "gpt-6.1-sol"))),
             "--questions", str(_write(tmp_path, "q.json", packet)), "--out-dir", str(tmp_path / "out")]
     assert api_openai.main(base + ["--max-usd", "0.001"]) == 2
     refused = _last_json(capsys)
@@ -216,108 +208,79 @@ def test_max_usd_is_required_and_refuses_before_any_client_or_file(tmp_path, mon
 def test_dry_run_counts_segment_requests_without_key(tmp_path, monkeypatch, capsys):
     """Defect class: a dry run that needs a key, calls a provider, or miscounts requests and cost."""
     packet, _key = _packet_and_key()
-    plan = derive_segment_plan(packet, suite_id="ulp", protocol_sha256="0" * 64, denominator={"items": 2, "points": 2})
     _forbid_client(monkeypatch, api_anthropic)
     config = _config("anthropic-api", "claude-opus-5-5", repeats=3)
     assert api_anthropic.main([
-        "suite", "--config", str(_write(tmp_path, "c.json", config)), "--questions",
-        str(_write(tmp_path, "q.json", packet)), "--segment-plan", str(_write(tmp_path, "p.json", plan)),
-        "--batch", "--dry-run"]) == 0
+        "--config", str(_write(tmp_path, "c.json", config)), "--questions",
+        str(_write(tmp_path, "q.json", packet)), "--segment-plan", str(_write(tmp_path, "p.json", _plan(packet))),
+        "--dry-run"]) == 0
     report = _last_json(capsys)
-    assert (report["status"], report["requests"], report["mode"]) == ("dry_run", 6, "batch")
-    # Batch price is half of Opus 5.5's $4/$20 list price; output is bounded by max_output_tokens.
-    assert report["usd_per_mtok"] == {"input": "2.0", "output": "10.0"}
-    expected = (Decimal(report["estimated_input_tokens"]) * 2 + 6 * 2000 * 10) / Decimal(1_000_000)
+    assert (report["status"], report["requests"]) == ("dry_run", 6)
+    # Opus 5.5 list price is $4/$20 per MTok; output is bounded by max_output_tokens.
+    assert report["usd_per_mtok"] == {"input": "4", "output": "20"}
+    expected = (Decimal(report["estimated_input_tokens"]) * 4 + 6 * 2000 * 20) / Decimal(1_000_000)
     assert report["estimated_usd_upper_bound"] == pytest.approx(float(expected))
     with pytest.raises(ValueError, match="price is unknown"):
         api_suite.prices(_config("anthropic-api", "claude-unpriced"))
 
 
-def test_anthropic_batch_submit_collect_maps_out_of_order_and_failed_results(tmp_path, monkeypatch, capsys):
-    """Defect class: batch results attached to the wrong request, or a failed entry scored as ok."""
+def test_segmented_run_maps_answers_back_and_keeps_transport_failures(tmp_path, monkeypatch, capsys):
+    """Defect class: segment answers attached to the wrong source item, or a failed request scored as ok."""
     packet, key = _packet_and_key()
-    plan = derive_segment_plan(packet, suite_id="ulp", protocol_sha256="0" * 64, denominator={"items": 2, "points": 2})
-    client = FakeAnthropic()
+    calls = iter(range(4))
+
+    def reply(params):
+        if next(calls) == 3:  # repeat 2, segment 2
+            raise ServerError("overloaded")
+        return _claude_message(params)
+
+    client = FakeAnthropic(reply=reply)
     _use_client(monkeypatch, api_anthropic, client)
     out = tmp_path / "out"
     assert api_anthropic.main([
-        "suite", "--config", str(_write(tmp_path, "c.json", _config("anthropic-api", "claude-opus-5-5", repeats=2))),
+        "--config", str(_write(tmp_path, "c.json", _config("anthropic-api", "claude-opus-5-5", repeats=2))),
         "--questions", str(_write(tmp_path, "q.json", packet)), "--segment-plan",
-        str(_write(tmp_path, "p.json", plan)), "--out-dir", str(out), "--max-usd", "5", "--batch"]) == 0
-    assert _last_json(capsys)["batch_id"] == "msgbatch_1"
-    assert [request["custom_id"] for request in client.batch_requests] == [
-        "r001-seg-0001", "r001-seg-0002", "r002-seg-0001", "r002-seg-0002"]
-    assert api_anthropic.main(["collect", "--out-dir", str(out)]) == 3
-    assert _last_json(capsys)["status"] == "in_progress"
-    client.status = "ended"
-    client.batch_outcomes = {"r002-seg-0002": "errored"}
-    # One entry without an id and one duplicated id must not discard the other valid results.
-    duplicate = {"custom_id": "r002-seg-0001", "result": {"type": "succeeded",
-                                                          "message": _claude_message(client.batch_requests[2]["params"])}}
-    client.extra_entries = [{"result": {"type": "succeeded"}}, duplicate,
-                            {"custom_id": "r009-x", "result": {"type": []}}]
-    client.extra_lines = ["not json", "", '{"extra":' + "9" * 5000 + "}"]
-    assert api_anthropic.main(["collect", "--out-dir", str(out)]) == 2
+        str(_write(tmp_path, "p.json", _plan(packet))), "--out-dir", str(out), "--max-usd", "5"]) == 2
     summary = _last_json(capsys)
-    # Unattributed: the id-less entry, both duplicates, two undecodable lines and the unknown id.
-    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (2, 2, 6)
-    assert len(json.loads((out / "batch-unattributed.json").read_text())) == 6
+    assert (summary["ok"], summary["failed"]) == (3, 1)
+    assert len(client.created) == 4  # one request each, never retried
     first = json.loads((out / "runs" / "repeat-001.json").read_text())
     assert first["status"] == "ok" and score_run(packet, key, first)["raw_points"] == 2
-    assert first["identity"]["harness"] == "anthropic-message-batches"
-    assert first["metrics"]["cost_usd"] == pytest.approx(2 * float((Decimal(1000) * 2 + Decimal(500) * 10) / 10**6))
+    assert first["identity"]["harness"] == "anthropic-messages" and first["identity"]["request_count"] == 2
+    assert first["metrics"]["cost_usd"] == pytest.approx(2 * _cost(4, 20))
     second = json.loads((out / "runs" / "repeat-002.json").read_text())
-    assert second["status"] == "failed" and second["failure_reason"] == "batch_duplicate_result"
-    assert list(second["responses"].values()) == [None, None]
-    assert json.loads((out / "rows" / "r002-seg-0002.json").read_text())["failure_reason"] == "batch_errored"
+    assert second["status"] == "failed" and second["failure_reason"] == "http_status_529"
+    assert list(second["responses"].values()) == ["A", None]
+    failed_row = json.loads((out / "rows" / "r002-seg-0002.json").read_text())
+    assert failed_row["metrics"]["cost_usd"] is None and failed_row["responses"] is None
+    assert EvidenceStore(out / "evidence").verify("repeat-002")["terminal_status"] == "failed"
 
 
-def test_openai_batch_uploads_responses_jsonl_and_reports_missing_results(tmp_path, monkeypatch, capsys):
-    """Defect class: a batch line with the wrong endpoint or body, or a lost request counted as success."""
-    packet, _key = _packet_and_key()
-    uploads: list[bytes] = []
-    state = {"status": "in_progress"}
+def test_openai_sync_run_records_snapshot_model_and_incomplete_output(tmp_path, monkeypatch, capsys):
+    """Defect class: a Responses body misread, a snapshot id rejected, or an incomplete answer scored."""
+    packet, key = _packet_and_key()
+    statuses = iter(["completed", "incomplete"])
+    created: list[dict] = []
 
-    def batch_lines() -> list[dict]:
-        return [json.loads(line) for line in uploads[0].decode().splitlines()]
+    def create(**kwargs):
+        kwargs.pop("timeout")
+        created.append(kwargs)
+        return _openai_response(kwargs, status=next(statuses))
 
-    def content(file_id):
-        rows = batch_lines()
-        if file_id == "out":
-            row = rows[0]
-            return SimpleNamespace(text=json.dumps({"custom_id": row["custom_id"], "error": None, "response": {
-                "status_code": 200, "body": _openai_response(row["body"])}}) + "\n")
-        return SimpleNamespace(text=json.dumps({"custom_id": rows[1]["custom_id"], "error": {"code": "x"},
-                                                "response": {"status_code": 400, "body": {}}}) + "\nnot json\n"
-                               + '{"extra":' + "9" * 5000 + "}\n")
-
-    client = SimpleNamespace(
-        files=SimpleNamespace(create=lambda file, purpose: uploads.append(file[1]) or {"id": "file_1"},
-                              content=content),
-        batches=SimpleNamespace(
-            create=lambda **kwargs: {"id": "batch_1", **kwargs},
-            retrieve=lambda _id: {"id": _id, "status": state["status"], "output_file_id": "out",
-                                  "error_file_id": "err"}))
-    _use_client(monkeypatch, api_openai, client)
+    _use_client(monkeypatch, api_openai, SimpleNamespace(responses=SimpleNamespace(create=create)))
     out = tmp_path / "out"
-    config = _config("openai-api", "gpt-6.1-sol", repeats=3)
-    assert api_openai.main(["suite", "--config", str(_write(tmp_path, "c.json", config)), "--questions",
-                            str(_write(tmp_path, "q.json", packet)), "--out-dir", str(out),
-                            "--max-usd", "5", "--batch"]) == 0
-    capsys.readouterr()
-    lines = batch_lines()
-    assert [(line["method"], line["url"]) for line in lines] == [("POST", "/v1/responses")] * 3
+    config = _config("openai-api", "gpt-6.1-sol", repeats=2)
+    assert api_openai.main(["--config", str(_write(tmp_path, "c.json", config)), "--questions",
+                            str(_write(tmp_path, "q.json", packet)), "--out-dir", str(out), "--max-usd", "5"]) == 2
     prompt = build_prompt(packet, "closed-book", max_tool_calls=1)
-    assert lines[0]["body"] == api_openai.build_request(packet, api_suite.validate_api_config(config), prompt)
-    state["status"] = "completed"
-    assert api_openai.main(["collect", "--out-dir", str(out)]) == 2
-    summary = _last_json(capsys)
-    assert (summary["ok"], summary["failed"], summary["unattributed_entries"]) == (1, 2, 2)
-    reasons = [json.loads((out / "rows" / f"r00{index}-all.json").read_text())["failure_reason"] for index in (1, 2, 3)]
-    assert reasons == [None, "http_status_400", "batch_missing_result"]
+    assert created[0] == api_openai.build_request(packet, api_suite.validate_api_config(config), prompt)
     ok_row = json.loads((out / "rows" / "r001-all.json").read_text())
     assert ok_row["identity"]["effective_model"] == "gpt-6.1-sol-2026-11-01"
-    assert ok_row["metrics"]["cost_usd"] == pytest.approx(float((Decimal(1000) * 1 + Decimal(500) * 5) / 10**6))
+    assert ok_row["metrics"]["cost_usd"] == pytest.approx(_cost(2, 10))
+    assert score_run(packet, key, json.loads((out / "runs" / "repeat-001.json").read_text()))["raw_points"] == 2
+    limited = json.loads((out / "rows" / "r002-all.json").read_text())
+    assert limited["status"] == "failed" and limited["failure_reason"] == "output_error"
+    assert limited["metrics"]["cost_usd"] == pytest.approx(_cost(2, 10))
 
 
 def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path, monkeypatch, capsys):
@@ -328,22 +291,26 @@ def test_failed_answer_still_records_billed_usage_and_model_drift_fails(tmp_path
         lambda params: _claude_message(params, model="claude-sonnet-5-5"),
         lambda params: _claude_message(params, model="claude-opus-5-5-other-model"),
         lambda params: _claude_message(params, model="claude-opus-5-5-20261101"),
+        lambda params: {**_claude_message(params), "content": [{"type": []}], "usage": {"input_tokens": 1000,
+                                                                                        "output_tokens": 500}},
     ])
     client = FakeAnthropic(reply=lambda params: next(replies)(params))
     _use_client(monkeypatch, api_anthropic, client)
-    config = _config("anthropic-api", "claude-opus-5-5", repeats=4)
-    assert api_anthropic.main(["suite", "--config", str(_write(tmp_path, "c.json", config)), "--questions",
+    config = _config("anthropic-api", "claude-opus-5-5", repeats=5)
+    assert api_anthropic.main(["--config", str(_write(tmp_path, "c.json", config)), "--questions",
                                str(_write(tmp_path, "q.json", packet)), "--out-dir", str(tmp_path / "out"),
                                "--max-usd", "1"]) == 2
-    limited = json.loads((tmp_path / "out" / "rows" / "r001-all.json").read_text())
-    assert limited["status"] == "failed" and limited["failure_reason"] == "output_error"
-    assert limited["metrics"]["output_tokens"] == 500 and limited["metrics"]["cost_usd"] > 0
-    drifted = json.loads((tmp_path / "out" / "rows" / "r002-all.json").read_text())
-    assert drifted["status"] == "failed" and drifted["failure_reason"] == "model_error"
-    suffixed = json.loads((tmp_path / "out" / "rows" / "r003-all.json").read_text())
-    assert suffixed["status"] == "failed" and suffixed["failure_reason"] == "model_error"
-    snapshot = json.loads((tmp_path / "out" / "rows" / "r004-all.json").read_text())
-    assert snapshot["status"] == "ok" and snapshot["identity"]["effective_model"] == "claude-opus-5-5-20261101"
+
+    def row(index: int) -> dict:
+        return json.loads((tmp_path / "out" / "rows" / f"r00{index}-all.json").read_text())
+
+    assert (row(1)["status"], row(1)["failure_reason"]) == ("failed", "output_error")
+    assert row(1)["metrics"]["output_tokens"] == 500 and row(1)["metrics"]["cost_usd"] > 0
+    assert (row(2)["status"], row(2)["failure_reason"]) == ("failed", "model_error")
+    assert (row(3)["status"], row(3)["failure_reason"]) == ("failed", "model_error")
+    assert row(4)["status"] == "ok" and row(4)["identity"]["effective_model"] == "claude-opus-5-5-20261101"
+    # A malformed block type is a failed row with its billed cost, never a crash.
+    assert row(5)["status"] == "failed" and row(5)["metrics"]["cost_usd"] > 0
 
 
 def test_runner_path_requires_trial_cap_and_returns_standard_run(monkeypatch):
@@ -356,7 +323,7 @@ def test_runner_path_requires_trial_cap_and_returns_standard_run(monkeypatch):
     capped = run_exam(packet, _config("anthropic-api", "claude-opus-5-5", max_usd_per_trial=1), "closed-book")
     assert capped["status"] == "ok" and score_run(packet, key, capped)["raw_points"] == 2
     assert capped["identity"]["max_output_tokens_configured"] == 2000
-    assert capped["metrics"]["cost_usd"] == pytest.approx(float((Decimal(1000) * 4 + Decimal(500) * 20) / 10**6))
+    assert capped["metrics"]["cost_usd"] == pytest.approx(_cost(4, 20))
     sources = run_exam(packet, _config("anthropic-api", "claude-opus-5-5", max_usd_per_trial=1), "sources",
                        sources_url="http://127.0.0.1:9")
     assert sources["status"] == "failed" and sources["failure_reason"] == "capability_error"

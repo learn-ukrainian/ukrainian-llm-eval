@@ -1,4 +1,4 @@
-"""Direct OpenAI Responses API adapter (closed-book), with the Batch API.
+"""Direct OpenAI Responses API adapter (closed-book, synchronous).
 
 Run ``python -m ukrainian_llm_eval.api_openai --help``.  The official
 ``openai`` SDK reads ``OPENAI_API_KEY`` itself; this module never reads or
@@ -18,9 +18,6 @@ from . import adapters, api_suite
 
 ADAPTER = "openai-api"
 AdapterError = adapters.AdapterError
-_ENDPOINT = "/v1/responses"
-_BATCH_ENDED = frozenset({"completed", "failed", "expired", "cancelled"})
-_BATCH_RUNNING = frozenset({"validating", "in_progress", "finalizing", "cancelling"})
 
 
 def make_client() -> Any:
@@ -30,7 +27,7 @@ def make_client() -> Any:
     except ImportError as exc:
         raise AdapterError("API SDK unavailable; install ukrainian-llm-eval[api]") from exc
     try:
-        # A retried create could submit a second paid request or batch.
+        # A retried create could submit a second paid request.
         return openai.OpenAI(max_retries=0)
     except Exception as exc:  # missing key: the SDK message is not echoed
         raise AdapterError("API authentication unavailable") from exc
@@ -110,74 +107,6 @@ def read_answers(raw: Mapping[str, Any], packet: Mapping[str, Any], config: Mapp
         raise AdapterError("API response schema mismatch") from exc
     response_id = raw.get("id")
     return {"responses": responses, "model": model, "id": response_id if isinstance(response_id, str) else None}
-
-
-def submit_batch(client: Any, requests: list[tuple[str, Mapping[str, Any]]]) -> str:
-    lines = [
-        adapters.canonical({"custom_id": custom_id, "method": "POST", "url": _ENDPOINT, "body": dict(params)})
-        for custom_id, params in requests
-    ]
-    data = ("\n".join(lines) + "\n").encode("utf-8")
-    try:
-        uploaded = api_suite.as_dict(client.files.create(file=("ukrainian-llm-eval-batch.jsonl", data), purpose="batch"))
-        batch = api_suite.as_dict(client.batches.create(
-            input_file_id=uploaded["id"], endpoint=_ENDPOINT, completion_window="24h"))
-    except AdapterError:
-        raise
-    except Exception as exc:
-        raise AdapterError("API batch submission " + api_suite.sdk_reason(exc)) from exc
-    batch_id = batch.get("id")
-    if not isinstance(batch_id, str) or not batch_id:
-        raise AdapterError("API batch response is invalid")
-    return batch_id
-
-
-def _retrieve(client: Any, batch_id: str) -> dict[str, Any]:
-    try:
-        batch = api_suite.as_dict(client.batches.retrieve(batch_id))
-    except AdapterError:
-        raise
-    except Exception as exc:
-        raise AdapterError("API batch status " + api_suite.sdk_reason(exc)) from exc
-    if batch.get("status") not in _BATCH_ENDED | _BATCH_RUNNING:
-        raise AdapterError("API batch status is invalid")
-    return batch
-
-
-def batch_ended(client: Any, batch_id: str) -> bool:
-    return _retrieve(client, batch_id)["status"] in _BATCH_ENDED
-
-
-def _file_text(client: Any, file_id: Any) -> str:
-    if file_id is None:
-        return ""
-    try:
-        content = client.files.content(file_id)
-        return content.text if isinstance(getattr(content, "text", None), str) else content.read().decode("utf-8", errors="replace")
-    except Exception as exc:
-        raise AdapterError("API batch results " + api_suite.sdk_reason(exc)) from exc
-
-
-def _line_outcome(line: str) -> tuple[Any, api_suite.BatchOutcome, Any]:
-    row = api_suite.batch_line(line)
-    if row is None:
-        return None, (None, "batch_invalid_result"), {"unparseable_line": line}
-    response = row.get("response")
-    status = response.get("status_code") if isinstance(response, Mapping) else None
-    if status == 200 and row.get("error") is None and isinstance(response.get("body"), Mapping):
-        outcome: api_suite.BatchOutcome = (dict(response["body"]), None)
-    elif isinstance(status, int) and not isinstance(status, bool):
-        outcome = (None, f"http_status_{status}")
-    else:
-        outcome = (None, "batch_errored")
-    return row.get("custom_id"), outcome, row
-
-
-def batch_results(client: Any, batch_id: str) -> tuple[dict[str, api_suite.BatchOutcome], list[Any]]:
-    """Map each custom id to its response body or a normalised failure; return unattributable lines."""
-    batch = _retrieve(client, batch_id)
-    text = _file_text(client, batch.get("output_file_id")) + "\n" + _file_text(client, batch.get("error_file_id"))
-    return api_suite.attribute_batch([_line_outcome(line) for line in text.splitlines() if line.strip()])
 
 
 def main(argv: list[str] | None = None) -> int:

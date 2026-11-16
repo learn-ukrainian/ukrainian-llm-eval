@@ -3,9 +3,9 @@
 ``api_anthropic`` (Messages API) and ``api_openai`` (Responses API) only
 produce answers.  This module holds what they share: configuration checks,
 list prices and cost estimates, the runner-path trial, and one suite command
-that runs a packet (optionally split by a frozen segment plan) either
-synchronously or as a provider batch, then writes the existing run and
-evidence formats so ``score`` and ``score-gec`` work unchanged.
+that runs a packet (optionally split by a frozen segment plan) one
+synchronous request at a time, then writes the existing run and evidence
+formats so ``score`` and ``score-gec`` work unchanged.
 
 The adapters are closed-book only.  Keys are read by the official SDKs from
 their standard environment variables; this package never reads, prints or
@@ -36,27 +36,24 @@ AdapterError = adapters.AdapterError
 
 # USD per million tokens (input, output) at standard list price, checked
 # 2026-11-16: platform.claude.com/docs/en/about-claude/pricing and
-# developers.openai.com/api/docs/models/gpt-6.1-sol.  Both Batch APIs bill 50%.
+# developers.openai.com/api/docs/models/gpt-6.1-sol.
 LIST_PRICES_USD_PER_MTOK: dict[str, tuple[str, str]] = {
     "claude-opus-5-5": ("4", "20"),
     "claude-sonnet-5-5": ("2", "10"),
     "gpt-6.1-sol": ("2", "10"),
 }
 PRICES_CHECKED = "2026-11-16"
-BATCH_PRICE_FACTOR = Decimal("0.5")
 _MILLION = Decimal(1_000_000)
 _PROVIDERS = {
     "anthropic-api": {
         "efforts": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "temperature_max": 1,
         "harness": "anthropic-messages",
-        "batch": "anthropic-message-batches",
     },
     "openai-api": {
         "efforts": frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"}),
         "temperature_max": 2,
         "harness": "openai-responses",
-        "batch": "openai-batch",
     },
 }
 _FIELDS = {
@@ -213,14 +210,13 @@ def estimate_input_tokens(params: Mapping[str, Any]) -> int:
     return math.ceil(len(adapters.canonical(params).encode("utf-8")) / 2) + 64
 
 
-def request_upper_bound_usd(config: Mapping[str, Any], params: Mapping[str, Any], *, batch: bool) -> Decimal:
+def request_upper_bound_usd(config: Mapping[str, Any], params: Mapping[str, Any]) -> Decimal:
     """Estimated input plus the full output allowance (which includes thinking)."""
     price_in, price_out = prices(config)
-    cost = (estimate_input_tokens(params) * price_in + config["max_output_tokens"] * price_out) / _MILLION
-    return cost * BATCH_PRICE_FACTOR if batch else cost
+    return (estimate_input_tokens(params) * price_in + config["max_output_tokens"] * price_out) / _MILLION
 
 
-def usage_cost(config: Mapping[str, Any], usage: Mapping[str, Any], *, batch: bool) -> Decimal:
+def usage_cost(config: Mapping[str, Any], usage: Mapping[str, Any]) -> Decimal:
     """List-price estimate of one billed response.
 
     Cache writes (unused here) are charged at twice the input price and cache
@@ -229,8 +225,7 @@ def usage_cost(config: Mapping[str, Any], usage: Mapping[str, Any], *, batch: bo
     price_in, price_out = prices(config)
     tokens_in = usage["input_tokens"] + usage.get("cache_read_input_tokens", 0)
     tokens_in += 2 * usage.get("cache_creation_input_tokens", 0)
-    cost = (tokens_in * price_in + usage["output_tokens"] * price_out) / _MILLION
-    return cost * BATCH_PRICE_FACTOR if batch else cost
+    return (tokens_in * price_in + usage["output_tokens"] * price_out) / _MILLION
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -274,37 +269,10 @@ def check_model(config: Mapping[str, Any], effective: Any) -> str:
     return effective
 
 
-BatchOutcome = tuple[dict[str, Any] | None, str | None]
-
-
-def attribute_batch(entries: list[tuple[Any, BatchOutcome, Any]]) -> tuple[dict[str, BatchOutcome], list[Any]]:
-    """Map batch entries to custom ids without letting one bad entry discard the rest.
-
-    An entry without a usable id cannot be attributed and is returned for the
-    evidence record.  An id seen more than once is ambiguous: it fails, and all
-    its entries are kept as evidence.  Missing ids are failed by the caller.
-    """
-    by_id: dict[str, list[tuple[BatchOutcome, Any]]] = {}
-    unattributed: list[Any] = []
-    for custom_id, outcome, raw in entries:
-        if isinstance(custom_id, str) and custom_id:
-            by_id.setdefault(custom_id, []).append((outcome, raw))
-        else:
-            unattributed.append(raw)
-    results: dict[str, BatchOutcome] = {}
-    for custom_id, found in by_id.items():
-        if len(found) == 1:
-            results[custom_id] = found[0][0]
-        else:
-            results[custom_id] = (None, "batch_duplicate_result")
-            unattributed.extend(raw for _outcome, raw in found)
-    return results, unattributed
-
-
-# Malformed untrusted data can raise any of these: invalid or duplicate JSON,
-# an integer beyond the digit limit (ValueError), deep nesting (RecursionError),
-# or an unexpected type or shape.
-MALFORMED = (TypeError, KeyError, AttributeError, ValueError, RecursionError)
+# Malformed untrusted response data can raise any of these: invalid or duplicate
+# JSON, an integer beyond the digit limit (ValueError), deep nesting
+# (RecursionError), or an unexpected type or shape.
+_MALFORMED = (TypeError, KeyError, AttributeError, ValueError, RecursionError)
 
 
 def parse(reader: Callable[..., Any], *args: Any) -> Any:
@@ -313,17 +281,8 @@ def parse(reader: Callable[..., Any], *args: Any) -> Any:
         return reader(*args)
     except AdapterError:
         raise
-    except MALFORMED as exc:
+    except _MALFORMED as exc:
         raise AdapterError("API response output is invalid") from exc
-
-
-def batch_line(line: str) -> dict[str, Any] | None:
-    """Decode one untrusted batch result line; None when it is not one JSON object."""
-    try:
-        value = adapters._strict_json_loads(line)
-    except MALFORMED:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def settings(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -365,7 +324,7 @@ def run_api_trial(
         raise AdapterError("direct API capability is closed-book only")
     provider = _provider_module(checked["adapter"])
     params = provider.build_request(packet, checked, prompt)
-    bound = request_upper_bound_usd(checked, params, batch=False)
+    bound = request_upper_bound_usd(checked, params)
     if checked.get("max_usd_per_trial") is None:
         raise AdapterError("paid API trial configuration requires max_usd_per_trial")
     if bound > _decimal(checked["max_usd_per_trial"], "max_usd_per_trial"):
@@ -381,7 +340,7 @@ def run_api_trial(
     if evidence is not None:
         evidence("api_response", raw)
     usage = parse(provider.read_usage, raw)
-    metrics = _metrics(usage, usage_cost(checked, usage, batch=False), time.monotonic() - started)
+    metrics = _metrics(usage, usage_cost(checked, usage), time.monotonic() - started)
     try:
         answer = parse(provider.read_answers, raw, packet, checked)
     except AdapterError as exc:
@@ -392,21 +351,20 @@ def run_api_trial(
             "failure_reason": adapters.normalized_reason(exc),
             "responses": {str(item["id"]): None for item in packet["items"]},
             "identity": _identity(checked, effective_model=returned if isinstance(returned, str) else "unknown",
-                                  session_id=raw.get("id") if isinstance(raw.get("id"), str) else None, mode="sync"),
+                                  session_id=raw.get("id") if isinstance(raw.get("id"), str) else None),
             "metrics": metrics,
         }
     return {
         "responses": answer["responses"],
-        "identity": _identity(checked, effective_model=answer["model"], session_id=answer["id"], mode="sync"),
+        "identity": _identity(checked, effective_model=answer["model"], session_id=answer["id"]),
         "metrics": metrics,
     }
 
 
-def _identity(config: Mapping[str, Any], *, effective_model: str, session_id: str | None, mode: str) -> dict[str, Any]:
-    spec = _PROVIDERS[config["adapter"]]
+def _identity(config: Mapping[str, Any], *, effective_model: str, session_id: str | None) -> dict[str, Any]:
     return {
         "adapter": config["adapter"],
-        "harness": spec["batch"] if mode == "batch" else spec["harness"],
+        "harness": _PROVIDERS[config["adapter"]]["harness"],
         "model": config["model"],
         "provider": config["provider"] or config["adapter"],
         "session_id": session_id,
@@ -420,7 +378,6 @@ def _identity(config: Mapping[str, Any], *, effective_model: str, session_id: st
         "tool_schema_sha256": digest([]),
         "mcp_server_identity_sha256": None,
         "corpus_id_sha256": digest(config["corpus_id"]) if config["corpus_id"] is not None else None,
-        "mode": mode,
     }
 
 
@@ -479,35 +436,28 @@ def _requests(provider: ModuleType, config: dict[str, Any], units: list[dict[str
         for index, unit in enumerate(units):
             prompt = adapters.build_prompt(unit["packet"], "closed-book", max_tool_calls=config["max_tool_calls"])
             params = provider.build_request(unit["packet"], config, prompt)
-            requests.append({"custom_id": f"r{repeat:03d}-{unit['segment_id']}", "repeat": repeat,
+            requests.append({"request_id": f"r{repeat:03d}-{unit['segment_id']}", "repeat": repeat,
                              "unit": index, "params": params})
     return requests
 
 
-def _estimate(config: dict[str, Any], requests: list[dict[str, Any]], *, batch: bool) -> dict[str, Any]:
+def _estimate(config: dict[str, Any], requests: list[dict[str, Any]]) -> tuple[dict[str, Any], Decimal]:
     price_in, price_out = prices(config)
     input_tokens = sum(estimate_input_tokens(request["params"]) for request in requests)
-    total = sum((request_upper_bound_usd(config, request["params"], batch=batch) for request in requests), Decimal(0))
-    factor = BATCH_PRICE_FACTOR if batch else Decimal(1)
+    total = sum((request_upper_bound_usd(config, request["params"]) for request in requests), Decimal(0))
     return {
         "requests": len(requests),
         "estimated_input_tokens": input_tokens,
         "max_output_tokens_per_request": config["max_output_tokens"],
-        "estimated_input_usd": float(input_tokens * price_in * factor / _MILLION),
+        "estimated_input_usd": float(input_tokens * price_in / _MILLION),
         "estimated_usd_upper_bound": float(total),
-        "usd_per_mtok": {"input": str(price_in * factor), "output": str(price_out * factor)},
+        "usd_per_mtok": {"input": str(price_in), "output": str(price_out)},
         "price_source": "configuration" if "usd_per_mtok" in config else f"list price checked {PRICES_CHECKED}",
-    }
+    }, total
 
 
-def _private_dir(path: Path) -> None:
-    if path.exists():
-        raise ExamError("output directory must not exist; every suite run is new")
-    path.mkdir(mode=0o700, parents=True)
-
-
-def _row(request: dict[str, Any], config: dict[str, Any], mode: str, raw: Any, failure: str | None,
-         elapsed: float | None, provider: ModuleType, unit_packet: Mapping[str, Any]) -> dict[str, Any]:
+def _row(request: dict[str, Any], config: dict[str, Any], raw: Any, failure: str | None,
+         elapsed: float, provider: ModuleType, unit_packet: Mapping[str, Any]) -> dict[str, Any]:
     """One result row: settings, usage and cost are recorded even when answers fail."""
     usage = cost = None
     responses = None
@@ -516,7 +466,7 @@ def _row(request: dict[str, Any], config: dict[str, Any], mode: str, raw: Any, f
     if raw is not None:
         try:
             usage = parse(provider.read_usage, raw)
-            cost = usage_cost(config, usage, batch=mode == "batch")
+            cost = usage_cost(config, usage)
         except AdapterError as exc:
             failure = failure or adapters.normalized_reason(exc)
         try:
@@ -528,19 +478,19 @@ def _row(request: dict[str, Any], config: dict[str, Any], mode: str, raw: Any, f
         responses = None
     return {
         "schema": ROW_SCHEMA,
-        "custom_id": request["custom_id"],
+        "request_id": request["request_id"],
         "repeat": request["repeat"],
         "status": "failed" if failure is not None else "ok",
         "failure_reason": failure,
         "responses": responses,
         "settings": settings(config),
-        "identity": _identity(config, effective_model=effective, session_id=session, mode=mode),
+        "identity": _identity(config, effective_model=effective, session_id=session),
         "metrics": _metrics(usage, cost, elapsed),
     }
 
 
 def _run_object(packet: dict[str, Any], config: dict[str, Any], repeat: int, rows: list[dict[str, Any]],
-                units: list[dict[str, Any]], mode: str) -> dict[str, Any]:
+                units: list[dict[str, Any]]) -> dict[str, Any]:
     """Reassemble one repeat into the existing run schema for offline scoring."""
     from .runner import _comparison, _run_schema
 
@@ -556,8 +506,7 @@ def _run_object(packet: dict[str, Any], config: dict[str, Any], repeat: int, row
         return None if any(value is None for value in values) else sum(values)
 
     # Every ok row already passed the model check; dated snapshots may still differ.
-    identity = _identity(config, effective_model=effective[0] if len(effective) == 1 else "unknown",
-                         session_id=None, mode=mode)
+    identity = _identity(config, effective_model=effective[0] if len(effective) == 1 else "unknown", session_id=None)
     identity["effective_models"] = effective
     identity["session_ids"] = [row["identity"]["session_id"] for row in rows]
     identity["request_count"] = len(rows)
@@ -578,167 +527,94 @@ def _run_object(packet: dict[str, Any], config: dict[str, Any], repeat: int, row
     return run
 
 
-def _attempt_metadata(packet: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    return {"denominator": len(packet["items"]), "packet_sha256": packet["packet_sha256"],
-            "config_sha256": digest(config), "condition": "closed-book",
-            "route_sha256": digest({"adapter": config["adapter"], "model": config["model"]})}
-
-
-def _attempt_id(repeat: int) -> str:
-    return f"repeat-{repeat:03d}"
-
-
-def _record_response(store: EvidenceStore, request: dict[str, Any], raw: Any, failure: str | None) -> None:
-    store.append_event(_attempt_id(request["repeat"]), "api_response",
-                       {"custom_id": request["custom_id"], "raw": raw, "transport_failure": failure})
-
-
-def _finish(out: Path, suite: dict[str, Any], provider: ModuleType,
-            results: dict[str, tuple[Any, str | None, float | None]]) -> dict[str, Any]:
-    """Write rows, finalize one evidence attempt and one run file per repeat."""
-    packet, config, units, mode = suite["packet"], suite["config"], suite["units"], suite["mode"]
-    store = EvidenceStore(out / "evidence")
-    by_repeat: dict[int, list[dict[str, Any]]] = {}
-    for request in suite["requests"]:
-        raw, failure, elapsed = results.get(request["custom_id"], (None, "batch_missing_result", None))
-        row = _row(request, config, mode, raw, failure, elapsed, provider, units[request["unit"]]["packet"])
-        if mode == "batch":  # synchronous responses were recorded as each arrived
-            _record_response(store, request, raw, failure)
-        write_private_json(out / "rows" / f"{request['custom_id']}.json", row)
-        by_repeat.setdefault(request["repeat"], []).append(row)
-    summary = {"status": "ok", "requests": len(suite["requests"]), "ok": 0, "failed": 0, "cost_usd": 0.0, "runs": []}
-    for repeat, rows in sorted(by_repeat.items()):
-        run = _run_object(packet, config, repeat, rows, units, mode)
-        store.finalize(_attempt_id(repeat), run, status="completed" if run["status"] == "ok" else "failed")
-        write_private_json(out / "runs" / f"{_attempt_id(repeat)}.json", run)
-        summary["runs"].append({"repeat": repeat, "status": run["status"], "attempt_id": _attempt_id(repeat)})
-        for row in rows:
-            summary["ok" if row["status"] == "ok" else "failed"] += 1
-            summary["cost_usd"] += row["metrics"]["cost_usd"] or 0.0
-    if summary["failed"]:
-        summary["status"] = "failed"
-    return summary
-
-
-def _start(args: argparse.Namespace, provider: ModuleType) -> int:
+def _run_suite(args: argparse.Namespace, provider: ModuleType) -> int:
     config = validate_api_config(read_json(args.config))
     if config["adapter"] != provider.ADAPTER:
         raise ExamError(f"configuration adapter must be {provider.ADAPTER}")
     packet = _load_packet(args.questions)
     units, plan_sha256 = _units(packet, args.segment_plan)
     requests = _requests(provider, config, units)
-    mode = "batch" if args.batch else "sync"
-    estimate = _estimate(config, requests, batch=args.batch)
-    report = {"adapter": config["adapter"], "model": config["model"], "mode": mode,
-              "settings": settings(config), **estimate}
+    estimate, bound = _estimate(config, requests)
+    report = {"adapter": config["adapter"], "model": config["model"], "settings": settings(config), **estimate}
     if args.dry_run:
         print(json.dumps({"status": "dry_run", **report}, ensure_ascii=False))
         return 0
-    if args.max_usd is None:
-        raise ExamError("--max-usd is required for a paid run")
+    if args.max_usd is None or args.out_dir is None:
+        raise ExamError("--max-usd and --out-dir are required for a paid run")
     max_usd = _decimal(args.max_usd, "--max-usd")
     per_trial = config.get("max_usd_per_trial")
     over_trial = per_trial is not None and any(
-        request_upper_bound_usd(config, request["params"], batch=args.batch) > _decimal(per_trial, "max_usd_per_trial")
+        request_upper_bound_usd(config, request["params"]) > _decimal(per_trial, "max_usd_per_trial")
         for request in requests)
-    bound = sum((request_upper_bound_usd(config, request["params"], batch=args.batch) for request in requests),
-                Decimal(0))
     if bound > max_usd or over_trial:
         print(json.dumps({"status": "refused", "reason": "estimated_cost_exceeds_max_usd",
                           "max_usd": str(max_usd), **report}, ensure_ascii=False))
         return 2
     client = provider.make_client()
-    _private_dir(args.out_dir)
-    suite = {"schema": SUITE_SCHEMA, "mode": mode, "config": config, "config_sha256": digest(config),
-             "packet": packet, "segment_plan_sha256": plan_sha256, "units": units, "requests": requests,
-             "max_usd": str(max_usd), "estimate": estimate,
-             "implementation_sha256": implementation_sha256(provider)}
-    write_private_json(args.out_dir / "suite.json", suite)
-    store = EvidenceStore(args.out_dir / "evidence")
+    out = args.out_dir
+    if out.exists():
+        raise ExamError("output directory must not exist; every suite run is new")
+    out.mkdir(mode=0o700, parents=True)
+    write_private_json(out / "suite.json", {
+        "schema": SUITE_SCHEMA, "config": config, "config_sha256": digest(config),
+        "packet_sha256": packet["packet_sha256"], "segment_plan_sha256": plan_sha256, "max_usd": str(max_usd),
+        "estimate": estimate, "implementation_sha256": implementation_sha256(provider)})
+    store = EvidenceStore(out / "evidence")
+    summary: dict[str, Any] = {"status": "ok", "requests": len(requests), "ok": 0, "failed": 0, "cost_usd": 0.0,
+                               "estimated_usd_upper_bound": estimate["estimated_usd_upper_bound"], "runs": []}
     for repeat in range(1, config["repeats"] + 1):
-        attempt = store.start(_attempt_metadata(packet, config), attempt_id=_attempt_id(repeat))
-        for request in requests:
-            if request["repeat"] == repeat:
-                attempt.append("api_request", {"custom_id": request["custom_id"], "params": request["params"]})
-    if args.batch:
-        batch_id = provider.submit_batch(client, [(request["custom_id"], request["params"]) for request in requests])
-        write_private_json(args.out_dir / "batch.json", {"batch_id": batch_id, "submitted_at": time.time()})
-        print(json.dumps({"status": "submitted", "batch_id": batch_id, **report}, ensure_ascii=False))
-        return 0
-    results: dict[str, tuple[Any, str | None, float | None]] = {}
-    for request in requests:
-        started = time.monotonic()
-        try:
-            raw, failure = provider.call(client, request["params"], config["timeout_seconds"]), None
-        except Exception as exc:  # noqa: BLE001 - one fresh request each; failure kept as a row, never retried
-            raw, failure = None, sdk_reason(exc)
-        results[request["custom_id"]] = (raw, failure, time.monotonic() - started)
-        # Persist every billed response at once, so an interrupted run keeps it.
-        _record_response(store, request, raw, failure)
-    summary = _finish(args.out_dir, suite, provider, results)
-    print(json.dumps({**summary, "estimated_usd_upper_bound": estimate["estimated_usd_upper_bound"]}))
-    return 0 if summary["status"] == "ok" else 2
-
-
-def _collect(args: argparse.Namespace, provider: ModuleType) -> int:
-    suite = read_json(args.out_dir / "suite.json")
-    if suite.get("schema") != SUITE_SCHEMA or suite.get("mode") != "batch":
-        raise ExamError("output directory does not hold a submitted batch suite")
-    if suite["config"]["adapter"] != provider.ADAPTER:
-        raise ExamError(f"suite adapter must be {provider.ADAPTER}")
-    if (args.out_dir / "runs").exists():
-        raise ExamError("batch results were already collected")
-    batch_id = read_json(args.out_dir / "batch.json")["batch_id"]
-    client = provider.make_client()
-    deadline = time.monotonic() + args.wait_seconds
-    while not provider.batch_ended(client, batch_id):
-        if time.monotonic() >= deadline:
-            print(json.dumps({"status": "in_progress", "batch_id": batch_id}))
-            return 3
-        time.sleep(min(60.0, max(1.0, deadline - time.monotonic())))
-    outcomes, unattributed = provider.batch_results(client, batch_id)
-    expected = {request["custom_id"] for request in suite["requests"]}
-    unattributed += [{"custom_id": custom_id, "outcome": list(outcome)}
-                     for custom_id, outcome in outcomes.items() if custom_id not in expected]
-    if unattributed:  # kept as evidence; the affected requests fail as missing or duplicate
-        write_private_json(args.out_dir / "batch-unattributed.json", unattributed)
-    results = {custom_id: (raw, failure, None) for custom_id, (raw, failure) in outcomes.items()}
-    summary = _finish(args.out_dir, suite, provider, results)
-    print(json.dumps({**summary, "batch_id": batch_id, "unattributed_entries": len(unattributed)}))
+        attempt_id = f"repeat-{repeat:03d}"
+        attempt = store.start({"denominator": len(packet["items"]), "packet_sha256": packet["packet_sha256"],
+                               "config_sha256": digest(config), "condition": "closed-book",
+                               "route_sha256": digest({"adapter": config["adapter"], "model": config["model"]})},
+                              attempt_id=attempt_id)
+        rows = []
+        for request in (request for request in requests if request["repeat"] == repeat):
+            attempt.append("api_request", {"request_id": request["request_id"], "params": request["params"]})
+            started = time.monotonic()
+            try:
+                raw, failure = provider.call(client, request["params"], config["timeout_seconds"]), None
+            except Exception as exc:  # noqa: BLE001 - one fresh request each; failure kept as a row, never retried
+                raw, failure = None, sdk_reason(exc)
+            elapsed = time.monotonic() - started
+            # Persist every billed response at once, so an interrupted run keeps it.
+            attempt.append("api_response", {"request_id": request["request_id"], "raw": raw, "transport_failure": failure})
+            row = _row(request, config, raw, failure, elapsed, provider, units[request["unit"]]["packet"])
+            write_private_json(out / "rows" / f"{request['request_id']}.json", row)
+            rows.append(row)
+            summary["ok" if row["status"] == "ok" else "failed"] += 1
+            summary["cost_usd"] += row["metrics"]["cost_usd"] or 0.0
+        run = _run_object(packet, config, repeat, rows, units)
+        attempt.finalize(run, status="completed" if run["status"] == "ok" else "failed")
+        write_private_json(out / "runs" / f"{attempt_id}.json", run)
+        summary["runs"].append({"repeat": repeat, "status": run["status"], "attempt_id": attempt_id})
+    if summary["failed"]:
+        summary["status"] = "failed"
+    print(json.dumps(summary))
     return 0 if summary["status"] == "ok" else 2
 
 
 def parser(provider: ModuleType) -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(
         prog=f"python -m ukrainian_llm_eval.{Path(provider.__file__).stem}",
-        description=f"Run a question packet through the {provider.ADAPTER} direct API (closed-book). "
+        description=f"Run a question packet through the {provider.ADAPTER} direct API (closed-book, synchronous). "
         "Writes rows, runs and evidence for offline scoring; never accepts a grading key.",
-        epilog="Keys come only from the SDK's standard environment variable. Exit 0: success; "
-        "2: refused, invalid input or failed request; 3: batch still in progress.",
+        epilog="Keys come only from the SDK's standard environment variable. "
+        "Exit 0: success; 2: refused, invalid input or a failed request.",
     )
-    commands = cli.add_subparsers(dest="command", required=True)
-    suite = commands.add_parser("suite", help="Estimate, then run synchronously or submit a batch")
-    suite.add_argument("--config", type=Path, required=True)
-    suite.add_argument("--questions", type=Path, required=True)
-    suite.add_argument("--segment-plan", type=Path, help="Frozen segment plan: one request per segment")
-    suite.add_argument("--out-dir", type=Path, help="New private output directory (required unless --dry-run)")
-    suite.add_argument("--max-usd", help="Refuse before any request if the estimate exceeds this (required)")
-    suite.add_argument("--batch", action="store_true", help="Submit one provider batch at the batch price")
-    suite.add_argument("--dry-run", action="store_true", help="Print request count and estimate; no key or call")
-    collect = commands.add_parser("collect", help="Collect a submitted batch into rows, runs and evidence")
-    collect.add_argument("--out-dir", type=Path, required=True)
-    collect.add_argument("--wait-seconds", type=int, default=0, help="Poll until the batch ends or this elapses")
+    cli.add_argument("--config", type=Path, required=True)
+    cli.add_argument("--questions", type=Path, required=True)
+    cli.add_argument("--segment-plan", type=Path, help="Frozen segment plan: one request per segment")
+    cli.add_argument("--out-dir", type=Path, help="New private output directory (required unless --dry-run)")
+    cli.add_argument("--max-usd", help="Refuse before any request if the estimate exceeds this (required)")
+    cli.add_argument("--dry-run", action="store_true", help="Print request count and estimate; no key or call")
     return cli
 
 
 def main(provider: ModuleType, argv: list[str] | None = None) -> int:
     args = parser(provider).parse_args(argv)
     try:
-        if args.command == "suite":
-            if not args.dry_run and args.out_dir is None:
-                raise ExamError("--out-dir is required for a paid run")
-            return _start(args, provider)
-        return _collect(args, provider)
+        return _run_suite(args, provider)
     except (ExamError, ValueError, OSError) as exc:
         # Only this package's own messages are printed; SDK error text never is.
         report = {"status": "failed", "error_class": type(exc).__name__}
