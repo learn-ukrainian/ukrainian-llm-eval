@@ -95,15 +95,19 @@ def score_gec_attempt(packet, key, run_evidence_dir, run_attempt_id, image_id, e
         return result, attempt.finalize(result, status="failed")
     with tempfile.TemporaryDirectory(prefix="ukrainian-gec-inputs-") as temp:
         root = Path(temp)
-        corrected, refs = root / "corrected.txt", root / "references.m2"
+        # The host's private parent stays outside the container's read-only mount.
+        inputs = root / "inputs"
+        inputs.mkdir()
+        inputs.chmod(0o755)
+        corrected, refs = inputs / "corrected.txt", inputs / "references.m2"
         corrected.write_text(predictions, encoding="utf-8")
         refs.write_text(references, encoding="utf-8")
-        corrected.chmod(0o600)
-        refs.chmod(0o600)
+        corrected.chmod(0o444)
+        refs.chmod(0o444)
         attempt.append("scoring_inputs", {"predictions": predictions, "references": references})
         container_name = "ukrainian-gec-" + uuid.uuid4().hex
         command = ["docker", "run", "--rm", "--pull", "never", "--name", container_name, "--platform", "linux/amd64", "--network", "none",
-                   "--read-only", "--tmpfs", "/tmp", "-v", f"{root}:/inputs:ro", image_id,
+                   "--read-only", "--tmpfs", "/tmp", "-v", f"{inputs}:/inputs:ro", image_id,
                    "--corrected", "/inputs/corrected.txt", "--references", "/inputs/references.m2"]
         try:
             completed = subprocess.run(command, capture_output=True, timeout=timeout, check=False)

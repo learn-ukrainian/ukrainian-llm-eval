@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -33,18 +34,28 @@ def main():
     image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
     reports = {}
     with tempfile.TemporaryDirectory(prefix="gec-parity-") as temp:
-        Path(temp, "official.py").write_bytes(raw)
+        official_script = Path(temp, "official.py")
+        official_script.write_bytes(raw)
+        official_script.chmod(0o444)
         base = ["docker", "run", "--rm", "--network", "none", "--platform", "linux/amd64",
                 "--read-only", "--tmpfs", "/tmp", "--entrypoint", "/usr/local/bin/python",
-                "-v", str(fixtures) + ":/fixtures:ro", "-v", temp + ":/official:ro", image_id]
+                "-v", f"{official_script}:/official.py:ro"]
         for case in sorted(fixtures.iterdir()):
             if not case.is_dir():
                 continue
-            corrected, references = f"/fixtures/{case.name}/corrected.txt", f"/fixtures/{case.name}/reference.m2"
-            official = subprocess.run(base + ["/official/official.py", corrected, "--no-tokenize", "--m2", references],
+            case_inputs = Path(temp, case.name)
+            case_inputs.mkdir()
+            case_inputs.chmod(0o755)
+            for name in ("corrected.txt", "reference.m2"):
+                staged_file = case_inputs / name
+                shutil.copyfile(case / name, staged_file)
+                staged_file.chmod(0o444)
+            run = base + ["-v", f"{case_inputs}:/fixtures:ro", image_id]
+            corrected, references = "/fixtures/corrected.txt", "/fixtures/reference.m2"
+            official = subprocess.run(run + ["/official.py", corrected, "--no-tokenize", "--m2", references],
                                       check=True, capture_output=True, text=True, timeout=120)
-            wrapped = subprocess.run(base + ["/opt/scorer/score.py", "--corrected", corrected,
-                                            "--no-tokenize", "--references", references],
+            scorer = run + ["/opt/scorer/score.py", "--corrected", corrected, "--references", references]
+            wrapped = subprocess.run(scorer + ["--no-tokenize"],
                                      check=True, capture_output=True, text=True, timeout=120)
             match = re.search(r"TP\s+FP\s+FN\s+Prec\s+Rec\s+F0\.5\s*\n([^\n]+)", official.stdout)
             if match is None:
@@ -56,6 +67,11 @@ def main():
                 raise ValueError("fixture semantic outcome failed for " + case.name)
             if actual != expected:
                 raise ValueError("scorer parity failed for " + case.name)
+            if case.name == "replacement":
+                tokenized = subprocess.run(scorer, check=True, capture_output=True, text=True, timeout=120)
+                if json.loads(tokenized.stdout) != report:
+                    raise ValueError("default tokenization changed the replacement result")
+                print("replacement: default tokenization passed", flush=True)
             reports[case.name] = {"metrics": actual, "parity": True}
             print(case.name + ": parity passed", flush=True)
     if len(reports) != 6:

@@ -1,0 +1,23 @@
+name: Security
+on:
+  workflow_call:
+permissions: {}
+jobs:
+  fleet-security:
+    name: Fleet security
+    uses: learn-ukrainian/machinery/.github/workflows/fleet-security.yml@078285f3192049bc5d795c5c5e59339fd0c974ab # machinery PR #1107
+    permissions:
+      contents: read
+    with:
+      run-actionlint: true
+      run-zizmor: true
+      run-secret-scan: true
+      secret-scan-required-extensions: .py,.yml
+      run-trivy-fs: true
+      trivy-fs-targets: uv.lock
+      trivy-scanners: vuln
+      run-trivy-iac: true
+      trivy-iac-targets: scorer/Dockerfile
+      trivy-iac-scanners: dockerfile
+      run-trivy-image: true
+      trivy-image-targets: build|scorer/Dockerfile|scorer

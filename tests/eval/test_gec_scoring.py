@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,6 +39,12 @@ def fake_scorer(command, **kwargs):
     mount = command[command.index("-v") + 1]
     assert mount.endswith(":/inputs:ro")
     root = Path(mount.removesuffix(":/inputs:ro"))
+    assert root.name == "inputs"
+    if os.name == "posix":
+        assert root.parent.stat().st_mode & 0o777 == 0o700
+        assert root.stat().st_mode & 0o777 == 0o755
+        assert (root / "corrected.txt").stat().st_mode & 0o777 == 0o444
+        assert (root / "references.m2").stat().st_mode & 0o777 == 0o444
     assert "|||0" in (root / "references.m2").read_text()
     assert "|||1" in (root / "references.m2").read_text()
     result = {"schema": "ukrainian-llm-eval.gec-score.v1", "sentences": 1,
