@@ -1,8 +1,8 @@
 # Writing, research and Ukrainian-language evaluation: plan
 
-Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** This public copy is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** This public copy is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
 
-**Changed after freeze** (design and the numeric thresholds that remain are unchanged):
+**Changed after freeze** (the numeric thresholds that remain in the text are unchanged):
 
 - Operational detail removed from sections 1–3 and 7–11: custody and isolation measures, audit scope, scheduling and concurrency, coordination messages and item-level material.
 - Section 7 lost these criteria: no egress outside the provider's own hosts, no write attempt that succeeded, the custody-breach stop and the dispatch-time stop; whether they held is not reported.
@@ -18,7 +18,7 @@ Status: **plan as frozen on 2026-11-20 before the full run; the run is complete 
 - `check_text` pass over Ukrainian free text (UW, RB3, RB4) (section 4): not run.
 - Hidden-checklist tick rates (sections 4, 6): not reported.
 - Exact McNemar test and exact sign test (section 6): not reported; class and pair counts only.
-- Item-level list of items correct closed-book and incorrect with Sources (section 4): not published; the report counts them.
+- Item-level list of items correct closed-book and incorrect with Sources, complete item-level paired outcomes, and class-level closed-book/Sources switch counts (section 4): not published; the report gives per-model switch counts only.
 - Per-arm Sources-call totals, generation times and per-suite means (frozen plan): not reported.
 - Per-task rank and 0–16 total for each judge (section 6): not published; the report gives means per judge.
 - Judge scores split by suite and, for UW1 and UW2, by condition (sections 1, 5): not reported; the tables pool tasks.
@@ -36,14 +36,14 @@ The fleet wants to know where Gemini 4 Neon is strong or weak against the models
 
 ## 2. Arms
 
-| Arm | Family | Route and effort | Notes |
-|---|---|---|---|
-| Gemini 4 Neon | Google | native AGY, `gemini-4-neon-high`, effort high | the model under study |
-| Claude Opus 5.5 | Anthropic | native Claude, `claude-opus-5-5`, effort high | |
-| GPT-6.2 Sol | OpenAI | native Codex, `gpt-6.2-sol`, effort high | |
-| GPT-6.1 Terra | OpenAI | native Codex, `gpt-6.1-terra`, effort high | candidate only; its catalog entry gives it no Ukrainian-content judgment or review role |
+| Arm | Family | Notes |
+|---|---|---|
+| Gemini 4 Neon | Google | the model under study |
+| Claude Opus 5.5 | Anthropic | |
+| GPT-6.2 Sol | OpenAI | |
+| GPT-6.1 Terra | OpenAI | candidate only |
 
-**Savant is paused by operator order (2026-11-19) and is excluded from every role.** The originating issue named Savant for the Ukrainian suite; Opus 5.5 takes its place so all four arms face the same Ukrainian items, and the deviation is recorded. Requested effort is recorded; effective effort is **not attested** for any arm.
+**Savant is paused by operator order (2026-11-19) and is excluded from every role.** The originating issue named Savant for the Ukrainian suite; Opus 5.5 takes its place so all four arms face the same Ukrainian items, and the deviation is recorded. Every arm was requested at effort high; effective effort is **not attested** for any arm.
 
 Arms do not see identical surroundings, and this is a limitation, not a control: each route loads its own harness context (observed per-call input of about 150k–275k tokens including cache) and its own tool surface. Every candidate prompt forbids web and file access and states the Ukrainian source rules inline. Sources call counts come from the dispatcher's records.
 
@@ -106,7 +106,7 @@ Prompt hashes (SHA-256 of the byte-identical prompt every arm receives):
 
 ## 5. Blind cross-family judging
 
-A judge never scores its own family. Judges: Claude Opus 5.5, Gemini 4 Neon, GPT-6.2 Sol. **Terra never judges** (no Ukrainian-content or review role). **Opus never judges Ukrainian work** (Ukrainian judging seats are GPT or Gemini). UW outputs are judged **within** a condition: the closed-book bundle and the Sources bundle are separate calls.
+A judge never scores its own family. Judges: Claude Opus 5.5, Gemini 4 Neon, GPT-6.2 Sol. **Terra never judges.** **Opus never judges Ukrainian work.** UW outputs are judged **within** a condition: the closed-book bundle and the Sources bundle are separate calls.
 
 | Judged output | General tasks (WD, WK, RB1, RB2) | Ukrainian tasks (RB3, RB4, UW1, UW2, each condition) |
 |---|---|---|
