@@ -1,6 +1,30 @@
 # Writing, research and Ukrainian-language evaluation: plan
 
-Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** After the run this public copy removed operational detail (custody, audit, scheduling, coordination and item-level material) and added reporting and interpretation clarifications (this status note, the wording of the condition difference in sections 1 and 4, and the removal of the promises named below from sections 2, 4, 6 and 10); the design, thresholds and digests are unchanged, but the file is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. The public report does not carry out every analysis step below: hidden-checklist percentages, the exact McNemar and sign tests, the item-level list of items that were correct closed-book and incorrect with Sources, and the `check_text` pass were not done or not published (see its "Protocol status"); the corresponding sentences in sections 3, 4 and 6 state what was planned. The frozen plan also promised per-arm Sources-call totals, generation times and per-suite means; the report does not give them, and this copy no longer promises them. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** This public copy is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+
+**Changed after freeze** (design and the numeric thresholds that remain are unchanged):
+
+- Operational detail removed from sections 1–3 and 7–11: custody and isolation measures, audit scope, scheduling and concurrency, coordination messages and item-level material.
+- Section 7 lost these criteria: no egress outside the provider's own hosts, no write attempt that succeeded, the custody-breach stop and the dispatch-time stop; whether they held is not reported.
+- Wording of the condition difference in sections 1 and 4 now says "between conditions" and states one run per cell.
+- Promises removed from sections 2, 4 and 6: per-arm Sources-call totals and per-arm time and tool-call reports, per-suite means, and the list of items the tools made worse.
+- The UK5 prompts were rebuilt after the freeze: the UK5 rows in the hash table are the frozen ones, and the scored digests are in [results.md](results.md).
+- Section 8 lost the custody-rehearsal and probe rows, and section 11 now names the probe (one extra call, details withheld).
+
+**Not done** (planned below, absent from [results.md](results.md); no analysis was added to cover them):
+
+- Per-model strengths and weaknesses table with evidence per cell (sections 1, 6): not produced; the class and judge tables are all the report gives, and no "strong" or "weak" label is applied.
+- Scripted structure check of the KubeDojo fragments (sections 3, 4): not reported; only the word limits are.
+- `check_text` pass over Ukrainian free text (UW, RB3, RB4) (section 4): not run.
+- Hidden-checklist tick rates (sections 4, 6): not reported.
+- Exact McNemar test and exact sign test (section 6): not reported; class and pair counts only.
+- Item-level list of items correct closed-book and incorrect with Sources (section 4): not published; the report counts them.
+- Per-arm Sources-call totals, generation times and per-suite means (frozen plan): not reported.
+- Per-task rank and 0–16 total for each judge (section 6): not published; the report gives means per judge.
+- Judge scores split by suite and, for UW1 and UW2, by condition (sections 1, 5): not reported; the tables pool tasks.
+- Detection and correction scored separately for every defect class (sections 3, 4): reported only for the closed-book Russianism sentences.
+- Outcomes of the validity checks other than the degraded-control rank and the closed-book audit (section 7): complete-answer count, model identity, judge-reply parsing and the control's mean-total threshold are not reported.
+- Cost of failed and rerun attempts, the canaries and the probe, and the check against the $60 stop line (section 7): not reported; the report gives primary attempts only.
 
 ## 1. Outcome and the decision it informs
 
@@ -107,7 +131,7 @@ The study is *valid* only if: at least 99 of 104 generations return a complete, 
 
 ## 8. Canaries (2026-11-20, same path as the full run)
 
-**Canary 1** (three-part task: 7 keyed Ukrainian items, a 90–130 word English note from a packet with a planted contradiction and gap, a 30–50 word A2 Ukrainian text), judged in blind cross-family bundles with a degraded control. **Canary 2** (the same 7 keyed items in the final answers-then-explanations format, both conditions, all four arms, and opaque task IDs). Both are harness checks, not results; their tasks are outside the held-out set.
+**Canary 1** (three-part task: 7 keyed Ukrainian items, a 90–130 word English note from a packet with a planted contradiction and gap, a 30–50 word A2 Ukrainian text), judged in blind cross-family bundles with a degraded control. **Canary 2** (the same 7 keyed items in the final answers-then-explanations format, both conditions, all four arms, and opaque task IDs). Both are harness checks, not results; their tasks are outside the held-out set. One further probe call (details withheld from this public copy) also ran before the full run.
 
 | Check | Observed |
 |---|---|
@@ -149,4 +173,4 @@ Frozen before the first full-run call: key set `4bb9921904bdd65b9bc26dc25695ade0
 
 ## 11. Authorization
 
-The full run required approval from the accountable lead, `claude-cto`, before it started; only the canaries ran before that approval.
+The full run required approval from the accountable lead, `claude-cto`, before it started; only the canaries and one probe call (details withheld from this public copy) ran before that approval.
