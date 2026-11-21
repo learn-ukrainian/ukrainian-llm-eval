@@ -120,7 +120,7 @@ The study is *valid* only if: at least 99 of 104 generations return a complete, 
 | Degraded control | ranked last by 5 of 5 judges (totals 3–7 of 16 against 11–16 for real answers) |
 | Blindness audit | all five judges answered "unknown" for every family; a refusal to guess is weak evidence |
 | Judge sensitivity | 2 of 3 general judges penalised Opus for an unrequested "treat 15 minutes as the safe limit" recommendation as unsupported; the judges disagreed on the order of the other three arms (one task, no inference) |
-| Custody rehearsal and isolation probe | The evaluator restricted candidate and judge access to key material and unblinding maps, and rehearsed the procedure in canary 2. A probe showed the file isolation of the Neon route is weaker than the Codex and Claude routes', so access by a Neon session could not be fully excluded; this is recorded as a limitation |
+| Custody | The evaluator restricted candidate and judge access to key material and unblinding maps and rehearsed the procedure in canary 2; file isolation of one candidate route could not be verified, so unauthorised access cannot be fully excluded (a stated limitation) |
 | Harness defects found and fixed | a scorer bug scoring an empty answer as correct for single-letter keys given as strings (caught by the empty-answer control, fixed, all six sets rerun); decoy cloned one fixed arm and flattened Markdown (rotated, block-aware); apostrophe variants normalised |
 
 Canary 1 list-price equivalents (one call each): Neon $0.349, Opus $0.468, Sol $0.114, Terra $0.046; judge calls: Opus $0.093, Neon $0.266–0.271, Sol $0.037–0.084. Neon's calls took 112–135 s against 25–54 s for the others; with Sources, Neon canary 2 took 67 s against 22–40 s.
@@ -141,7 +141,7 @@ List prices per million tokens (input / cached or cache-read / output), checked 
 
 ## 10. Custody, audit and limitations
 
-Access control for key material and unblinding maps was handled by the evaluator through restricted access, opaque task identifiers and run ordering. One candidate route (Neon) has weaker file isolation than the others, so access by a Neon session to evaluation artifacts could not be fully excluded; no stream-level file-read audit exists for these routes. Post-run audit from dispatcher records covers per-task Sources call counts (zero required on every closed-book prompt), egress destinations and sandbox write-probe results; the judges' family guesses are tallied as a blindness signal. The canaries show no sign of unauthorised access.
+The evaluator restricted access to key material and unblinding maps and ordered the runs to limit leakage. File isolation of one candidate route could not be verified, so unauthorised access to evaluation artifacts cannot be fully excluded. Post-run audit from dispatcher records covers per-task Sources call counts (zero required on every closed-book prompt), egress destinations and sandbox write-probe results; the judges' family guesses are tallied as a blindness signal. The canaries show no sign of unauthorised access.
 
 Keys, checklists, raw outputs, judge replies, unblinding maps and traces stay in evaluator-held artifacts outside Git; the public report will contain task descriptions, hashes, aggregate scores, class tables and cost, not prompts or keys. Subscription quota is shared with other work, so meters are sampled but cannot attribute spend per arm.
 
