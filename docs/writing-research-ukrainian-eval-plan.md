@@ -1,6 +1,6 @@
 # Writing, research and Ukrainian-language evaluation: plan
 
-Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** After the run this public copy removed operational detail (custody, audit, scheduling, coordination and item-level material) and added reporting and interpretation clarifications (this status note and the wording of the condition difference in sections 1 and 4); the design, thresholds and digests are unchanged, but the file is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. The public report does not meet every reporting commitment below: per-arm Sources-call totals, per-arm generation times, per-suite means, hidden-checklist percentages, the exact McNemar and sign tests, the item-level list of items that were correct closed-book and incorrect with Sources, and the `check_text` pass are not reported (see its "Protocol status"); the corresponding sentences in sections 2, 4, 6 and 10 state what was planned. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** After the run this public copy removed operational detail (custody, audit, scheduling, coordination and item-level material) and added reporting and interpretation clarifications (this status note and the wording of the condition difference in sections 1 and 4); the design, thresholds and digests are unchanged, but the file is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. The public report does not carry out every analysis step below: the exact McNemar and sign tests, the item-level list of items that were correct closed-book and incorrect with Sources, and the `check_text` pass were not done or not published (see its "Protocol status"); the corresponding sentences in sections 3, 4 and 6 state what was planned. The frozen plan also promised per-arm Sources-call totals, generation times and per-suite means; the report does not give them, and this copy no longer promises them. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
 
 ## 1. Outcome and the decision it informs
 
@@ -21,7 +21,7 @@ The fleet wants to know where Gemini 4 Neon is strong or weak against the models
 
 **Savant is paused by operator order (2026-11-19) and is excluded from every role.** The originating issue named Savant for the Ukrainian suite; Opus 5.5 takes its place so all four arms face the same Ukrainian items, and the deviation is recorded. Requested effort is recorded; effective effort is **not attested** for any arm.
 
-Arms do not see identical surroundings, and this is a limitation, not a control: each route loads its own harness context (observed per-call input of about 150k–275k tokens including cache) and its own tool surface. Every candidate prompt forbids web and file access and states the Ukrainian source rules inline. Sources call counts come from the dispatcher's records and are reported per arm.
+Arms do not see identical surroundings, and this is a limitation, not a control: each route loads its own harness context (observed per-call input of about 150k–275k tokens including cache) and its own tool surface. Every candidate prompt forbids web and file access and states the Ukrainian source rules inline. Sources call counts come from the dispatcher's records.
 
 ## 3. Held-out task set: 26 prompt variants per arm, 104 generations
 
@@ -78,7 +78,7 @@ Prompt hashes (SHA-256 of the byte-identical prompt every arm receives):
 - **Mechanical constraints:** word counts and required structure are computed by script.
 - **Ukrainian free text (UW, RB3, RB4):** `check_text` (VESUM, Russian shadow, UA-GEC) on every output; findings are evidence, shadow and UA-GEC hits are suspicions, not verdicts.
 - **Judged tasks:** each judge scores every visible candidate 0–4 on c1 fidelity, c2 gaps and conflicts, c3 fitness and constraints, c4 language, ticks the hidden checklist, lists concrete defects, ranks all candidates with no ties, and guesses each candidate's model family last as a blindness audit.
-- **Difference between conditions:** for every UK item and class, closed-book correct vs Sources correct per model, with Sources call counts from the dispatcher record; items that were correct closed-book and incorrect with Sources were to be listed (the public report gives only the aggregate counts).
+- **Difference between conditions:** for every UK item and class, closed-book correct vs Sources correct per model; items that were correct closed-book and incorrect with Sources were to be listed (the public report gives only the aggregate counts).
 
 ## 5. Blind cross-family judging
 
@@ -99,7 +99,7 @@ The evaluator is Anthropic-family: Claude Sonnet 5.5 and the Anthropic-family su
 
 ## 6. Analysis and allowed claims
 
-Per task and judge: rank and 0–16 total. Per arm and suite: mean per judge; keyed accuracy by class and condition with paired closed-book/Sources differences per model (exact McNemar on items only where discordant pairs exist); pairwise preference counts with an exact sign test only where a pair has enough tasks. With 8 general and 6 Ukrainian-judged bundles the design detects only large, consistent gaps; keyed suites at ceiling are reported as ties. "Strong" or "weak" needs the same direction in the mechanical evidence and in every eligible judge; everything else is labelled exploratory. Time, tool calls and cost are reported per arm.
+Per task and judge: rank and 0–16 total. Keyed accuracy by class and condition with paired closed-book/Sources differences per model (exact McNemar on items only where discordant pairs exist); pairwise preference counts with an exact sign test only where a pair has enough tasks. With 8 general and 6 Ukrainian-judged bundles the design detects only large, consistent gaps; keyed suites at ceiling are reported as ties. "Strong" or "weak" needs the same direction in the mechanical evidence and in every eligible judge; everything else is labelled exploratory. Cost is reported per arm.
 
 ## 7. Success and stop criteria
 
@@ -141,7 +141,7 @@ List prices per million tokens (input / cached or cache-read / output), checked 
 
 ## 10. Limitations
 
-Access by a candidate or judge to evaluation artifacts cannot be ruled out; this is a limitation of the study. Per-task Sources call counts from the dispatcher's records are reported per arm (zero required on every closed-book prompt), and the judges' family guesses are tallied as a blindness signal.
+Access by a candidate or judge to evaluation artifacts cannot be ruled out; this is a limitation of the study. The dispatcher's records are the source for the closed-book audit (zero Sources calls required on every closed-book prompt), and the judges' family guesses are tallied as a blindness signal.
 
 Keys, checklists, raw outputs, judge replies, unblinding maps and traces stay in evaluator-held artifacts outside Git; the public report will contain task descriptions, hashes, aggregate scores, class tables and cost, not prompts or keys.
 
