@@ -1,6 +1,6 @@
 # Writing, research and Ukrainian-language evaluation: plan
 
-Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** This public copy is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** This public copy is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time, apart from the sentences edited as listed here. **Stop decision:** section 7 says to stop and report when a validity criterion fails in a way a retry cannot fix. The closed-book criterion failed (three Sol closed-book runs called the Sources tools) and the run was not stopped; the failure is reported in [results.md](results.md) and every scored result is labelled exploratory. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
 
 **Changed after freeze** (the numeric thresholds that remain in the text are unchanged):
 
@@ -10,6 +10,7 @@ Status: **plan as frozen on 2026-11-20 before the full run; the run is complete 
 - Promises removed from sections 2, 4 and 6: per-arm Sources-call totals and per-arm time and tool-call reports, per-suite means, and the list of items the tools made worse.
 - The UK5 prompts were rebuilt after the freeze: the UK5 rows in the hash table are the frozen ones, and the scored digests are in [results.md](results.md).
 - Section 8 lost the custody-rehearsal and probe rows, and section 11 now names the probe (one extra call, details withheld).
+- Section 5 lost the stated reasons for its judge-role rules, and the route column of the section 2 arm table was replaced by the sentence that every arm was requested at effort high and that effective effort is not attested.
 
 **Not done** (planned below, absent from [results.md](results.md); no analysis was added to cover them):
 
@@ -127,7 +128,7 @@ Per task and judge: rank and 0–16 total. Keyed accuracy by class and condition
 
 ## 7. Success and stop criteria
 
-The study is *valid* only if: at least 99 of 104 generations return a complete, parseable answer (a pre-session infrastructure failure may be retried once and is recorded; a content failure is kept as a score); the degraded control ranks last in at least 90% of judge calls and its mean total is below 60% of the lowest real arm's mean; every judge reply parses to the schema (one retry for invalid JSON, recorded; an unparseable second reply excludes that call and is reported); recorded model identity matches the requested one for every call; and the dispatcher's records show no Sources call on any closed-book prompt. **Stop and report** if any of these fail in a way a retry cannot fix, or if cumulative list-price equivalent passes $60 (about twice the estimate). A harness bug found by a control is fixed and every arm is rerun on the affected cells. All attempts are preserved; nothing is selected after seeing a score.
+The study is *valid* only if: at least 99 of 104 generations return a complete, parseable answer (a pre-session infrastructure failure may be retried once and is recorded; a content failure is kept as a score); the degraded control ranks last in at least 90% of judge calls and its mean total is below 60% of the lowest real arm's mean; every judge reply parses to the schema (one retry for invalid JSON, recorded; an unparseable second reply excludes that call and is reported); recorded model identity matches the requested one for every call; and the dispatcher's records show no Sources call on any closed-book prompt. **Stop and report** if any of these fail in a way a retry cannot fix, or if cumulative list-price equivalent passes $60 (about twice the estimate). A harness bug found by a control is fixed and every arm is rerun on the affected cells. All attempts are preserved; nothing is selected after seeing a score. **Outcome at run time:** the closed-book criterion failed (three Sol closed-book runs called the Sources tools) and the run was not stopped; the failure is reported and every scored result is labelled exploratory.
 
 ## 8. Canaries (2026-11-20, same path as the full run)
 
@@ -139,11 +140,11 @@ The study is *valid* only if: at least 99 of 104 generations return a complete, 
 | Output captured intact | 12 of 12 candidate replies parsed |
 | Keyed scorer | every arm scored full marks in both conditions (ceiling by design); wrong answers scored 0 in the negative control |
 | Closed-book audit | **0 Sources calls in 4 of 4 closed-book runs**; the Sources condition recorded 16 (Neon), 9 (Sol), 8 (Terra) and 3 (Opus) calls, so the condition is auditable per task |
-| Mechanical checks (canary 1) | note lengths 105, 94, 97, 108 words (limit 90–130); Ukrainian text 39, 36, 30, 32 words (limit 30–50); `check_text`: 0 VESUM problems, 0 shadow hits; one UA-GEC suspicion on a Sol verb («виходить»), not a verdict |
+| Mechanical checks (canary 1) | note lengths 105, 94, 97, 108 words (limit 90–130); Ukrainian text 39, 36, 30, 32 words (limit 30–50); `check_text`: 0 VESUM problems, 0 shadow hits; one UA-GEC suspicion on a Sol verb, not a verdict |
 | Judges returned the schema | 5 of 5 valid JSON |
 | Degraded control | ranked last by 5 of 5 judges (totals 3–7 of 16 against 11–16 for real answers) |
 | Blindness audit | all five judges answered "unknown" for every family; a refusal to guess is weak evidence |
-| Judge sensitivity | 2 of 3 general judges penalised Opus for an unrequested "treat 15 minutes as the safe limit" recommendation as unsupported; the judges disagreed on the order of the other three arms (one task, no inference) |
+| Judge sensitivity | 2 of 3 general judges penalised Opus for an unrequested recommendation they judged unsupported; the judges disagreed on the order of the other three arms (one task, no inference) |
 | Limitation | Access to evaluation artifacts cannot be ruled out (see section 10) |
 | Harness defects found and fixed | a scorer bug scoring an empty answer as correct for single-letter keys given as strings (caught by the empty-answer control, fixed, all six sets rerun); decoy cloned one fixed arm and flattened Markdown (rotated, block-aware); apostrophe variants normalised |
 
