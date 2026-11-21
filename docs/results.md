@@ -408,3 +408,63 @@ Frozen at 2026-11-14T06:29:45Z, before the first arm, and re-verified unchanged 
 | Post-run adjudication record (after review round 1) | `f89416d3faf1c8ea6bd283e430ca6592d8a284ca0a1eb82fd38f2daafc7c2fce` |
 
 Run identifiers: Sol dispatch `cto-414d-ukrecall-sol-r1` (nonce `c4e041a2540840c0ad09cb1a5f012929`); critic rounds `cto-414d-ukrecall-critic-sol` and `-r2`. Gemini stream SHA-256 values: Carbon primary `875ccda4…`, robustness `477912ec…`; Hydrogen primary `f9488ede…`, robustness `52a6e850…`; Flash primary `9c29fb33…`, robustness `3175a8ef…`.
+
+## Writing, research and Ukrainian language: Neon, Opus, Sol and Terra, 20 November 2026
+
+**Result in one paragraph.** Observed scores only; every result is exploratory (the plan's validity criterion that no closed-book prompt may call a Sources tool failed for Sol, see "Protocol status"). On the Ukrainian keyed items (81 items) Gemini 4 Neon scored 81 with the Sources tools, the highest observed score (Sol 80, Terra 79, Opus 78). Without tools Neon scored 76, above Opus (74) and Terra (70) and below Sol (78); Sol's 78 includes three tool-assisted runs covering 42 of the 81 items, so a clean no-tools comparison with Sol is unavailable. GPT-6.1 Terra had the lowest no-tools score (70 of 81) and the largest aggregate keyed-score difference between the two conditions (+9 items); Sol's difference (+2) is not comparable because its no-tools column is mixed. On blind writing and research tasks scored by model judges, the Opus judge's 8 general tasks gave Neon a mean total (14.5) between Sol's (15.4) and Terra's (14.4) but a mean rank (1.6) ahead of Sol's (1.9), two measures from one judge that this report does not reconcile; on the 14 tasks of the Sol judge, the only judge eligible to score Neon against Opus, Neon and Opus split 7–6–1 (wins–losses–ties for Neon). Word limits were counted by script, not judged: Neon and Sol met every limit on the 14 tasks; Opus 5.5 exceeded its limit on 5 of 14. Keyed counts are scored against the key and rubric totals and ranks are model-judged; all are single-run, small-sample observations; only the keyed items ran in both conditions, and their paired counts show differences between conditions, not their causes; no routing change follows from them, and the plan ([writing-research-ukrainian-eval-plan.md](writing-research-ukrainian-eval-plan.md), frozen before the run; the public copy later removed operational detail and added reporting and interpretation clarifications, with design, thresholds and digests unchanged) names what the design cannot show. Tracking: [#24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24). The plan was approved for execution by `claude-cto` on 2026-11-20.
+
+### What ran
+
+140 planned evaluation cells (104 generations, 4 models × 26 prompts, and 36 blind cross-family judge calls), all through the fleet dispatcher in fresh read-only sessions at effort high: `gemini-4-neon-high`, `claude-opus-5-5`, `gpt-6.2-sol`, `gpt-6.1-terra` (effective effort not attested). Savant was paused by operator order and is absent. The held-out set is 3 docs tasks, 3 KubeDojo module fragments and 4 research briefs (single condition), plus 2 Ukrainian writing prompts and 6 keyed Ukrainian sets (81 items, source-verified before freezing) each run **twice**: closed-book and with the Sources tools. Additional attempts beyond the 140 cells are listed under deviations: 8 unscored first UK5 generations, 10 crashed generations retried once, 2 unparseable judge replies retried once, 2 Sol second attempts, plus the canaries and one probe. Two refused Terra launches are not counted: a refused launch is not a dispatch, and the launches that ran after the retry are counted once, as ordinary dispatches. Raw prompts, keys, outputs and judge replies stay outside Git. Frozen digests: key set `4bb9921904bdd65b9bc26dc25695ade0ae662314c7558c5cb138e86281ecde91` and freeze manifest `a20fb37e05d1a6df6bcd316690bdf036d976a3f14486cf7249a29bdcd494d8c5`; the UK5 prompts were rebuilt after the freeze and the scored versions are `b4591adc58e73321b519a9f5251a1d738f020e78668c25778c80e42fe6308b79` (no tools) and `2486bce364292651a5831338c3f4d2976633ca23ccff4f075b56223fb493dbaf` (Sources).
+
+### Ukrainian keyed items: tools versus no tools
+
+Correct answers out of 81 (UK1–UK6). The two right-hand columns count items whose correctness changed between the two recorded runs of the same model (an answer that was wrong in both runs is not counted, even if it differs); with one run per cell they describe the change, not its cause. Sol's closed-book column is **not purely closed-book** (see deviations).
+
+| Model | No tools | With Sources | Incorrect without tools, correct with Sources | Correct without tools, incorrect with Sources |
+|---|---:|---:|---:|---:|
+| Neon | 76 | **81** | 5 | 0 |
+| Opus 5.5 | 74 | 78 | 5 | 1 |
+| Sol 6.2 | 78 (3 runs used tools, covering 42 of 81 items) | 80 | 2 | 0 |
+| Terra 6.1 | 70 | 79 | 9 | 0 |
+
+Per-model Sources-call totals and generation times were recorded but are not reported: which suites, runs and retries feed them was not re-verified for this report.
+
+By failure class (closed-book → with Sources; Neon / Opus / Sol / Terra). Classes not shown were at ceiling for every model in both conditions: inflection 16/16, aspect pairs 6/6, case government 5/5, cultural and historical 9/9, orthography 8/8, Russian-inferred forms 2/2, clean controls 8/8 (no false alarms from any model).
+
+| Class (items) | No tools | With Sources |
+|---|---|---|
+| Russianisms (10) | 6 / 7 / 7 / 5 | **10** / 8 / 9 / 9 |
+| Surzhyk (4) | 3 / 3 / 4 / 1 | 4 / 3 / 4 / 4 |
+| Calques (3) | 3 / 2 / 3 / 2 | 3 / 3 / 3 / 2 |
+| Stress (10) | 10 / 8 / 10 / 8 | 10 / 10 / 10 / 10 |
+
+A class shown has 3–10 items and no variability estimate was computed, so one-item gaps are reported as counts only and every class observation here is exploratory. Scores with Sources were higher than without for Russianisms for all four models (+4 Neon, +1 Opus, +2 Sol, +4 Terra), for surzhyk for Neon (+1) and Terra (+3) only, for stress for Opus (+2) and Terra (+2) only, and for calques for Opus (+1) only; the other cells did not change. Class changes are net per class: Opus's one item that was correct without tools and incorrect with Sources sits inside them. Sol's no-tools cells include three tool-assisted runs, so its difference between conditions is not clean. Terra had the largest aggregate keyed-score difference (+9 items) and no change in calques. For the 10 defective Russianism sentences, closed-book detection (any non-OK answer) was 8 / 9 / 8 / 5 and correction 6 / 7 / 7 / 5 (Neon / Opus / Sol / Terra): detection exceeded correction for Neon, Opus and Sol and equalled it for Terra.
+
+### Writing and research: blind cross-family judging
+
+No judge saw its own family, so most pairs have one judge and the tables are **per judge**, not averaged. Totals are 0–16 (four criteria × 0–4), means over the judged tasks; "wins" count tasks where one arm's total was higher.
+
+| Judge | Candidates it saw | Mean total (mean rank among the visible candidates plus the control: 4 for the Opus and Neon judges, 3 for the Sol judge) |
+|---|---|---|
+| Opus 5.5 (8 general tasks) | Neon / Sol / Terra | 14.5 (1.6) / 15.4 (1.9) / 14.4 (2.5) |
+| Neon (14 tasks) | Opus / Sol / Terra | 15.0 (1.6) / 14.9 (1.9) / 13.3 (2.6) |
+| Sol (14 tasks) | Neon / Opus | 13.6 (1.4) / 13.4 (1.6) |
+
+Pair wins (first arm / second arm / ties): by the Opus judge, Sol–Neon 5/1/2 for Sol, Sol–Terra 5/1/2 for Sol, Neon–Terra 3/2/3; by the Neon judge, Opus–Terra 10/3/1 for Opus, Sol–Terra 10/3/1 for Sol, Opus–Sol 6/5/3; by the Sol judge, Neon–Opus 7/6/1 for Neon. Reading (descriptive, small samples): Terra had the worst mean rank for both judges that saw it, although on the Opus judge its mean total was within 0.1 of Neon's; the Sol judge, the only judge eligible to score Neon against Opus, gave Neon the higher total on 7 of 14 tasks, Opus on 6, with 1 tie. The Opus judge's two measures disagree about Neon and Sol: Sol had the higher total on 5 of 8 tasks (Neon on 1, 2 ties) and a higher mean total (15.4 against 14.5), but Neon had the better mean rank (1.6 against 1.9). The cause was not established in this report (the rank column was not re-derived from the per-task data), so no Neon–Sol preference is claimed. Word limits (counted by script, not judged): Neon and Sol met all 14; Opus exceeded the limit on WD1, WD2, RB1, RB3 and RB4; Terra on RB1 (over) and WK2 (under). The totals and ranks above are model-judge scores, not verified facts; the pair counts are this report's counts of tasks, derived from those totals. Hidden-checklist percentages were recorded but are not reported: their item counts and aggregation were not re-verified for this report.
+
+**Judge validity.** The deliberately degraded control ranked last in 36 of 36 judge calls (mean total 5.6 against 14.2 for real answers). **Blinding was imperfect:** of 94 candidate-family guesses, judges wrote "unknown" 61 times, guessed right 25 times and wrong 8 times, so 25 of the 33 guesses made were right.
+
+### Deviations, failures and limits (all attempts preserved)
+
+- **Harness bug, rerun.** A regular-expression edit of mine truncated the UK5 prompt to four sentences without the format line; every arm answered a different, partial task. A scorer-side control exposed it; the UK5 prompt was rebuilt and all 8 UK5 cells (4 arms × 2 conditions) were rerun; the first attempts are kept and not scored. An earlier scorer bug (an empty answer scored correct for a string-typed key) was caught by the empty-answer control and fixed before the run.
+- **Sol did not stay closed-book.** Three Sol closed-book runs (UK3 with 18 calls, UK4 with 44, UK5 with 21) called the Sources tools despite the instruction; the other 29 of the 32 scored closed-book cells (4 models × 8 prompts) made none. Second attempts of UK3 and UK4 made no tool calls and scored 16/18 and 11/11; the first attempts remain the recorded result and Sol's no-tools column is not clean.
+- **Protocol status.** Because the plan's closed-book criterion failed, every scored result here is exploratory. The planned `check_text` pass over the Ukrainian free-writing outputs and the two Ukrainian research briefs was not run; those judgments rest on the model judges alone. The planned exact McNemar and sign tests are not reported (class and pair counts are given as counts only). The item-level list of items that were correct without tools and incorrect with Sources is not published (the tables give counts); planned per-arm Sources-call totals, per-arm generation times, per-suite means (the judge table pools every judged task per judge) and hidden-checklist percentages are not reported (see the notes under the keyed and judge tables). This section does not restate the outcomes of the plan's other validity checks, such as model identity. The Sources tools are live services whose content may change, so these results may not reproduce exactly.
+- **Infrastructure retries.** 10 generation tasks crashed when the launching call hit its tool time limit and were retried once (counted among the additional attempts above); 2 Terra launches were refused once with a routing-snapshot message and went through on retry without any model substitution (the refused launch was not a dispatch and is not counted); 2 Neon judge replies did not parse and were retried once.
+- **Evidence kept private.** Per-task rank tables and the unblinding maps are in evaluator-held artifacts.
+- **Limitation.** Access by a candidate or judge to evaluation artifacts cannot be ruled out; this applies to every result here.
+- **Authorship and scale.** An Anthropic-family evaluator and its sub-agents wrote tasks, keys and checklists. One run per cell, small classes (2–10 items) and ceiling effects mean no ranking is claimed.
+
+### Cost
+
+List-price equivalents (subscription routes, not charges), primary attempts only: generations Neon $7.51, Opus $3.06, Sol $2.09, Terra $0.66; judging Neon $5.30, Opus $0.91, Sol $0.87; about $20.4 against a $33 estimate. Preserved failed and rerun attempts are extra.
