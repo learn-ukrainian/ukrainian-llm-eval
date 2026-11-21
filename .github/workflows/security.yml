@@ -1,11 +1,15 @@
 name: Security
 on:
   workflow_call:
+  workflow_dispatch:
+  schedule:
+    # Daily 03:37 UTC — surfaces newly-disclosed advisories between changes.
+    - cron: '37 3 * * *'
 permissions: {}
 jobs:
   fleet-security:
     name: Fleet security
-    uses: learn-ukrainian/machinery/.github/workflows/fleet-security.yml@078285f3192049bc5d795c5c5e59339fd0c974ab # machinery PR #1107
+    uses: learn-ukrainian/machinery/.github/workflows/fleet-security.yml@fc01f27ea07c31fa00958136d37bd94ea0fc6823 # machinery PR #1110
     permissions:
       contents: read
     with:
