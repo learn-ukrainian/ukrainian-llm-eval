@@ -411,7 +411,7 @@ Run identifiers: Sol dispatch `cto-414d-ukrecall-sol-r1` (nonce `c4e041a2540840c
 
 ## Writing, research and Ukrainian language: Neon, Opus, Sol and Terra, 20 November 2026
 
-All scores below are exploratory: the plan's validity criterion that no closed-book prompt may call a Sources tool failed for Sol, so Sol's closed-book scores are not closed-book (see "Protocol status"). Plan: [writing-research-ukrainian-eval-plan.md](writing-research-ukrainian-eval-plan.md). Tracking: [#24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24). The plan was approved for execution by `claude-cto` on 2026-11-20.
+All scores below are exploratory: the plan's validity criterion that no closed-book prompt may call a Sources tool failed for Sol, so Sol's closed-book scores include three runs that used the Sources tools (see "Protocol status"). Plan: [writing-research-ukrainian-eval-plan.md](writing-research-ukrainian-eval-plan.md). Tracking: [#24](https://github.com/learn-ukrainian/ukrainian-llm-eval/issues/24). The plan was approved for execution by `claude-cto` on 2026-11-20.
 
 ### What ran
 
@@ -428,7 +428,7 @@ Correct answers out of 81 (UK1–UK6). The two right-hand columns count items wh
 | Sol 6.2 | 78 (3 runs used tools, covering 42 of 81 items) | 80 | 2 | 0 |
 | Terra 6.1 | 70 | 79 | 9 | 0 |
 
-By failure class (closed-book → with Sources; Neon / Opus / Sol / Terra); each class has 3–10 items. Classes not shown were at ceiling for every model in both conditions: inflection 16/16, aspect pairs 6/6, case government 5/5, cultural and historical 9/9, orthography 8/8, Russian-inferred forms 2/2, clean controls 8/8 (no false alarms from any model). Sol's no-tools cells for stress (UK3), surzhyk and calques (UK5) come from runs that used the Sources tools.
+By failure class (closed-book → with Sources; Neon / Opus / Sol / Terra); each class has 3–10 items. Classes not shown were at ceiling for every model in both conditions: inflection 16/16, aspect pairs 6/6, case government 5/5, cultural and historical 9/9, orthography 8/8, Russian-inferred forms 2/2, clean controls 8/8 (no false alarms from any model). Sol's no-tools values for every class drawn from UK3, UK4 and UK5 come from runs that used the Sources tools.
 
 | Class (items) | No tools | With Sources |
 |---|---|---|
@@ -456,15 +456,15 @@ No judge saw its own family, so most pairs have one judge and the tables are **p
 
 Pair wins count tasks where one arm's total was higher (first arm / second arm / ties):
 
-| Judge | Pair | First arm / second arm / ties |
-|---|---|---|
-| Opus 5.5 | Sol–Neon | 5 / 1 / 2 |
-| Opus 5.5 | Sol–Terra | 5 / 1 / 2 |
-| Opus 5.5 | Neon–Terra | 3 / 2 / 3 |
-| Neon | Opus–Terra | 10 / 3 / 1 |
-| Neon | Sol–Terra | 10 / 3 / 1 |
-| Neon | Opus–Sol | 6 / 5 / 3 |
-| Sol | Neon–Opus | 7 / 6 / 1 |
+| Judge | Pair | Tasks | First arm / second arm / ties |
+|---|---|---:|---|
+| Opus 5.5 | Sol–Neon | 8 | 5 / 1 / 2 |
+| Opus 5.5 | Sol–Terra | 8 | 5 / 1 / 2 |
+| Opus 5.5 | Neon–Terra | 8 | 3 / 2 / 3 |
+| Neon | Opus–Terra | 14 | 10 / 3 / 1 |
+| Neon | Sol–Terra | 14 | 10 / 3 / 1 |
+| Neon | Opus–Sol | 14 | 6 / 5 / 3 |
+| Sol | Neon–Opus | 14 | 7 / 6 / 1 |
 
 Word limits, counted by script, not judged (14 tasks):
 
@@ -481,11 +481,11 @@ Word limits, counted by script, not judged (14 tasks):
 
 - **Harness bug, rerun.** A regular-expression edit of mine truncated the UK5 prompt to four sentences without the format line; every arm answered a different, partial task. A scorer-side control exposed it; the UK5 prompt was rebuilt and all 8 UK5 cells (4 arms × 2 conditions) were rerun; the first attempts are kept and not scored. An earlier scorer bug (an empty answer scored correct for a string-typed key) was caught by the empty-answer control and fixed before the run.
 - **Sol did not stay closed-book.** Three Sol closed-book runs (UK3 with 18 calls, UK4 with 44, UK5 with 21) called the Sources tools despite the instruction; the other 29 of the 32 scored closed-book cells (4 models × 8 prompts) made none. Second attempts of UK3 and UK4 made no tool calls and scored 16/18 and 11/11; the first attempts remain the recorded result and Sol's no-tools column is not clean.
-- **Protocol status.** Because the plan's closed-book criterion failed, every scored result here is exploratory. The planned `check_text` pass over the Ukrainian free-writing outputs and the two Ukrainian research briefs was not run; those judgments rest on the model judges alone. The planned exact McNemar and sign tests are not reported (class and pair counts are given as counts only). The item-level list of items that were correct without tools and incorrect with Sources is not published (the tables give counts). The Sources tools are live services whose content may change, so these results may not reproduce exactly.
+- **Protocol status.** Because the plan's closed-book criterion failed, every scored result here is exploratory. The planned `check_text` pass over the Ukrainian free-writing outputs and the two Ukrainian research briefs was not run; those judgments rest on the model judges alone. The planned exact McNemar and sign tests are not reported (class and pair counts are given as counts only). The item-level list of items that were correct without tools and incorrect with Sources is not published (the tables give counts); planned hidden-checklist percentages are not reported. This section does not restate the outcomes of the plan's other validity checks, such as model identity. The Sources tools are live services whose content may change, so these results may not reproduce exactly.
 - **Infrastructure retries.** 10 generation tasks crashed when the launching call hit its tool time limit and were retried once (counted among the additional attempts above); 2 Terra launches were refused once with a routing-snapshot message and went through on retry without any model substitution (the refused launch was not a dispatch and is not counted); 2 Neon judge replies did not parse and were retried once.
 - **Evidence kept private.** Per-task rank tables and the unblinding maps are in evaluator-held artifacts.
 - **Limitation.** Access by a candidate or judge to evaluation artifacts cannot be ruled out; this applies to every result here.
-- **Authorship and scale.** An Anthropic-family evaluator and its sub-agents wrote tasks, keys and checklists. One run per cell; classes have 2–10 items.
+- **Authorship and scale.** An Anthropic-family evaluator and its sub-agents wrote tasks, keys and checklists. One run per cell, small classes (2–10 items) and ceiling effects mean no ranking is claimed.
 
 ### Cost
 
