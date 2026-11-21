@@ -28,8 +28,9 @@ Run the six synthetic parity cases against the hash-verified upstream script:
 
 This checker downloads the upstream script, then runs both scorers with networking
 disabled. It compares unchanged, replacement, wrong replacement, insertion,
-deletion and multiple-reference cases using pretokenized input. It proves parity
-on those cases, not every possible correction or a historical tokenizer build.
+deletion and multiple-reference cases using pretokenized input. The replacement
+case also runs with default tokenization and must produce the same result. Parity
+coverage is limited to these cases and the pinned tokenizer build.
 The output must be a new file so earlier parity evidence is preserved.
 
 For actual corrections, supply one sentence per line in the same order as the
