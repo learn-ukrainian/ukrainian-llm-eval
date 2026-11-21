@@ -33,15 +33,17 @@ def main():
     image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
     reports = {}
     with tempfile.TemporaryDirectory(prefix="gec-parity-") as temp:
-        Path(temp, "official.py").write_bytes(raw)
+        official_script = Path(temp, "official.py")
+        official_script.write_bytes(raw)
+        official_script.chmod(0o444)
         base = ["docker", "run", "--rm", "--network", "none", "--platform", "linux/amd64",
                 "--read-only", "--tmpfs", "/tmp", "--entrypoint", "/usr/local/bin/python",
-                "-v", str(fixtures) + ":/fixtures:ro", "-v", temp + ":/official:ro", image_id]
+                "-v", str(fixtures) + ":/fixtures:ro", "-v", str(official_script) + ":/official.py:ro", image_id]
         for case in sorted(fixtures.iterdir()):
             if not case.is_dir():
                 continue
             corrected, references = f"/fixtures/{case.name}/corrected.txt", f"/fixtures/{case.name}/reference.m2"
-            official = subprocess.run(base + ["/official/official.py", corrected, "--no-tokenize", "--m2", references],
+            official = subprocess.run(base + ["/official.py", corrected, "--no-tokenize", "--m2", references],
                                       check=True, capture_output=True, text=True, timeout=120)
             wrapped = subprocess.run(base + ["/opt/scorer/score.py", "--corrected", corrected,
                                             "--no-tokenize", "--references", references],

@@ -16,6 +16,8 @@ from pathlib import Path
 import spacy
 import stanza
 
+STANZA_PROCESSORS = {"tokenize": "iu", "mwt": "iu"}
+
 
 def verify_resources():
     import en_core_web_sm
@@ -44,7 +46,9 @@ def main():
         raise ValueError("prediction/reference sentence denominator mismatch or empty prediction")
     spacy.load("en")  # Fail here if provisioned resources are missing; never download.
     if not args.no_tokenize:
-        nlp = stanza.Pipeline(lang="uk", processors="tokenize", download_method=None, use_gpu=False)
+        nlp = stanza.Pipeline(
+            lang="uk", package=None, processors=STANZA_PROCESSORS, download_method=None, use_gpu=False
+        )
         corrections = [" ".join(token.text for token in nlp(line).iter_tokens()) for line in corrections]
     with tempfile.TemporaryDirectory(prefix="ukrainian-gec-score-") as temp:
         root = Path(temp)
