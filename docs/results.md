@@ -408,3 +408,14 @@ Frozen at 2026-11-14T06:29:45Z, before the first arm, and re-verified unchanged 
 | Post-run adjudication record (after review round 1) | `f89416d3faf1c8ea6bd283e430ca6592d8a284ca0a1eb82fd38f2daafc7c2fce` |
 
 Run identifiers: Sol dispatch `cto-414d-ukrecall-sol-r1` (nonce `c4e041a2540840c0ad09cb1a5f012929`); critic rounds `cto-414d-ukrecall-critic-sol` and `-r2`. Gemini stream SHA-256 values: Carbon primary `875ccda4…`, robustness `477912ec…`; Hydrogen primary `f9488ede…`, robustness `52a6e850…`; Flash primary `9c29fb33…`, robustness `3175a8ef…`.
+
+## Sources comparison, 20 November 2026
+
+This exploratory comparison measured correct answers on 81 keyed Ukrainian items in an assigned closed-book condition and with Sources; it is not the primary study. Individual score receipts are not linked in the [PR 93 ledger](https://github.com/learn-ukrainian/ukrainian-llm-eval/pull/93).
+
+| Model | Requested effort | Items | Correct, assigned closed-book condition | Correct with Sources | Score receipt references |
+|---|---|---:|---:|---:|---|
+| Gemini 4 Neon | high | 81 | 76 | 81 | receipt not linked for either score |
+| Claude Opus 5.5 | high | 81 | 74 | 78 | receipt not linked for either score |
+| GPT-6.2 Sol | high | 81 | 78 (3 runs used the Sources tools, covering 42 of 81 items) | 80 | receipt not linked for either score |
+| GPT-6.1 Terra | high (effective effort not attested) | 81 | 70 | 79 | receipt not linked for either score |
