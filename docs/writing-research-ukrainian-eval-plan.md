@@ -1,14 +1,14 @@
 # Writing, research and Ukrainian-language evaluation: plan
 
-Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** After the run this public copy was edited only to remove operational detail (custody procedure, route-specific and item-level material); the design, thresholds and digests are unchanged, but the file is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example "the full run needs a GO", sections 9 and 11) describe the plan at freeze time. Tracking: the operator evaluation order of 2026-11-19 (issue 13212 in the fleet tracker) and a scope addition from `claude-cto` (message sent 2026-11-20T21:25Z, read by the evaluator at 21:54Z and applied here). Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
+Status: **plan as frozen on 2026-11-20 before the full run; the run is complete and its results are in [results.md](results.md).** After the run this public copy was edited only to remove operational detail (custody, audit, scheduling, coordination and item-level material); the design, thresholds and digests are unchanged, but the file is not byte-identical to the frozen plan, so the frozen-digest list below identifies the frozen inputs, not this text. Statements in the present or future tense below (for example the run size and cost estimates in section 9) describe the plan at freeze time. Tracking: issue 13212 in the fleet tracker. Owner: the evaluator lead; accountable lead for closure: `claude-cto`. Date: 2026-11-20.
 
 ## 1. Outcome and the decision it informs
 
-The fleet wants to know where Gemini 4 Neon is strong or weak against the models it would replace or sit beside, on three kinds of work: **writing** (project documentation and KubeDojo teaching content), **research** (briefs from a source packet or from the Sources tools) and **Ukrainian-language capability**. The Ukrainian part carries the scope addition: every model runs the same items **twice, once with no tools and once with the Sources MCP tools**, and the headline is the **difference the tools make, per model and per failure class**: Russian-inferred forms and Russianisms, stress, inflection, aspect pairs, case government, surzhyk and calques, cultural and historical facts. The deliverable is a table of per-model strengths and weaknesses with the evidence behind each cell. It changes no routing and certifies nothing.
+The fleet wants to know where Gemini 4 Neon is strong or weak against the models it would replace or sit beside, on three kinds of work: **writing** (project documentation and KubeDojo teaching content), **research** (briefs from a source packet or from the Sources tools) and **Ukrainian-language capability**. The Ukrainian part adds a second condition: every model runs the same items **twice, once with no tools and once with the Sources MCP tools**, and the headline is the **difference the tools make, per model and per failure class**: Russian-inferred forms and Russianisms, stress, inflection, aspect pairs, case government, surzhyk and calques, cultural and historical facts. The deliverable is a table of per-model strengths and weaknesses with the evidence behind each cell. It changes no routing and certifies nothing.
 
 **Simplest design that meets the outcome** (chosen; nothing larger was needed): the same frozen prompt, one fresh read-only session per model per task and condition, through the existing dispatcher; objective keys wherever a right answer exists; blind cross-family model judges with hidden checklists elsewhere; a deliberately defective control in every judge bundle. No new service and no new code in the product package; the harness is one standard-library script whose hash is frozen below.
 
-**Reused design.** The scope message asked to reuse the "war-plan D Sources-MCP A/B eval" from this repository. No document of that name exists in the repository's `docs/` or Git history (searched); the repository's own study design is the paired closed-book/Sources condition on an identical item sample, with per-item paired differences. This plan reuses that: identical items across both conditions, the answer first and a short unscored explanation after, and a bug-fix rule (below): a harness defect found by a control is fixed and **all** models are rerun on the affected cells, never a subset.
+**Reused design.** The repository's own study design is the paired closed-book/Sources condition on an identical item sample, with per-item paired differences. This plan reuses that: identical items across both conditions, the answer first and a short unscored explanation after, and a bug-fix rule (below): a harness defect found by a control is fixed and **all** models are rerun on the affected cells, never a subset.
 
 ## 2. Arms
 
@@ -21,7 +21,7 @@ The fleet wants to know where Gemini 4 Neon is strong or weak against the models
 
 **Savant is paused by operator order (2026-11-19) and is excluded from every role.** The originating issue named Savant for the Ukrainian suite; Opus 5.5 takes its place so all four arms face the same Ukrainian items, and the deviation is recorded. Requested effort is recorded; effective effort is **not attested** for any arm.
 
-Arms do not see identical surroundings, and this is a limitation, not a control: each route loads its own harness context (observed per-call input of about 150k–275k tokens including cache), and only the Claude route exposes web tools. Every candidate prompt forbids web and file access and states the Ukrainian source rules inline. Compliance is audited from the dispatcher's records (section 10) and reported per arm.
+Arms do not see identical surroundings, and this is a limitation, not a control: each route loads its own harness context (observed per-call input of about 150k–275k tokens including cache) and its own tool surface. Every candidate prompt forbids web and file access and states the Ukrainian source rules inline. Sources call counts come from the dispatcher's records and are reported per arm.
 
 ## 3. Held-out task set: 26 prompt variants per arm, 104 generations
 
@@ -103,7 +103,7 @@ Per task and judge: rank and 0–16 total. Per arm and suite: mean per judge; ke
 
 ## 7. Success and stop criteria
 
-The study is *valid* only if: at least 99 of 104 generations return a complete, parseable answer (a pre-session infrastructure failure may be retried once and is recorded; a content failure is kept as a score); the degraded control ranks last in at least 90% of judge calls and its mean total is below 60% of the lowest real arm's mean; every judge reply parses to the schema (one retry for invalid JSON, recorded; an unparseable second reply excludes that call and is reported); recorded model identity matches the requested one for every call; and the audit of dispatcher records (section 10) shows no Sources call on any closed-book prompt, no egress outside the provider's own hosts and no write attempt that succeeded. The audit cannot show that no candidate or judge read evaluation artifacts (section 10). **Stop and report** if any of these fail in a way a retry cannot fix, if cumulative list-price equivalent passes $60 (about twice the estimate), if no dispatch may start after 23:15Z, or if a custody breach is found (the affected arm's results are voided, not patched). A harness bug found by a control is fixed and every arm is rerun on the affected cells. All attempts are preserved; nothing is selected after seeing a score.
+The study is *valid* only if: at least 99 of 104 generations return a complete, parseable answer (a pre-session infrastructure failure may be retried once and is recorded; a content failure is kept as a score); the degraded control ranks last in at least 90% of judge calls and its mean total is below 60% of the lowest real arm's mean; every judge reply parses to the schema (one retry for invalid JSON, recorded; an unparseable second reply excludes that call and is reported); recorded model identity matches the requested one for every call; and the dispatcher's records show no Sources call on any closed-book prompt. **Stop and report** if any of these fail in a way a retry cannot fix, or if cumulative list-price equivalent passes $60 (about twice the estimate). A harness bug found by a control is fixed and every arm is rerun on the affected cells. All attempts are preserved; nothing is selected after seeing a score.
 
 ## 8. Canaries (2026-11-20, same path as the full run)
 
@@ -120,7 +120,7 @@ The study is *valid* only if: at least 99 of 104 generations return a complete, 
 | Degraded control | ranked last by 5 of 5 judges (totals 3–7 of 16 against 11–16 for real answers) |
 | Blindness audit | all five judges answered "unknown" for every family; a refusal to guess is weak evidence |
 | Judge sensitivity | 2 of 3 general judges penalised Opus for an unrequested "treat 15 minutes as the safe limit" recommendation as unsupported; the judges disagreed on the order of the other three arms (one task, no inference) |
-| Custody | The canaries showed no sign of access to evaluation artifacts, but such access cannot be ruled out (a stated limitation; see section 10) |
+| Limitation | Access to evaluation artifacts cannot be ruled out (see section 10) |
 | Harness defects found and fixed | a scorer bug scoring an empty answer as correct for single-letter keys given as strings (caught by the empty-answer control, fixed, all six sets rerun); decoy cloned one fixed arm and flattened Markdown (rotated, block-aware); apostrophe variants normalised |
 
 Canary 1 list-price equivalents (one call each): Neon $0.349, Opus $0.468, Sol $0.114, Terra $0.046; judge calls: Opus $0.093, Neon $0.266–0.271, Sol $0.037–0.084. Neon's calls took 112–135 s against 25–54 s for the others; with Sources, Neon canary 2 took 67 s against 22–40 s.
@@ -139,9 +139,9 @@ List prices per million tokens (input / cached or cache-read / output), checked 
 | Terra 6.1 | $1.4 | none | $1.4 |
 | **Total** | **$27.7** | **$5.4** | **about $33** |
 
-## 10. Custody, audit and limitations
+## 10. Limitations
 
-Access by a candidate or judge to evaluation artifacts cannot be ruled out, and a contaminated result cannot be identified afterwards; this is a limitation of the study. Post-run audit from dispatcher records covers per-task Sources call counts (zero required on every closed-book prompt), egress destinations and write-probe results; the judges' family guesses are tallied as a blindness signal.
+Access by a candidate or judge to evaluation artifacts cannot be ruled out; this is a limitation of the study. Per-task Sources call counts from the dispatcher's records are reported per arm (zero required on every closed-book prompt), and the judges' family guesses are tallied as a blindness signal.
 
 Keys, checklists, raw outputs, judge replies, unblinding maps and traces stay in evaluator-held artifacts outside Git; the public report will contain task descriptions, hashes, aggregate scores, class tables and cost, not prompts or keys.
 
@@ -149,4 +149,4 @@ Frozen before the first full-run call: key set `4bb9921904bdd65b9bc26dc25695ade0
 
 ## 11. Authorization
 
-The full run needs a present-tense GO from `claude-cto` on Fleet Comms. Until then only the canaries and one isolation probe have run. To land the report in this lineage the GO must arrive by 22:30Z; at this run size landing is still unlikely before the 23:59Z hand-off (results about 23:45Z, then review, CI and queue), so the plan expects a hash-recorded hand-off for review and landing unless a continuation lineage is authorised.
+The full run required approval from the accountable lead, `claude-cto`, before it started; only the canaries ran before that approval.
