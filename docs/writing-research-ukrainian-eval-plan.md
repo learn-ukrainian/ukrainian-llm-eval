@@ -127,7 +127,7 @@ Canary 1 list-price equivalents (one call each): Neon $0.349, Opus $0.468, Sol $
 
 ## 9. Run size and expected cost
 
-**140 dispatches** (104 generations + 36 judge calls), plus mechanical scoring. Wall time about 70–90 minutes with at most six calls in flight and all Neon generations first.
+**140 dispatches** (104 generations + 36 judge calls), plus mechanical scoring.
 
 List prices per million tokens (input / cached or cache-read / output), checked 2026-11-20: Neon $3 / $0.15 / $15 ([Google](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon/)); Opus 5.5 $4 / $0.20 / $20 with $8 for one-hour cache writes ([Anthropic](https://platform.claude.com/docs/en/about-claude/pricing)); Sol 6.2 $2 / $0.10 / $10 and Terra 6.1 $1 / $0.05 / $5 (catalog). All routes are subscriptions, so these are equivalents, not charges. Estimates scale each model's canary call by an assumed output size (thinking tokens assumed 8–12k Neon, 3k Opus, 1.5k Sol, 1k Terra) and price Sources-condition calls like the canary calls; treat each figure as ±50%.
 
