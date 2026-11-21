@@ -16,6 +16,6 @@ from score import STANZA_PROCESSORS, verify_resources
 stanza.download("uk", package=None, processors=STANZA_PROCESSORS, resources_version="1.4.1", verbose=False)
 verify_resources()
 PY
-RUN chmod -R a+rX /opt/stanza
+RUN chmod -R a+rX /opt/scorer /opt/stanza
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/python", "/opt/scorer/score.py"]

@@ -68,7 +68,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build pinned scorer and verify provisioned resources
-        run: docker build --platform linux/amd64 -t ukrainian-llm-eval-scorer:ci scorer
+        run: |
+          chmod -R go-rwx scorer
+          docker build --platform linux/amd64 -t ukrainian-llm-eval-scorer:ci scorer
       - name: Check official parity and expected outcomes offline
         run: |
           python -m venv .venv
