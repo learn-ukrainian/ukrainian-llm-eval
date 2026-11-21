@@ -1,0 +1,5 @@
+# Code-scanning triage
+
+| Alert | Disposition | Evidence |
+| --- | --- | --- |
+| [CodeQL #2](https://github.com/learn-ukrainian/ukrainian-llm-eval/security/code-scanning/2), `py/weak-sensitive-data-hashing` | False positive | [`_safe_provider()`](https://github.com/learn-ukrainian/ukrainian-llm-eval/blob/b466c7559b1ec452a869d169246edfd3829ff38f/src/ukrainian_llm_eval/native_kimi.py#L353-L388) reads `oauth.key` and `oauth.oauth_host` from provider configuration. It accepts the region's credential file identifier format and allowlisted OAuth host. Kimi derives scoped identifiers from the OAuth host and API base URL ([upstream source](https://github.com/MoonshotAI/kimi-code/blob/83e4dde93453dd22e89da03d2c96d84999e7d0c2/packages/oauth/src/managed-kimi-code.ts#L301-L325)). [`_load_token()` and `_load_provisioning()`](https://github.com/learn-ukrainian/ukrainian-llm-eval/blob/b466c7559b1ec452a869d169246edfd3829ff38f/src/ukrainian_llm_eval/native_kimi.py#L454-L523) load access and refresh tokens from the selected file into a separate record. The provider and config fingerprints hash validated metadata through `adapters.digest()`. |
