@@ -14,9 +14,11 @@ docker build --platform linux/amd64 -t ukrainian-llm-eval-scorer:locked scorer
 
 The base image is digest pinned, every Python wheel in `requirements.lock`
 (including the PyTorch CPU wheel) is installed with `--only-binary=:all: --no-deps --require-hashes`,
-and the English spaCy model archive in `model.lock` is installed offline with
-`--no-index --no-build-isolation --no-deps --require-hashes` using the hash-verified
-`setuptools` and `wheel` already installed in the image, followed by `pip check`.
+and the English spaCy model archive in `model.lock` is downloaded from its pinned
+URL, verified against its SHA-256 hash, and built without index lookups or build
+isolation (`--no-index --no-build-isolation --no-deps --require-hashes`) using the
+hash-verified `setuptools` and `wheel` already installed in the image, followed by
+`pip check`.
 `resources.json` pins the installed tokenizer resources by file hash. Direct Wolfi
 `apk` packages are version-pinned; their transitive system packages still resolve
 from the live Wolfi index. Build requires network access. The build fails if any
