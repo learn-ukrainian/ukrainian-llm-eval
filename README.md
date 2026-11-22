@@ -11,15 +11,15 @@ complete source denominators, concrete per-suite limits and remaining launch che
 
 ## Development installation
 
-Requires Python 3.11 or newer. Validation targets Linux and macOS; Windows behavior is unverified. From a clean clone:
+Requires Python 3.11 or newer and `uv`. Validation targets Linux and macOS; Windows behavior is unverified. From a clean clone:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --locked --no-install-project --extra dev
+uv sync --locked --no-build-isolation --offline --extra dev
 .venv/bin/python -m ukrainian_llm_eval --help
 .venv/bin/python -m pytest
 .venv/bin/python -m ruff check src tests
-.venv/bin/python -m build
+.venv/bin/python -m build --no-isolation
 ```
 
 Provider runs require your own authorized CLI subscription or endpoint credentials. Running tests does not invoke paid models. Do not commit credentials, grading keys, raw provider logs or retrievals.
@@ -45,7 +45,7 @@ HTTP route, including complete tool history and reasoning-inclusive output caps.
 
 ## Paid direct API runs (Anthropic, OpenAI)
 
-`api_anthropic` (Messages API) and `api_openai` (Responses API) are closed-book adapters with fixed per-call settings, one synchronous request at a time. Install their SDKs with `pip install -e '.[api]'`. The SDKs read `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the environment; this package never reads, prints or stores a key.
+`api_anthropic` (Messages API) and `api_openai` (Responses API) are closed-book adapters with fixed per-call settings, one synchronous request at a time. Install their locked SDKs with `uv sync --locked --no-install-project --extra dev --extra api && uv sync --locked --no-build-isolation --offline --extra dev --extra api`. The SDKs read `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the environment; this package never reads, prints or stores a key.
 
 A configuration uses the usual `zno-nmt.config.v1` fields with `"adapter": "anthropic-api"` or `"openai-api"`, `"tools": []`, and optional `"temperature"`. Claude Opus 5.5 rejects `temperature`, so leave it out for that model; the null value is recorded. `max_output_tokens` also bounds thinking or reasoning. Example `.runtime/api/opus.json`:
 
