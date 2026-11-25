@@ -30,15 +30,22 @@ jobs:
           require-checksums: true
           enable-cache: false
       # Admission tests copy the selected interpreter into an isolated snapshot.
-      - run: uv sync --locked --extra dev --no-python-downloads --python "$(command -v python)"
+      - name: Sync locked dev dependencies and editable package without build isolation
+        run: |
+          uv sync --locked --no-install-project --extra dev --no-python-downloads --python "$(command -v python)"
+          uv sync --locked --no-build-isolation --offline --extra dev --no-python-downloads --python "$(command -v python)"
       - run: .venv/bin/python -m ruff check src tests
       - run: .venv/bin/python -m pytest
-      - run: .venv/bin/python -m build
+      - run: .venv/bin/python -m build --no-isolation
       - name: Verify installed wheel outside checkout
         shell: bash
         run: |
           .venv/bin/python -m venv "$RUNNER_TEMP/wheel-env"
-          "$RUNNER_TEMP/wheel-env/bin/python" -m pip install dist/*.whl
+          wheel=(dist/*.whl)
+          test "${#wheel[@]}" -eq 1
+          test -f "${wheel[0]}"
+          .venv/bin/python -c 'import hashlib, pathlib, sys; p = pathlib.Path(sys.argv[1]).resolve(); print(f"ukrainian-llm-eval @ {p.as_uri()} --hash=sha256:{hashlib.sha256(p.read_bytes()).hexdigest()}")' "${wheel[0]}" > "$RUNNER_TEMP/wheel.req"
+          "$RUNNER_TEMP/wheel-env/bin/python" -m pip install --no-index --no-deps --require-hashes -r "$RUNNER_TEMP/wheel.req"
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/wheel-env/bin/python" -m ukrainian_llm_eval --help
   codeql:

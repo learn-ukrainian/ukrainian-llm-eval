@@ -1,0 +1,4 @@
+# Hashed spaCy English model archive installed with --no-index --no-build-isolation
+# --no-deps --require-hashes after scorer/requirements.lock installs setuptools and wheel.
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-2.3.1/en_core_web_sm-2.3.1.tar.gz \
+    --hash=sha256:06c80936324012d1223291d2af41a5229e746dc2dee8fe31a532666ee3d18aaa
